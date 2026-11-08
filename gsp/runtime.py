@@ -579,9 +579,17 @@ def parser():
         elif name == 'observe-head': q.add_argument('--reason', required=True)
         elif name == 'recover-run': q.add_argument('--evidence', required=True); q.add_argument('--outcome', choices=['not-run', 'failed'], required=True)
     q = sub.add_parser('health'); q.add_argument('--host', choices=['claude', 'codex', 'both'], default='both')
-    q = sub.add_parser('install'); q.add_argument('--host', choices=['claude', 'codex', 'both'], required=True); q.add_argument('--optional', nargs='*', default=[])
+    for name in ('install','upgrade','uninstall','install-recover'):
+        q = sub.add_parser(name)
+        q.add_argument('--host', choices=['claude','codex','both'], required=True)
+        q.add_argument('--scope', choices=['project','user'], default='project' if name=='install' else 'user')
+        q.add_argument('--profile', help='explicit user profile root; defaults to the selected host profile')
+        q.add_argument('--optional', nargs='*', default=[])
+        q.add_argument('--dry-run', action='store_true')
     q = sub.add_parser('preference'); q.add_argument('key'); q.add_argument('--value', choices=['ask', 'recommended']); q.add_argument('--quote')
     q = sub.add_parser('learn'); q.add_argument('--text'); q.add_argument('--source'); q.add_argument('--query', default='')
+    group = q.add_mutually_exclusive_group(); group.add_argument('--supersedes'); group.add_argument('--invalidate')
+    q.add_argument('--reason'); q.add_argument('--history', action='store_true')
     q = sub.add_parser('todo-list'); q.add_argument('--origin')
     q = sub.add_parser('todo-add')
     for field in ('title', 'what', 'why', 'context', 'source'):
@@ -618,7 +626,14 @@ def main(argv=None):
         if args.command == 'health':
             result = health(project.root, args.host)
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0 if result['static_ok'] else 1
-        if args.command == 'install':
+        if args.command in ('install','upgrade','uninstall','install-recover'):
+            if args.scope == 'user':
+                from .user_install import UserInstall
+                manager = UserInstall(args.host, args.profile)
+                result = manager.recover(args.dry_run) if args.command=='install-recover' else manager.apply(args.command,args.optional,args.dry_run)
+                print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
+            if args.command != 'install' or args.profile or args.dry_run:
+                raise WorkflowError('USER_SCOPE_REQUIRED maintenance/dry-run/profile requires --scope user')
             from .install import install
             result = install(project.root, args.host, args.optional)
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
@@ -675,20 +690,16 @@ def dispatch(project, args):
         return config['preferences'].get(args.key, {'value': 'ask'}), True
     if command == 'learn':
         project.identity()
-        file = project.root / 'docs/gsp/learnings.jsonl'
-        if args.text:
-            if not args.source:
-                raise WorkflowError('SOURCE_REQUIRED cite a task, evidence or user instruction')
-            entry = {'id': uuid.uuid4().hex[:12], 'at': now(), 'text': redact(args.text), 'source': args.source}
-            with file.open('a', encoding='utf-8') as stream:
-                stream.write(json.dumps(entry, ensure_ascii=False) + '\n')
-        rows = []
-        if file.exists():
-            for number, line in enumerate(file.read_text(encoding='utf-8').splitlines(), 1):
-                try: entry = json.loads(line)
-                except ValueError as exc: raise WorkflowError(f'LEARNING_CORRUPT line {number}') from exc
-                if args.query.casefold() in (entry['text'] + entry['source']).casefold(): rows.append(entry)
-        return rows, True
+        from .learnings import Learnings
+        book = Learnings(project.root)
+        if args.invalidate:
+            if args.text: raise WorkflowError('LEARNING_INVALID_ARGUMENTS invalidation cannot add text')
+            book.invalidate(args.invalidate,args.reason,args.source)
+        elif args.text:
+            book.add(args.text,args.source,args.supersedes,args.reason)
+        elif args.supersedes or args.reason or args.source:
+            raise WorkflowError('LEARNING_TEXT_REQUIRED')
+        return book.query(args.query,args.history), True
     state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'run', 'review', 'ready'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path)
     if command == 'approve':
         design = (doc / 'design.md').read_text(encoding='utf-8')
@@ -828,12 +839,18 @@ def dispatch(project, args):
     elif command == 'block':
         state['status'] = 'blocked'; state['blocked_reason'] = args.reason
     elif command == 'observe-head':
+        preserve = state['status'] == 'ready' and not state.get('inflight')
+        if preserve:
+            # HEAD is provenance, not an input. Explicitly recheck the sealed
+            # contract and real receipts before accepting an unchanged tree.
+            for task in state['tasks']:
+                evidence_for(project, state, task['id'])
         before = state['git']
         state['git'] = git_identity(project.root)
         state['head_reconciliation'] = {'previous': before, 'current': state['git'], 'reason': args.reason, 'at': now()}
-        state.pop('review', None)
-        state['review'] = None
-        state['status'] = 'needs-verification'
+        if not preserve:
+            state['review'] = None
+            state['status'] = 'needs-verification'
     elif command == 'recover-run':
         if not state.get('inflight'): raise WorkflowError('NO_UNKNOWN_EXECUTION')
         file = (project.root / args.evidence).resolve()

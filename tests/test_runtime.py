@@ -15,6 +15,34 @@ CLI = ROOT / 'scripts' / 'gsp.py'
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_observed_commit_preserves_ready_only_for_unchanged_inputs(self):
+        def git(*args):
+            result = run(['git', '-C', str(self.project), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'core.hooksPath=', *args], capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+        git('init', '-b', 'main')
+        git('commit', '--allow-empty', '-m', 'baseline')
+        folder = self.task()
+        self.passing()
+        self.cli('task-done', 'login', 'T1')
+        self.cli('run', 'login', '--task', 'all', '--', sys.executable, '-c', "print('Ran 1 test')")
+        (folder/'review.md').write_text('# Review\nActual fixture reviewed, no blockers.', encoding='utf-8')
+        self.cli('review', 'login', '--reviewer', 'self', '--blocking', '0')
+        self.cli('ready', 'login')
+        delivery = (folder/'delivery.md').read_bytes()
+        git('add', '.')
+        git('commit', '-m', 'validated input')
+        self.cli('observe-head', 'login', '--reason', 'Checked commit contains the already validated working tree')
+        self.assertEqual(json.loads(self.cli('status', 'login').stdout)['status'], 'ready')
+        self.assertEqual((folder/'delivery.md').read_bytes(), delivery)
+        self.cli('save', 'login'); self.cli('resume', 'login')
+        self.assertEqual(git('status', '--porcelain'), b'')
+        (self.project/'changed.txt').write_text('new input')
+        git('add', '.'); git('commit', '-m', 'changed input')
+        self.cli('observe-head', 'login', '--reason', 'Changed input requires fresh verification')
+        self.assertEqual(json.loads(self.cli('status', 'login').stdout)['status'], 'needs-verification')
+        self.cli('ready', 'login', ok=False)
+
     def test_fresh_context_reviewer_is_recorded_without_independence_claim(self):
         folder = self.task()
         (folder / 'review.md').write_text('# Review\nFresh context, same provider.\n', encoding='utf-8')
