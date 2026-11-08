@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,7 +15,8 @@ def main():
     logs = []
     for argv in ([sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-v'],
                  [sys.executable, 'scripts/validate_skills.py']):
-        r = subprocess.run(argv, cwd=ROOT, capture_output=True, encoding='utf-8', errors='replace')
+        r = subprocess.run(argv, cwd=ROOT, capture_output=True, encoding='utf-8', errors='replace',
+                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         output = r.stdout + r.stderr
         logs.append('$ ' + ' '.join(argv) + '\n' + output)
         results.append({'argv': argv, 'exit': r.returncode})

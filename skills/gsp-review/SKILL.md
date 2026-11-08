@@ -9,6 +9,6 @@ description: "Use when 一个任务、主要功能或整条分支需要规格符
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
-读取已确认设计、计划与实际 diff。按风险检查需求遗漏、逻辑、安全、状态、接口和测试；有 UI 时参考真实 QA。子代理模式任务审查、全部模式最终整体审查，避免对同一范围重复跑等价审查。独立代理仅在可用且允许时用，不能把自查称为独立。反馈先核实，有依据可反驳；修复需重测。最终将范围、审查者、阻塞项、未覆盖写 review.md，再 `<gsp> review <id> --reviewer self|independent --blocking N`。此命令登记调用者实际结论，不会自动证明审查质量。
+读取已确认设计、计划与实际 diff。按风险检查需求遗漏、逻辑、安全、状态、接口和测试；有 UI 时参考真实 QA。子代理模式任务审查、全部模式最终整体审查，避免对同一范围重复跑等价审查。独立代理仅在可用且允许时用，不能把自查称为独立。反馈先核实，有依据可反驳；修复需重测。最终将范围、审查者、阻塞项、未覆盖写 review.md，再 `<gsp> review <id> --reviewer self|independent|fresh-context --blocking N`。此命令登记调用者实际结论，不会自动证明审查质量。
 
 每个实际问题须明确立即修复、按依据延期或经核实不成立；延期项登记根 TODOS.md，最终审查必须读取，不得只说以后处理。本次必需项用 --blocking --origin <本需求ID>，ready 会检查它。 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。

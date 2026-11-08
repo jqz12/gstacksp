@@ -97,6 +97,7 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(state['status'], 'completed')
         self.assertEqual(state['dispatches'], 3)  # plan, actual implementation, review
         self.assertEqual(self.cli('status', 'work')['status'], 'ready')
+        self.assertEqual(self.cli('status', 'work')['review']['reviewer'], 'self')
         self.cli('resume', 'work')
         self.assertIn('completed', (self.doc / 'driver-report.md').read_text(encoding='utf-8'))
 

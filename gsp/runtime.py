@@ -5,6 +5,7 @@ consent. Driver commands can invoke an explicitly configured headless host;
 no CLI command executes Git publication or deployments.
 """
 import argparse
+import errno
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
@@ -49,9 +50,20 @@ def invalidate_delivery(doc, reason):
     atomic(doc / 'delivery.md', '# 交付证据已失效\n\nNOT_READY：' + reason + '\n')
 
 
+def retry_access(operation):
+    """Retry only transient access denial: initial attempt plus 3 x 50ms."""
+    for attempt in range(4):
+        try:
+            return operation()
+        except OSError as exc:
+            if exc.errno != errno.EACCES or attempt == 3:
+                raise
+            time.sleep(.05)
+
+
 def read(path):
     try:
-        return json.loads(Path(path).read_text(encoding='utf-8-sig'))
+        return json.loads(retry_access(lambda: Path(path).read_text(encoding='utf-8-sig')))
     except (OSError, ValueError) as exc:
         raise WorkflowError(f'INVALID_STATE {path}: {exc}') from exc
 
@@ -68,14 +80,7 @@ def atomic(path, value):
             os.fsync(stream.fileno())
         # Windows readers/AV may briefly hold the destination without delete sharing.
         # Retry publication only; never repeat the operation that produced the value.
-        for attempt in range(51):
-            try:
-                os.replace(tmp, path)
-                break
-            except PermissionError:
-                if os.name != 'nt' or attempt == 50:
-                    raise
-                time.sleep(.01)
+        retry_access(lambda: os.replace(tmp, path))
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -98,7 +103,8 @@ def inside(root, path):
 def git_identity(root):
     def git(*args):
         r = subprocess.run(['git', *args], cwd=root, capture_output=True, text=True,
-                           encoding='utf-8', errors='replace', timeout=15)
+                           encoding='utf-8', errors='replace', timeout=15,
+                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         return r.stdout.strip() if r.returncode == 0 else None
     try:
         top = git('rev-parse', '--show-toplevel')
@@ -230,7 +236,9 @@ class Project:
             raise WorkflowError('PROJECT_MISMATCH refusing cross-project continuation')
         current = git_identity(self.root)
         before = state.get('git', {})
-        if current.get('root') != before.get('root') or (not release_scope and current.get('branch') != before.get('branch')):
+        first_repository = (allow_head_change and not any(before.get(k) for k in ('root','branch','head'))
+                            and current.get('root') == str(self.root))
+        if not first_repository and (current.get('root') != before.get('root') or (not release_scope and current.get('branch') != before.get('branch'))):
             raise WorkflowError('BRANCH_MISMATCH reconcile before continuing')
         if not (allow_head_change or release_scope) and current.get('head') != before.get('head'):
             raise WorkflowError('HEAD_CHANGED inspect actual changes, then observe-head with evidence and reason')
@@ -562,7 +570,7 @@ def parser():
         elif name == 'scope':
             group = q.add_mutually_exclusive_group(required=True); group.add_argument('--path'); group.add_argument('--off', action='store_true'); q.add_argument('--quote', required=True)
         elif name == 'check-path': q.add_argument('path')
-        elif name == 'review': q.add_argument('--reviewer', choices=['self', 'independent'], required=True); q.add_argument('--blocking', type=int, required=True)
+        elif name == 'review': q.add_argument('--reviewer', choices=['self', 'independent', 'fresh-context'], required=True); q.add_argument('--blocking', type=int, required=True)
         elif name == 'decision': q.add_argument('--text', required=True); q.add_argument('--source', choices=['user', 'agent'], required=True)
         elif name in ('authorize', 'authority'):
             q.add_argument('action', choices=['push', 'create-pr', 'merge', 'delete-branch', 'publish', 'spend', 'send']); q.add_argument('--scope', required=True)

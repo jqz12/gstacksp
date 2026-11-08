@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+from process_helpers import run, popen
 import sys
 import time
 import unittest
@@ -11,6 +12,7 @@ import unittest
 import test_driver
 ROOT = test_driver.ROOT
 from gsp.hosts import identity, is_alive
+from gsp.runtime import read
 
 
 class DriverProcessTests(unittest.TestCase):
@@ -33,7 +35,7 @@ class DriverProcessTests(unittest.TestCase):
         return self.root / '.gsp/runs/work/driver/state.json'
 
     def raw(self):
-        return json.loads(self.state_file().read_text(encoding='utf-8'))
+        return read(self.state_file())
 
     def kill_owned(self, owner):
         if owner and is_alive(owner):
@@ -42,11 +44,11 @@ class DriverProcessTests(unittest.TestCase):
 
     def cleanup_tree(self, owner):
         if owner and is_alive(owner) and os.name == 'nt':
-            subprocess.run(['taskkill','/PID',str(owner['pid']),'/T','/F'],capture_output=True,timeout=15)
+            run(['taskkill','/PID',str(owner['pid']),'/T','/F'],capture_output=True,timeout=15)
         self.kill_owned(owner)
 
     def background(self):
-        r = subprocess.run([sys.executable, str(ROOT/'scripts/gsp.py'), '--project', str(self.root), 'drive-start', 'work'],
+        r = run([sys.executable, str(ROOT/'scripts/gsp.py'), '--project', str(self.root), 'drive-start', 'work'],
                            capture_output=True, text=True, encoding='utf-8', timeout=15)
         if r.returncode and 'DETACH_UNAVAILABLE' in r.stderr:
             self.skipTest('OS refused breakaway; foreground still available; background not certified')
@@ -55,10 +57,12 @@ class DriverProcessTests(unittest.TestCase):
         self.assertTrue(result['started'], result)
         owner = result['started']
         def cleanup():
+            # Stop the dispatcher first so it cannot create a new child between
+            # reading pending identity and terminating the controller.
+            self.cleanup_tree(owner)
             pending = self.raw().get('pending')
             if pending: self.kill_owned(pending.get('worker'))
             self.kill_owned(self.raw().get('pending_check'))
-            self.cleanup_tree(owner)
             # Windows can retain inherited log handles briefly after process exit.
             time.sleep(.3)
         self.addCleanup(cleanup)
@@ -74,6 +78,10 @@ class DriverProcessTests(unittest.TestCase):
         return owner if owner and is_alive(owner) else None
 
     def slow_check(self):
+        # This test exercises a running check, not the latency of a plan job.
+        (self.doc/'plan.md').write_text('# Check interruption fixture\nT1 implement add and test its behavior.\n',encoding='utf-8')
+        self.cli('task-add','work','T1','--title','Add','--acceptance','Two integers are added')
+        self.cli('seal-plan','work')
         self.checks.write_text(json.dumps([sys.executable,'-c','import time; time.sleep(20); print("Ran 1 test")']))
         self.prepare(timeout=30)
 
@@ -99,7 +107,7 @@ class DriverProcessTests(unittest.TestCase):
         recovery=self.raw()['recoveries'][-1]
         self.assertIsNotNone(recovery['interrupted_check'])
         self.assertEqual(recovery['check_process'],checker)
-        self.assertEqual(self.raw()['dispatches'],2)
+        self.assertEqual(self.raw()['dispatches'],1)
 
     def test_background_continues_after_launcher_exits(self):
         self.prepare()
@@ -125,7 +133,7 @@ class DriverProcessTests(unittest.TestCase):
                 'from gsp.driver import Driver; from gsp.runtime import Project; '
                 f'r=Driver(Project(Path({str(self.root)!r})),"work").start(); '
                 f'Path({str(marker)!r}).write_text(json.dumps(r)); time.sleep(30)')
-        creator = subprocess.Popen([sys.executable,'-c',code], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        creator = popen([sys.executable,'-c',code], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         creator_owner = identity(creator.pid)
         def cleanup_creator():
             self.kill_owned(creator_owner); creator.wait(timeout=10)
@@ -135,8 +143,10 @@ class DriverProcessTests(unittest.TestCase):
         self.assertTrue(result['started'], result)
         controller = result['started']
         def cleanup():
+            self.cleanup_tree(controller)
             pending=self.raw().get('pending') or {}
-            self.kill_owned(pending.get('worker')); self.cleanup_tree(controller)
+            self.kill_owned(pending.get('worker'))
+            self.kill_owned(self.raw().get('pending_check'))
             time.sleep(.3)
         self.addCleanup(cleanup)
         self.wait_for(self.active_worker)

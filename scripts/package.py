@@ -14,6 +14,8 @@ def package():
             if file.is_file() and '__pycache__' not in file.parts and not file.name.endswith('.pyc'):
                 files.append(file)
     files += [ROOT / name for name in ('README.md', 'AGENTS.md', 'CLAUDE.md', 'TODOS.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'catalog.json', '.gitignore')]
+    if (ROOT / '.gitattributes').is_file():
+        files.append(ROOT / '.gitattributes')
     dist = ROOT / 'dist'
     dist.mkdir(exist_ok=True)
     version = json.loads((ROOT / 'catalog.json').read_text(encoding='utf-8'))['version']

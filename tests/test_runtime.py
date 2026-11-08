@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from process_helpers import run, popen
 import sys
 import tempfile
 import time
@@ -14,6 +15,30 @@ CLI = ROOT / 'scripts' / 'gsp.py'
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_fresh_context_reviewer_is_recorded_without_independence_claim(self):
+        folder = self.task()
+        (folder / 'review.md').write_text('# Review\nFresh context, same provider.\n', encoding='utf-8')
+        self.cli('review', 'login', '--reviewer', 'fresh-context', '--blocking', '0')
+        state = json.loads(self.cli('status', 'login').stdout)
+        self.assertEqual(state['review']['reviewer'], 'fresh-context')
+
+    def test_first_git_repository_requires_explicit_reconciliation(self):
+        self.task()
+        result=run(['git','-C',str(self.project),'init','-b','main'],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('BRANCH_MISMATCH',self.cli('status','login',ok=False).stderr)
+        self.cli('decision','login','--text','Do not silently adopt','--source','agent',ok=False)
+        self.cli('observe-head','login','--reason','SYNTHETIC checked newly initialized repository at the same physical project root')
+        state=json.loads(self.cli('status','login').stdout)
+        self.assertEqual(state['git']['root'],str(self.project.resolve()))
+        self.assertIsNone(state['head_reconciliation']['previous']['root'])
+
+    def test_first_parent_git_repository_cannot_be_adopted_as_project_root(self):
+        self.task()
+        result=run(['git','-C',self.tmp.name,'init','-b','main'],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('BRANCH_MISMATCH',self.cli('observe-head','login','--reason','SYNTHETIC parent repository mismatch',ok=False).stderr)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='gsp-test-')
         self.project = Path(self.tmp.name) / 'project with spaces'
@@ -23,7 +48,7 @@ class WorkflowTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def cli(self, *args, ok=True):
-        r = subprocess.run([sys.executable, str(CLI), '--project', str(self.project), *args],
+        r = run([sys.executable, str(CLI), '--project', str(self.project), *args],
                            text=True, encoding='utf-8', capture_output=True)
         if ok:
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -158,7 +183,7 @@ class WorkflowTests(unittest.TestCase):
         self.cli('scope', 'login', '--path', 'src', '--quote', 'Only src')
         payload = {'cwd': str(self.project / 'src'), 'tool_name': 'Edit',
                    'tool_input': {'file_path': str(self.project / 'outside.py')}}
-        r = subprocess.run([sys.executable, str(CLI), '--project', str(self.project), 'hook'],
+        r = run([sys.executable, str(CLI), '--project', str(self.project), 'hook'],
                            input=json.dumps(payload), text=True, encoding='utf-8', capture_output=True)
         self.assertEqual(json.loads(r.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
 
@@ -169,7 +194,7 @@ class WorkflowTests(unittest.TestCase):
         self.cli('scope', 'login', '--path', '源码', '--quote', 'Only this source directory')
         payload = {'cwd': str(self.project), 'tool_name': 'Edit',
                    'tool_input': {'file_path': str(scope / '登录.py')}}
-        r = subprocess.run([sys.executable, str(CLI), '--project', str(self.project), 'hook'],
+        r = run([sys.executable, str(CLI), '--project', str(self.project), 'hook'],
                            input=json.dumps(payload, ensure_ascii=False), text=True,
                            encoding='utf-8', capture_output=True)
         self.assertEqual(json.loads(r.stdout), {})
@@ -228,7 +253,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_head_change_cannot_be_absorbed_by_decision(self):
         def git(*args):
-            r = subprocess.run(['git', '-C', str(self.project), '-c', 'user.name=Fixture',
+            r = run(['git', '-C', str(self.project), '-c', 'user.name=Fixture',
                                 '-c', 'user.email=fixture@example.invalid', *args], capture_output=True)
             self.assertEqual(r.returncode, 0, r.stderr)
         git('init', '-b', 'main')
@@ -272,7 +297,7 @@ class WorkflowTests(unittest.TestCase):
     def test_real_interruption_preserves_unknown_execution(self):
         folder = self.task()
         program = "from pathlib import Path; import os,time; Path('.gsp/child.pid').write_text(str(os.getpid())); time.sleep(20)"
-        runner = subprocess.Popen([sys.executable, str(CLI), '--project', str(self.project), 'run', 'login',
+        runner = popen([sys.executable, str(CLI), '--project', str(self.project), 'run', 'login',
                                    '--task', 'T1', '--kind', 'tests', '--', sys.executable, '-c', program],
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         pid_file = self.project / '.gsp/child.pid'
@@ -379,7 +404,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_new_branch_can_start_new_unfrozen_task(self):
         def git(*args):
-            r = subprocess.run(['git', '-C', str(self.project), '-c', 'user.name=Fixture',
+            r = run(['git', '-C', str(self.project), '-c', 'user.name=Fixture',
                                 '-c', 'user.email=fixture@example.invalid', *args], capture_output=True)
             self.assertEqual(r.returncode, 0, r.stderr)
         git('init', '-b', 'main')
@@ -401,7 +426,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_frozen_scope_can_be_released_after_branch_switch(self):
         def git(*args):
-            r = subprocess.run(['git', '-C', str(self.project), '-c', 'user.name=Fixture',
+            r = run(['git', '-C', str(self.project), '-c', 'user.name=Fixture',
                                 '-c', 'user.email=fixture@example.invalid', *args], capture_output=True)
             self.assertEqual(r.returncode, 0, r.stderr)
         git('init', '-b', 'main')

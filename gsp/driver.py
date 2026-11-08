@@ -325,7 +325,8 @@ class Driver:
                 text += '\n'.join(('- BLOCKING: ' if r['blocking'] else '- Follow-up: ') + redact(r['text']) for r in findings)
                 text += '\n\nReviewer: fresh host context; same provider is not an independent vendor. Coverage limited to actual code/test reading; browser and remote services not implied.\n'
                 atomic(self.doc / 'review.md', text)
-                dispatch(self.project, Namespace(command='review', id=self.task, reviewer='self' if self.data['config']['adapter'] == 'command' else 'independent', blocking=blocking))
+                # A fresh model context does not establish vendor independence.
+                dispatch(self.project, Namespace(command='review', id=self.task, reviewer='self' if self.data['config']['adapter'] == 'command' else 'fresh-context', blocking=blocking))
                 self.data['review_findings'] = findings
                 self.data.update(phase='fix-review' if blocking else 'deliver', pending_fix='review' if blocking else None)
             self.data['status'] = 'runnable'

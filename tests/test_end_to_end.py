@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import subprocess
+from process_helpers import run, popen
 import sys
 import tempfile
 import unittest
@@ -17,7 +18,7 @@ class EndToEndTests(unittest.TestCase):
             project.mkdir()
 
             def call(*args, script=CLI, ok=True):
-                r = subprocess.run([sys.executable, str(script), '--project', str(project), *args],
+                r = run([sys.executable, str(script), '--project', str(project), *args],
                                    capture_output=True, encoding='utf-8', errors='replace')
                 if ok: self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                 else: self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
