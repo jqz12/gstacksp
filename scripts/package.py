@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def package():
     files = []
-    for entry in ('skills', 'gsp', 'scripts', 'hooks', '.claude-plugin', '.codex-plugin', 'docs', 'tests'):
+    for entry in ('skills', 'gsp', 'scripts', 'hooks', '.claude-plugin', '.codex-plugin', 'docs', 'tests', 'sources'):
         for file in (ROOT / entry).rglob('*'):
             if file.is_file() and '__pycache__' not in file.parts and not file.name.endswith('.pyc'):
                 files.append(file)

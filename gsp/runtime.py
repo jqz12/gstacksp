@@ -220,6 +220,26 @@ class Project:
             raise WorkflowError('TASK_PATH_ESCAPE')
         return paths
 
+    def document(self, state, kind):
+        """One authoritative spec/plan per task; old states retain their old layout."""
+        if kind not in ('design', 'plan'):
+            raise WorkflowError('INVALID_DOCUMENT_KIND')
+        if 'documents' not in state:
+            return self.paths(state['id'])[1] / (kind + '.md')
+        if not isinstance(state['documents'], dict):
+            raise WorkflowError('DOCUMENT_BINDING_INVALID')
+        rel = state['documents'].get(kind)
+        if not isinstance(rel, str) or Path(rel).is_absolute():
+            raise WorkflowError('DOCUMENT_PATH_INVALID')
+        base = self.root / ('docs/superpowers/specs' if kind == 'design' else 'docs/superpowers/plans')
+        file = self.root / rel
+        if not inside(self.root, base) or not inside(base, file) or file.suffix != '.md':
+            raise WorkflowError('DOCUMENT_PATH_ESCAPE')
+        return file
+
+    def document_link(self, state, kind, folder):
+        return os.path.relpath(self.document(state, kind), folder).replace('\\', '/')
+
     def active_state(self):
         task_id = read(self.meta / 'active.json')['task']
         run, doc = self.paths(task_id)
@@ -266,12 +286,12 @@ class Project:
         return state, run, doc
 
     def valid_design(self, state, doc):
-        if not state.get('design_approval') or state['design_approval']['sha256'] != digest(doc / 'design.md'):
+        if not state.get('design_approval') or state['design_approval']['sha256'] != digest(self.document(state, 'design')):
             raise WorkflowError('DESIGN_NOT_APPROVED current design has no matching user approval')
 
     def valid_plan(self, state, doc):
         plan = state.get('plan_seal')
-        if not plan or plan['sha256'] != digest(doc / 'plan.md') or plan['tasks_sha256'] != self.task_definition_hash(state):
+        if not plan or plan['sha256'] != digest(self.document(state, 'plan')) or plan['tasks_sha256'] != self.task_definition_hash(state):
             raise WorkflowError('PLAN_CHANGED review changes and seal the current plan')
 
     @staticmethod
@@ -298,7 +318,7 @@ class Project:
             tid = state['id']
             pending = ', '.join(t['id'] + ':' + t['status'] for t in state['tasks'] if t['status'] != 'done') or '无'
             title = state['title'].replace('|', '\\|').replace('\n', ' ')
-            lines.append(f'| [{title}](tasks/{tid}/decisions.md) | {state["status"]} | {pending} | [设计](tasks/{tid}/design.md) | [计划](tasks/{tid}/plan.md) | [交付](tasks/{tid}/delivery.md) |')
+            lines.append(f"| [{title}](tasks/{tid}/decisions.md) | {state['status']} | {pending} | [规格]({self.document_link(state, 'design', self.root / 'docs/gsp')}) | [计划]({self.document_link(state, 'plan', self.root / 'docs/gsp')}) | [交付](tasks/{tid}/delivery.md) |")
         atomic(self.root / 'docs/gsp/README.md', '\n'.join(lines) + '\n')
 
     def new(self, args):
@@ -313,11 +333,19 @@ class Project:
             raise WorkflowError('TASK_EXISTS choose another task id')
         if args.mode == 'unattended' and not args.quote:
             raise WorkflowError('AUTHORIZATION_REQUIRED quote the actual user instruction for unattended mode')
+        date = datetime.now().astimezone().date().isoformat()
+        documents = {'design': f'docs/superpowers/specs/{date}-{args.id}-design.md',
+                     'plan': f'docs/superpowers/plans/{date}-{args.id}.md'}
+        probe = {'id': args.id, 'documents': documents}
+        for kind in documents:
+            file = self.document(probe, kind)
+            if file.exists():
+                raise WorkflowError('DOCUMENT_EXISTS refusing to overwrite ' + str(file))
         run.mkdir(parents=True)
         doc.mkdir(parents=True)
         state = {'schema': 1, 'id': args.id, 'title': args.title, 'root': str(self.root),
                  'project_id': self.identity()['id'], 'created': now(), 'status': 'design',
-                 'mode': args.mode, 'mode_quote': args.quote, 'design_approval': None, 'plan_seal': None,
+                 'mode': args.mode, 'mode_quote': args.quote, 'documents': documents, 'design_approval': None, 'plan_seal': None,
                  'scope': {'mode': 'pending'}, 'tasks': [], 'evidence': [], 'review': None,
                  'authorizations': [], 'git': git_identity(self.root)}
         templates = {
@@ -328,16 +356,24 @@ class Project:
             'decisions.md': '# 决策记录\n\n每项写明选择、依据、代价、来源；用户原话与 AI 建议分别标记。\n',
         }
         for name, text in templates.items():
-            atomic(doc / name, text)
+            if name in ('design.md', 'plan.md'):
+                kind = name[:-3]
+                if kind == 'plan':
+                    text = text.replace('(design.md)', '(' + self.document_link(state, 'design', self.document(state, 'plan').parent) + ')')
+                atomic(self.document(state, kind), text)
+            else:
+                atomic(doc / name, text)
         atomic(self.meta / 'active.json', {'task': args.id})
         self.write(state, 'created', args.quote or '')
-        return {'task': args.id, 'documents': str(doc), 'state': str(run / 'state.json')}
+        return {'task': args.id, 'documents': str(doc), 'state': str(run / 'state.json'), 'document_paths': documents}
 
     def scope_path(self, state, path):
         root = Path(state['scope']['path']).resolve()
         target = (self.root / path).resolve()
         _, docs = self.paths(state['id'])
-        if target in {docs / name for name in ('design.md', 'plan.md', 'review.md', 'decisions.md', 'delivery.md')}:
+        if target in {self.document(state, kind).resolve() for kind in ('design', 'plan')}:
+            return target
+        if target in {docs / name for name in ('review.md', 'decisions.md', 'delivery.md')}:
             return target
         if target in {self.root / 'TODOS.md', self.root / 'TODO.md'}:
             return target
@@ -364,7 +400,7 @@ def test_count(output):
 
 
 def contract_hash(project, state, doc):
-    return sha(json.dumps({'design': digest(doc / 'design.md'), 'plan': digest(doc / 'plan.md'),
+    return sha(json.dumps({'design': digest(project.document(state, 'design')), 'plan': digest(project.document(state, 'plan')),
                            'tasks': project.task_definition_hash(state)}, sort_keys=True).encode())
 
 
@@ -558,9 +594,11 @@ def parser():
     sub = p.add_subparsers(dest='command', required=True)
     sub.add_parser('init')
     n = sub.add_parser('new'); n.add_argument('id'); n.add_argument('--title', required=True); n.add_argument('--mode', choices=['interactive', 'unattended'], default='interactive'); n.add_argument('--quote')
-    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'run', 'scope', 'check-path', 'review', 'ready', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'observe-head', 'recover-run'):
+    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'run', 'scope', 'check-path', 'review', 'ready', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'observe-head', 'recover-run', 'documents-adopt'):
         q = sub.add_parser(name); q.add_argument('id')
-        if name == 'approve': q.add_argument('--quote', required=True)
+        if name == 'documents-adopt':
+            q.add_argument('--spec', required=True); q.add_argument('--plan', required=True); q.add_argument('--reason', required=True)
+        elif name == 'approve': q.add_argument('--quote', required=True)
         elif name == 'task-add':
             q.add_argument('task'); q.add_argument('--title', required=True); q.add_argument('--acceptance', required=True); q.add_argument('--depends', default=''); q.add_argument('--no-tests-reason')
         elif name in ('task-start', 'task-done'): q.add_argument('task')
@@ -701,11 +739,41 @@ def dispatch(project, args):
             raise WorkflowError('LEARNING_TEXT_REQUIRED')
         return book.query(args.query,args.history), True
     state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'run', 'review', 'ready'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path)
-    if command == 'approve':
-        design = (doc / 'design.md').read_text(encoding='utf-8')
+    if command == 'documents-adopt':
+        candidate = {**state, 'documents': {'design': args.spec, 'plan': args.plan}}
+        for kind in ('design', 'plan'):
+            file = project.document(candidate, kind)
+            if not file.is_file():
+                raise WorkflowError('DOCUMENT_MISSING ' + str(file))
+            for other_file in project.meta.glob('runs/*/state.json'):
+                other = read(other_file)
+                if other['id'] != state['id'] and project.document(other, kind).resolve() == file.resolve():
+                    raise WorkflowError('DOCUMENT_OWNED_BY_ANOTHER_TASK')
+        if state.get('inflight') or (run / 'driver/state.json').exists():
+            raise WorkflowError('DOCUMENT_MIGRATION_BUSY reconcile execution/driver before migration')
+        old = {kind: str(project.document(state, kind).relative_to(project.root)).replace('\\', '/') for kind in ('design', 'plan')}
+        state.setdefault('document_history', []).append({'at': now(), 'documents': old,
+            'hashes': {kind: digest(project.document(state, kind)) for kind in ('design', 'plan')},
+            'design_approval': state.get('design_approval'), 'plan_seal': state.get('plan_seal'), 'reason': redact(args.reason)})
+        for task in state['tasks']:
+            if task['status'] == 'done':
+                task.setdefault('history', []).append({'at': now(), 'status': 'done',
+                    'evidence': task.get('evidence'), 'reason': 'Document bindings explicitly changed'})
+                task['status'] = 'needs-verification'
+                task.pop('evidence', None)
+                task.pop('completed_at', None)
+        state['documents'] = candidate['documents']
+        state['design_approval'] = None
+        state['plan_seal'] = None
+        state['review'] = None
+        state['verification_epoch'] = state.get('verification_epoch', 0) + 1
+        state['status'] = 'design'
+        invalidate_delivery(doc, '规格与计划正本已重新关联，需要重新批准、封存和验证。')
+    elif command == 'approve':
+        design = project.document(state, 'design').read_text(encoding='utf-8')
         if len(design.strip()) < 15 or '状态：草稿；填写目标' in design:
             raise WorkflowError('DESIGN_EMPTY write the actual design first')
-        state['design_approval'] = {'sha256': digest(doc / 'design.md'), 'quote': args.quote, 'at': now(), 'source': 'caller-attributed-user'}
+        state['design_approval'] = {'sha256': digest(project.document(state, 'design')), 'quote': args.quote, 'at': now(), 'source': 'caller-attributed-user'}
         state['status'] = 'plan'
     elif command == 'task-add':
         slug(args.task)
@@ -724,9 +792,9 @@ def dispatch(project, args):
         project.valid_design(state, doc)
         if not state['tasks']:
             raise WorkflowError('TASKS_MISSING register the complete implementation plan, not only review findings')
-        if '计划尚未编写' in (doc / 'plan.md').read_text(encoding='utf-8'):
+        if '计划尚未编写' in project.document(state, 'plan').read_text(encoding='utf-8'):
             raise WorkflowError('PLAN_EMPTY write the actual task plan first')
-        state['plan_seal'] = {'sha256': digest(doc / 'plan.md'), 'tasks_sha256': project.task_definition_hash(state), 'at': now()}
+        state['plan_seal'] = {'sha256': digest(project.document(state, 'plan')), 'tasks_sha256': project.task_definition_hash(state), 'at': now()}
         state['status'] = 'execute'
     elif command == 'scope':
         path = (project.root / args.path).resolve() if args.path else None
@@ -815,7 +883,7 @@ def dispatch(project, args):
             receipt = project.root / next(p for p in state['evidence'] if p.endswith(row['id'] + '/receipt.json'))
             link = os.path.relpath(receipt, doc).replace('\\', '/')
             text += f'| {task["id"]} | {row["kind"]}: {row["status"]} (lane: {row["task"]}) | {row["tests_ran"]} | [receipt]({link}) |\n'
-        text += '\n自主决定：[decisions.md](decisions.md)。设计：[design.md](design.md)。计划：[plan.md](plan.md)。\n'
+        text += f"\n自主决定：[decisions.md](decisions.md)。规格：[design]({project.document_link(state, 'design', doc)})。计划：[plan]({project.document_link(state, 'plan', doc)})。\n"
         backlog_link = os.path.relpath(backlog['file'], doc).replace('\\', '/')
         text += f'\n项目待办：[{Path(backlog["file"]).name}]({backlog_link})；结构化未完成 {backlog["open"]} 项。\n'
         for item in backlog['items']:
@@ -862,7 +930,7 @@ def dispatch(project, args):
         invalidate_delivery(doc, '未知或失败执行已调查，旧证据不能用于新的交付。')
     elif command == 'save':
         checkpoint = {'schema': 1, 'at': now(), 'project_id': state['project_id'], 'root': str(project.root), 'git': git_identity(project.root),
-                      'fingerprint': fingerprint(project.root), 'design': digest(doc / 'design.md'), 'plan': digest(doc / 'plan.md')}
+                      'fingerprint': fingerprint(project.root), 'design': digest(project.document(state, 'design')), 'plan': digest(project.document(state, 'plan'))}
         atomic(run / 'checkpoint.json', checkpoint)
     elif command == 'resume':
         if state.get('inflight'): raise WorkflowError('EXECUTION_UNKNOWN inspect the recorded argv and evidence folder; do not redispatch blindly')
@@ -870,13 +938,13 @@ def dispatch(project, args):
         if check:
             if check['git'] != git_identity(project.root) or check['fingerprint'] != fingerprint(project.root):
                 raise WorkflowError('RESTORE_DIVERGED inspect changed files, branch or HEAD; saved state is not permission to overwrite')
-            if check['design'] != digest(doc / 'design.md') or check['plan'] != digest(doc / 'plan.md'):
+            if check['design'] != digest(project.document(state, 'design')) or check['plan'] != digest(project.document(state, 'plan')):
                 raise WorkflowError('RESTORE_PLAN_CHANGED')
         elif state['git'].get('head') != git_identity(project.root).get('head'):
             raise WorkflowError('HEAD_CHANGED inspect before continuation')
         from .todos import Backlog
         backlog = Backlog(project.root).summary()
-        return {'state': state, 'read_next': [str(doc / f) for f in ('design.md', 'plan.md', 'decisions.md', 'review.md')] + [backlog['file']], 'backlog': backlog, 'live_host': 'not checked'}, True
+        return {'state': state, 'read_next': [str(project.document(state, kind)) for kind in ('design', 'plan')] + [str(doc / f) for f in ('decisions.md', 'review.md')] + [backlog['file']], 'backlog': backlog, 'live_host': 'not checked'}, True
     elif command == 'status':
         return state, True
     else:

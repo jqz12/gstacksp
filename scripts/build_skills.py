@@ -1,4 +1,4 @@
-"""Build the small skill documents and catalog from maintained definitions.
+"""Build skill documents and catalog from maintained definitions.
 
 The router and common contract are hand maintained. All other SKILL.md and
 agents/openai.yaml files are generated here; edit this source then rebuild.
@@ -171,15 +171,18 @@ def build():
     catalog = {'schema': 1, 'version': __version__, 'skills': entries,
                'excluded': ['office-hours','spec','design-html','design-motion','pair-agent','runaway-stopper','gstack-upgrade','ubicloud','ios-clean','ios-design-review','ios-fix','ios-qa','ios-sync','deslop-shared-libs','retro']}
     (ROOT / 'catalog.json').write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    from sp_preservation import build as preserve_sp
+    preservation = preserve_sp(ROOT)
     for entry in entries:
         file = ROOT / 'skills' / entry['name'] / 'SKILL.md'
         text = file.read_text(encoding='utf-8')
         assert text.startswith('---\nname: ' + entry['name'] + '\n')
-        assert len(text.encode()) < 20000
         assert 'description:' in text
-        assert not re.search(r'\b(?:TODO|TBD)\b', text)
+        if '<!-- sp-preserved-body:begin -->' not in text:
+            assert not re.search(r'\b(?:TODO|TBD)\b', text)
         for ref in re.findall(r'\]\(([^)]+)\)', text):
-            assert (file.parent / ref).is_file(), (file, ref)
+            if not ref.startswith(('https://', 'http://', '#')):
+                assert (file.parent / ref).is_file(), (file, ref)
     print(json.dumps({'core': sum(s['pack']=='core' for s in entries), 'optional': sum(s['pack']=='optional' for s in entries), 'format_and_links': 'pass'}))
 
 

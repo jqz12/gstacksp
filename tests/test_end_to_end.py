@@ -1,3 +1,4 @@
+from process_helpers import document
 """Real unittest subprocesses in isolated fixture projects, no paid/live services."""
 from pathlib import Path
 import json
@@ -39,11 +40,11 @@ class EndToEndTests(unittest.TestCase):
             self.assertIn('.gsp/', (project / '.gitignore').read_text(encoding='utf-8'))
             call('new', 'hello', '--title', 'Fixture greeting', '--mode', 'unattended', '--quote', 'SYNTHETIC TEST ONLY: use recommendations')
             docs = project / 'docs/gsp/tasks/hello'
-            (docs / 'design.md').write_text('# Fixture design\nNormalize whitespace and greet a name.\n', encoding='utf-8')
+            document(project, 'hello', 'design').write_text('# Fixture design\nNormalize whitespace and greet a name.\n', encoding='utf-8')
             call('approve', 'hello', '--quote', 'SYNTHETIC TEST ONLY: approve this fixture design')
             call('task-add', 'hello', 'T1', '--title', 'Normalize', '--acceptance', 'Whitespace is trimmed')
             call('task-add', 'hello', 'T2', '--title', 'Greet', '--acceptance', 'Greeting uses normalized name', '--depends', 'T1')
-            (docs / 'plan.md').write_text('# Fixture plan\nT1 normalize and test. T2 greet and integration test.\n', encoding='utf-8')
+            document(project, 'hello', 'plan').write_text('# Fixture plan\nT1 normalize and test. T2 greet and integration test.\n', encoding='utf-8')
             call('seal-plan', 'hello')
             call('scope', 'hello', '--off', '--quote', 'SYNTHETIC TEST ONLY: no freeze')
             call('task-start', 'hello', 'T2', ok=False)

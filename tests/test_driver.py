@@ -1,3 +1,4 @@
+from process_helpers import document
 """Durable controller behavior, real subprocess fixtures, no paid model calls."""
 from contextlib import redirect_stdout, redirect_stderr
 import io
@@ -25,7 +26,7 @@ class DriverTests(unittest.TestCase):
         self.cli('init')
         self.cli('new', 'work', '--title', 'Fixture feature', '--mode', 'unattended', '--quote', 'SYNTHETIC TEST: run locally')
         self.doc = self.root / 'docs/gsp/tasks/work'
-        (self.doc / 'design.md').write_text('# Fixture design\nImplement add(a,b) and verify integer addition.\n', encoding='utf-8')
+        document(self.root, 'work', 'design').write_text('# Fixture design\nImplement add(a,b) and verify integer addition.\n', encoding='utf-8')
         self.cli('approve', 'work', '--quote', 'SYNTHETIC TEST: approve fixture')
         self.cli('scope', 'work', '--off', '--quote', 'SYNTHETIC TEST: fixture choice')
         self.checks = self.root / '.gsp/checks.json'
@@ -162,7 +163,7 @@ class DriverTests(unittest.TestCase):
 
     def test_changed_design_stops_before_host_dispatch(self):
         self.prepare()
-        (self.doc / 'design.md').write_text('# Another design\nChange the feature.\n', encoding='utf-8')
+        document(self.root, 'work', 'design').write_text('# Another design\nChange the feature.\n', encoding='utf-8')
         self.cli('drive-run', 'work')
         self.assertEqual(self.status()['dispatches'], 0)
         self.assertEqual(self.status()['status'], 'waiting')

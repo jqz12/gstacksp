@@ -4,7 +4,9 @@ GstackSP is an independent implementation and adapted set of workflow skills
 informed by these pinned local snapshots. It is not an upstream release and
 does not bundle their complete runtimes, browser daemons or service integrations.
 
-- obra/superpowers, snapshot `22f0b46`, version 7.0.2.
+- obra/superpowers, version 7.0.2, pinned by sources/superpowers/baseline.json file hashes.
+  The earlier short snapshot label was not independently verified as an upstream commit.
+  Complete skill text and supporting resources are preserved; see the explicit SP adapter.
 - garrytan/gstack, snapshot `cf21a7f`.
 
 `catalog.json` maps each published skill to its source ideas and fused skills.

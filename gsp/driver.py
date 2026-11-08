@@ -65,7 +65,7 @@ class Driver:
                 f'- 修复轮次：{json.dumps(d["fix_rounds"], ensure_ascii=False)}\n'
                 '- 实际费用：unknown；派发/时间上限不是金额计费上限。\n'
                 f'- gate：{d.get("gate") or "none"}\n'
-                '- 任务与证据：[交付](delivery.md)、[审查](review.md)、[计划](plan.md)、[设计](design.md)。\n\n'
+                f"- 任务与证据：[交付](delivery.md)、[审查](review.md)、[计划]({self.project.document_link(read(self.run / 'state.json'), 'plan', self.doc)})、[规格]({self.project.document_link(read(self.run / 'state.json'), 'design', self.doc)})。\n\n"
                 '恢复入口：先 drive-status 查看当前 gate/attempt；等待普通答复用 drive-answer，'
                 '执行未知先检查进程/现场并写报告再 drive-recover，之后 drive-start。不要直接重置状态或消耗计数。\n')
         atomic(self.doc / 'driver-report.md', text)
@@ -242,7 +242,7 @@ class Driver:
             folder.mkdir(parents=True, exist_ok=False)
             actual_phase = 'fix-task' if phase == 'execute' and key else phase
             job = {'id': ident, 'project': str(self.project.root), 'phase': actual_phase, 'task': task,
-                   'design': str(self.doc / 'design.md'), 'plan_file': str(self.doc / 'plan.md'),
+                   'design': str(self.project.document(state, 'design')), 'plan_file': str(self.project.document(state, 'plan')),
                    'workflow_state': str(self.run / 'state.json'), 'driver_state': str(self.file),
                    'workflow_guard': digest(self.run / 'state.json'), 'input_fingerprint': fingerprint(self.project.root),
                    'review_findings': self.data['review_findings'], 'answers': self.data['answers'][-5:],
@@ -365,7 +365,8 @@ class Driver:
     def apply_plan(self, state, plan):
         if state['tasks']:
             raise WorkflowError('PLAN_RECONCILIATION_REQUIRED preserve existing tasks; seal their plan explicitly')
-        atomic(self.doc / 'plan.md', plan['text'])
+        spec_link = self.project.document_link(state, 'design', self.project.document(state, 'plan').parent)
+        atomic(self.project.document(state, 'plan'), f'Spec: [approved design]({spec_link})\n\n' + plan['text'])
         for task in plan['tasks']:
             dispatch(self.project, Namespace(command='task-add', id=self.task, task=task['id'], title=task['title'],
                 acceptance=task['acceptance'], depends=','.join(task['depends']), no_tests_reason=task['no_tests_reason'] or None))

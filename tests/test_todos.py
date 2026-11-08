@@ -1,3 +1,4 @@
+from process_helpers import document
 """Backlog lifecycle behavior; isolated projects, real verification subprocesses."""
 from contextlib import redirect_stdout, redirect_stderr
 import io
@@ -42,10 +43,10 @@ class TodoTests(unittest.TestCase):
     def work(self):
         self.cli('new', 'work', '--title', 'Fixture implementation')
         doc = self.root / 'docs/gsp/tasks/work'
-        (doc / 'design.md').write_text('# Design\nHandle the configuration path with a meaningful result.\n', encoding='utf-8')
+        document(self.root, 'work', 'design').write_text('# Design\nHandle the configuration path with a meaningful result.\n', encoding='utf-8')
         self.cli('approve', 'work', '--quote', 'SYNTHETIC TEST fixture approval')
         self.cli('task-add', 'work', 'T1', '--title', 'Configuration', '--acceptance', 'Missing configuration handled')
-        (doc / 'plan.md').write_text('# Plan\nT1 implement and test configuration behavior.\n', encoding='utf-8')
+        document(self.root, 'work', 'plan').write_text('# Plan\nT1 implement and test configuration behavior.\n', encoding='utf-8')
         self.cli('seal-plan', 'work')
         self.cli('scope', 'work', '--off', '--quote', 'SYNTHETIC TEST fixture choice')
         return doc

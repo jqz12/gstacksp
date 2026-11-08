@@ -1,6 +1,6 @@
 {
   "name": "gstacksp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "GstackSP portable development skills for Windows projects.",
   "skills": "./skills/",
   "hooks": {},

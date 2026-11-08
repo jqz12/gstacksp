@@ -14,6 +14,8 @@ def validate():
     assert catalog['version'] == __version__
     for manifest in ('.claude-plugin/plugin.json', '.codex-plugin/plugin.json'):
         assert json.loads((ROOT / manifest).read_text(encoding='utf-8'))['version'] == __version__
+    from sp_preservation import verify
+    verify(ROOT)
     names = set()
     for item in catalog['skills']:
         name = item['name']
@@ -25,10 +27,11 @@ def validate():
         assert text.startswith(f'---\nname: {name}\n'), file
         front = text.split('---', 2)[1]
         assert re.search(r'^description: .+', front, re.M), file
-        assert len(text.encode()) < 20000, file
-        assert not re.search(r'\b(?:TODO|TBD)\b', text), file
+        if '<!-- sp-preserved-body:begin -->' not in text:
+            assert not re.search(r'\b(?:TODO|TBD)\b', text), file
         for link in re.findall(r'\]\(([^)]+)\)', text):
-            assert (file.parent / link).is_file(), (file, link)
+            if not link.startswith(('https://', 'http://', '#')):
+                assert (file.parent / link).is_file(), (file, link)
         metadata = file.parent / 'agents/openai.yaml'
         meta = metadata.read_text(encoding='utf-8')
         assert '$' + name in meta, metadata
@@ -44,7 +47,8 @@ def validate():
     # All human guide links must refer to actual local files, excluding example output paths.
     for file in (ROOT / 'README.md', ROOT / 'docs/安装与使用.md', ROOT / 'docs/文件流转与阅读指南.md'):
         for link in re.findall(r'\]\(([^)]+)\)', file.read_text(encoding='utf-8')):
-            assert (file.parent / link).is_file(), (file, link)
+            if not link.startswith(('https://', 'http://', '#')):
+                assert (file.parent / link).is_file(), (file, link)
     print(json.dumps({'skills': 47, 'core': 20, 'optional': 27, 'structural_checks': 'PASS', 'live_host': 'NOT_CHECKED'}))
 
 

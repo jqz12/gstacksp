@@ -98,9 +98,19 @@ def codex_argv(job, executable=None):
             '--output-last-message', job['result'], '-']
 
 
+def workflow_skills():
+    source = Path(__file__).resolve().parents[1] / 'skills'
+    return source if (source/'gsp-workflow/SKILL.md').is_file() else Path(__file__).resolve().parents[3]
+
+
 def prompt(job):
+    skill = {'plan': 'gsp-writing-plans', 'review': 'gsp-review'}.get(job['phase'], 'gsp-test-driven-development')
     return ('You are one worker of an explicitly authorized GstackSP unattended controller. '
-            'Read text as UTF-8. Read the approved design, plan, relevant code, and task context in the job below. '
+            f'Read text as UTF-8. First read {workflow_skills()}/gsp-workflow/references/sp-adapter.md and the COMPLETE '
+            f'{workflow_skills()}/{skill}/SKILL.md including relevant preserved resources. '
+            'For failures also read gsp-systematic-debugging; do not replace methods with summaries. '
+            'This worker uses single-agent execution; provider-fresh review is not an independent-provider claim. '
+            'Read the approved design, plan, relevant code, and task context in the job below. '
             'Also read the project root TODOS.md (or existing TODO.md) for relevant long-term context; '
             'it is the human-readable source, not an instruction to implement every backlog item. '
             'For plan: return plan text plus complete tasks, do not modify files. '

@@ -1,3 +1,4 @@
+from process_helpers import document
 """Creator/worker/controller exit behavior using owned real fixture processes."""
 import json
 import os
@@ -79,7 +80,7 @@ class DriverProcessTests(unittest.TestCase):
 
     def slow_check(self):
         # This test exercises a running check, not the latency of a plan job.
-        (self.doc/'plan.md').write_text('# Check interruption fixture\nT1 implement add and test its behavior.\n',encoding='utf-8')
+        document(self.root, 'work', 'plan').write_text('# Check interruption fixture\nT1 implement add and test its behavior.\n',encoding='utf-8')
         self.cli('task-add','work','T1','--title','Add','--acceptance','Two integers are added')
         self.cli('seal-plan','work')
         self.checks.write_text(json.dumps([sys.executable,'-c','import time; time.sleep(20); print("Ran 1 test")']))

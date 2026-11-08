@@ -1,3 +1,4 @@
+from process_helpers import document
 import importlib.util
 import json
 import os
@@ -88,10 +89,10 @@ class WorkflowTests(unittest.TestCase):
         self.cli('init')
         self.cli('new', 'login', '--title', 'Login')
         folder = self.project / 'docs/gsp/tasks/login'
-        (folder / 'design.md').write_text('# Design\nLogin returns a session.\n', encoding='utf-8')
+        document(self.project, 'login', 'design').write_text('# Design\nLogin returns a session.\n', encoding='utf-8')
         self.cli('approve', 'login', '--quote', 'I approve this design')
         self.cli('task-add', 'login', 'T1', '--title', 'Implement login', '--acceptance', 'Unit tests pass')
-        (folder / 'plan.md').write_text('# Plan\nT1: implement and test login.\n', encoding='utf-8')
+        document(self.project, 'login', 'plan').write_text('# Plan\nT1: implement and test login.\n', encoding='utf-8')
         self.cli('seal-plan', 'login')
         self.cli('scope', 'login', '--off', '--quote', 'No freeze for this task')
         self.cli('task-start', 'login', 'T1')
@@ -113,7 +114,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_design_change_revokes_approval(self):
         folder = self.task()
-        (folder / 'design.md').write_text('Changed requirement', encoding='utf-8')
+        document(self.project, 'login', 'design').write_text('Changed requirement', encoding='utf-8')
         self.cli('task-start', 'login', 'T1', ok=False)
 
     def test_zero_tests_and_failure_do_not_complete(self):
@@ -133,7 +134,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_plan_change_blocks_execution(self):
         folder = self.task()
-        (folder / 'plan.md').write_text('new plan', encoding='utf-8')
+        document(self.project, 'login', 'plan').write_text('new plan', encoding='utf-8')
         self.passing_failure = self.cli('task-start', 'login', 'T1', ok=False)
 
     def test_scope_paths_and_shell_monitor(self):
@@ -235,7 +236,7 @@ class WorkflowTests(unittest.TestCase):
         (folder / 'review.md').write_text('# Review\nOriginal design reviewed without blockers.\n', encoding='utf-8')
         self.cli('review', 'login', '--reviewer', 'self', '--blocking', '0')
         self.cli('ready', 'login')
-        (folder / 'design.md').write_text('# New design\nNow requires expiration too.\n', encoding='utf-8')
+        document(self.project, 'login', 'design').write_text('# New design\nNow requires expiration too.\n', encoding='utf-8')
         self.cli('approve', 'login', '--quote', 'Approve expiration')
         self.cli('seal-plan', 'login')
         (folder / 'review.md').write_text('# Review\nChecked revised design without blockers.\n', encoding='utf-8')
@@ -420,7 +421,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_changed_design_invalidates_human_report_on_status(self):
         folder = self.completed()
-        (folder / 'design.md').write_text('# Different design\nNow requires another user flow.\n', encoding='utf-8')
+        document(self.project, 'login', 'design').write_text('# Different design\nNow requires another user flow.\n', encoding='utf-8')
         state = json.loads(self.cli('status', 'login').stdout)
         self.assertNotEqual(state['status'], 'ready')
         self.assertNotIn('\n\nREADY：', (folder / 'delivery.md').read_text(encoding='utf-8'))
