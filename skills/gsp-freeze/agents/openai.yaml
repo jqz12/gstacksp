@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP freeze"
+  short_description: "GstackSP 项目工作流：本次任务需要选择、设置、查看或解除允许修改的目录范围时"
+  default_prompt: "Use $gsp-freeze for the relevant part of this project task."

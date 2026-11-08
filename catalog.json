@@ -1,0 +1,417 @@
+{
+  "schema": 1,
+  "version": "0.4.0",
+  "skills": [
+    {
+      "name": "gsp-workflow",
+      "pack": "core",
+      "sources": [
+        "SP:using-superpowers",
+        "GS:careful",
+        "GS:guard"
+      ],
+      "generated": false
+    },
+    {
+      "name": "gsp-health",
+      "pack": "core",
+      "sources": [
+        "GS:health",
+        "GS:gstack-doctor"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-context-restore",
+      "pack": "core",
+      "sources": [
+        "GS:context-restore"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-freeze",
+      "pack": "core",
+      "sources": [
+        "GS:freeze",
+        "GS:unfreeze"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-brainstorming",
+      "pack": "core",
+      "sources": [
+        "SP:brainstorming"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-writing-plans",
+      "pack": "core",
+      "sources": [
+        "SP:writing-plans"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-autoplan",
+      "pack": "core",
+      "sources": [
+        "GS:autoplan",
+        "GS:plan-ceo-review",
+        "GS:plan-eng-review"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-plan-tune",
+      "pack": "core",
+      "sources": [
+        "GS:plan-tune"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-eval-plan",
+      "pack": "core",
+      "sources": [
+        "GS:eval-plan"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-execute",
+      "pack": "core",
+      "sources": [
+        "SP:executing-plans",
+        "SP:subagent-driven-development",
+        "SP:dispatching-parallel-agents",
+        "SP:using-git-worktrees"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-test-driven-development",
+      "pack": "core",
+      "sources": [
+        "SP:test-driven-development"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-systematic-debugging",
+      "pack": "core",
+      "sources": [
+        "SP:systematic-debugging",
+        "GS:investigate"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-browse",
+      "pack": "core",
+      "sources": [
+        "GS:browse"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-qa",
+      "pack": "core",
+      "sources": [
+        "GS:qa",
+        "GS:qa-only"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-review",
+      "pack": "core",
+      "sources": [
+        "GS:review",
+        "SP:requesting-code-review",
+        "SP:receiving-code-review"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-verify",
+      "pack": "core",
+      "sources": [
+        "SP:verification-before-completion",
+        "GS:verify"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-ship",
+      "pack": "core",
+      "sources": [
+        "GS:ship",
+        "SP:finishing-a-development-branch",
+        "GS:document-release"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-learn",
+      "pack": "core",
+      "sources": [
+        "GS:learn"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-context-save",
+      "pack": "core",
+      "sources": [
+        "GS:context-save"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-writing-skills",
+      "pack": "core",
+      "sources": [
+        "SP:writing-skills",
+        "GS:write-skill"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-design-consultation",
+      "pack": "optional",
+      "sources": [
+        "GS:design-consultation"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-design-shotgun",
+      "pack": "optional",
+      "sources": [
+        "GS:design-shotgun"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-diagram",
+      "pack": "optional",
+      "sources": [
+        "GS:diagram"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-plan-design-review",
+      "pack": "optional",
+      "sources": [
+        "GS:plan-design-review"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-plan-devex-review",
+      "pack": "optional",
+      "sources": [
+        "GS:plan-devex-review"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-captain",
+      "pack": "optional",
+      "sources": [
+        "GS:captain"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-open-gstack-browser",
+      "pack": "optional",
+      "sources": [
+        "GS:open-gstack-browser"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-setup-browser-cookies",
+      "pack": "optional",
+      "sources": [
+        "GS:setup-browser-cookies"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-scrape",
+      "pack": "optional",
+      "sources": [
+        "GS:scrape"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-skillify",
+      "pack": "optional",
+      "sources": [
+        "GS:skillify"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-design-review",
+      "pack": "optional",
+      "sources": [
+        "GS:design-review"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-benchmark",
+      "pack": "optional",
+      "sources": [
+        "GS:benchmark"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-devex-review",
+      "pack": "optional",
+      "sources": [
+        "GS:devex-review"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-test-audit",
+      "pack": "optional",
+      "sources": [
+        "GS:test-audit"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-cso",
+      "pack": "optional",
+      "sources": [
+        "GS:cso"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-codex",
+      "pack": "optional",
+      "sources": [
+        "GS:codex",
+        "GS:claude-code"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-benchmark-models",
+      "pack": "optional",
+      "sources": [
+        "GS:benchmark-models"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-modernize",
+      "pack": "optional",
+      "sources": [
+        "GS:modernize"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-document-generate",
+      "pack": "optional",
+      "sources": [
+        "GS:document-generate"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-make-pdf",
+      "pack": "optional",
+      "sources": [
+        "GS:make-pdf"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-land-and-deploy",
+      "pack": "optional",
+      "sources": [
+        "GS:land-and-deploy"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-setup-deploy",
+      "pack": "optional",
+      "sources": [
+        "GS:setup-deploy"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-landing-report",
+      "pack": "optional",
+      "sources": [
+        "GS:landing-report"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-canary",
+      "pack": "optional",
+      "sources": [
+        "GS:canary"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-setup-gbrain",
+      "pack": "optional",
+      "sources": [
+        "GS:setup-gbrain"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-sync-gbrain",
+      "pack": "optional",
+      "sources": [
+        "GS:sync-gbrain"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-diagnosing-superpowers",
+      "pack": "optional",
+      "sources": [
+        "SP:diagnosing-superpowers"
+      ],
+      "generated": true
+    }
+  ],
+  "excluded": [
+    "office-hours",
+    "spec",
+    "design-html",
+    "design-motion",
+    "pair-agent",
+    "runaway-stopper",
+    "gstack-upgrade",
+    "ubicloud",
+    "ios-clean",
+    "ios-design-review",
+    "ios-fix",
+    "ios-qa",
+    "ios-sync",
+    "deslop-shared-libs",
+    "retro"
+  ]
+}

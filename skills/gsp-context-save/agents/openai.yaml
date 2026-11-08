@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP context-save"
+  short_description: "GstackSP 项目工作流：任务将中断、换宿主、压缩上下文或需要可恢复交接时"
+  default_prompt: "Use $gsp-context-save for the relevant part of this project task."

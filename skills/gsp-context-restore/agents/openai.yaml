@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP context-restore"
+  short_description: "GstackSP 项目工作流：恢复中断任务、压缩后的上下文或将同一项目交给另一个宿主时"
+  default_prompt: "Use $gsp-context-restore for the relevant part of this project task."

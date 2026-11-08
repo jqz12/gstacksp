@@ -1,0 +1,6 @@
+# Local machine workflow state: evidence, driver/daemon records, locks (logs stay local by design)
+.gsp/
+
+# Python bytecode
+__pycache__/
+*.pyc

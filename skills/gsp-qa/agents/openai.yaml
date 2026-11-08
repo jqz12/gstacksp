@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP qa"
+  short_description: "GstackSP 项目工作流：实现后需要验证浏览器、API 或 CLI 的实际使用流程与边界时"
+  default_prompt: "Use $gsp-qa for the relevant part of this project task."

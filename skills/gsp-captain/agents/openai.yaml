@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP captain"
+  short_description: "GstackSP 项目工作流：确有多个独立任务需要协调代理和分支且宿主允许时"
+  default_prompt: "Use $gsp-captain for the relevant part of this project task."

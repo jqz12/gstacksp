@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP sync-gbrain"
+  short_description: "GstackSP 项目工作流：用户明确需要将本项目选定知识同步到已配置 gbrain 时"
+  default_prompt: "Use $gsp-sync-gbrain for the relevant part of this project task."

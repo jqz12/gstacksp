@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP review"
+  short_description: "GstackSP 项目工作流：一个任务、主要功能或整条分支需要规格符合性和代码质量审查时"
+  default_prompt: "Use $gsp-review for the relevant part of this project task."

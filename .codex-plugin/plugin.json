@@ -1,0 +1,8 @@
+{
+  "name": "gstacksp",
+  "version": "0.4.0",
+  "description": "GstackSP portable development skills for Windows projects.",
+  "skills": "./skills/",
+  "hooks": {},
+  "license": "MIT"
+}

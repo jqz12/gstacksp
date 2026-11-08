@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP learn"
+  short_description: "GstackSP 项目工作流：需要保存、检索或修正本项目已验证的可复用经验时"
+  default_prompt: "Use $gsp-learn for the relevant part of this project task."

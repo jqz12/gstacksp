@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP writing-skills"
+  short_description: "GstackSP 项目工作流：需要新增或调整可复用的 GstackSP 技能和共享规则时"
+  default_prompt: "Use $gsp-writing-skills for the relevant part of this project task."

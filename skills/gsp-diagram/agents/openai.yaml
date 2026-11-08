@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP diagram"
+  short_description: "GstackSP 项目工作流：架构、状态或交互关系用图比文字更清楚时"
+  default_prompt: "Use $gsp-diagram for the relevant part of this project task."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP plan-design-review"
+  short_description: "GstackSP 项目工作流：实施前的 UI 计划需要检查视觉交互、状态和可访问性覆盖时"
+  default_prompt: "Use $gsp-plan-design-review for the relevant part of this project task."

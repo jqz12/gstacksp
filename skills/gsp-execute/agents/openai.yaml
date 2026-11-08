@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP execute"
+  short_description: "GstackSP 项目工作流：已确认设计与计划需要连续实施、测试和完成任务时"
+  default_prompt: "Use $gsp-execute for the relevant part of this project task."

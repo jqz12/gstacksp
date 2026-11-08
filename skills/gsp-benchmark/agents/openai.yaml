@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP benchmark"
+  short_description: "GstackSP 项目工作流：页面性能或资源指标明确属于任务验收目标时"
+  default_prompt: "Use $gsp-benchmark for the relevant part of this project task."

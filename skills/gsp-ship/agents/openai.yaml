@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP ship"
+  short_description: "GstackSP 项目工作流：实现和审查结束，需要准备交付或执行已授权的发布分支操作时"
+  default_prompt: "Use $gsp-ship for the relevant part of this project task."

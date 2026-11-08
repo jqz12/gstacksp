@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP modernize"
+  short_description: "GstackSP 项目工作流：已有老旧 PR 或任务分支需要评估是否继续、重做或关闭时"
+  default_prompt: "Use $gsp-modernize for the relevant part of this project task."

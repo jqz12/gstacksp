@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP 工作流"
+  short_description: "按已确认设计连续开发，管理冻结、任务证据、交付与跨会话恢复"
+  default_prompt: "Use $gsp-workflow to continue this project from its confirmed design and current task records."

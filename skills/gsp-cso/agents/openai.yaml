@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP cso"
+  short_description: "GstackSP 项目工作流：任务涉及身份、权限、敏感数据或暴露面，需要针对性安全检查时"
+  default_prompt: "Use $gsp-cso for the relevant part of this project task."

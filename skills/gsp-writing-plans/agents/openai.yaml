@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP writing-plans"
+  short_description: "GstackSP 项目工作流：已确认设计需要拆分为可执行、可验证的实施任务时"
+  default_prompt: "Use $gsp-writing-plans for the relevant part of this project task."

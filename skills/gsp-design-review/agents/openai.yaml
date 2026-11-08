@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP design-review"
+  short_description: "GstackSP 项目工作流：已有可运行页面需要检查视觉质量与交互一致性时"
+  default_prompt: "Use $gsp-design-review for the relevant part of this project task."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP brainstorming"
+  short_description: "GstackSP 项目工作流：开发需求尚有重要目标、范围或方案需要讨论并确认时"
+  default_prompt: "Use $gsp-brainstorming for the relevant part of this project task."
