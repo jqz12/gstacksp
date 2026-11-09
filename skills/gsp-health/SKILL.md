@@ -1,6 +1,6 @@
 ---
 name: gsp-health
-description: "Use when 当前工作流安装、依赖、技能发现或跨宿主能力需要检查时."
+description: "Use when 当前工作流安装、依赖、技能发现、项目文档结构或跨宿主能力需要检查时."
 ---
 
 # health
@@ -11,4 +11,4 @@ description: "Use when 当前工作流安装、依赖、技能发现或跨宿主
 
 运行 `<gsp> health --host claude|codex|both`。报告每一项 PASS、FAIL、NOT_CHECKED；先区分文件检查、CLI 存在和真实技能触发。让当前宿主实际调用本技能并指出加载的安装路径，作为单独的人工观察记录。浏览器、子代理、hook 需当前宿主实测，不从静态配置推断。缺失组件提供实际修复路径，未经执行不报告修复完成。将结果保存到任务 review.md 或单独的 docs/gsp/health.md；此技能不做代码质量打分。
 
-自动检测同时扫描项目级和用户级安装，并分别核对清单；全局正常不能掩盖项目损坏。自动扫描仍不证明真实宿主行为；新环境另做实际技能触发检查。 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。
+自动检测同时扫描项目级和用户级安装，并分别核对清单；全局正常不能掩盖项目损坏。文档治理使用 `<gsp> health --documents-only`；同时检查安装时用 `--documents`。默认报告保存在目标项目 docs/gsp/reports/document-governance/<唯一运行ID>/report.md 与 report.json；用户明确指定集中目录时传 --report-dir，不把开发者本机目录当产品默认。读取报告检查分类、绑定、断链、重复、孤立、未追踪和差异。程序未检查语义与代码符合性，按需要复核并将依据写到独立复核材料，不能冒称程序已验证。旧项目先盘点和迁移预览，未知分类、未入链或重复副本不等于可删除。只出报告，不自动删文件、迁移或改全局配置。新建资料按统一职责，旧布局是待整理过渡或有依据例外。安装扫描仍不证明真实宿主行为；新环境另做实际技能触发检查。文档规则与命令见 [治理契约](../gsp-workflow/references/document-governance.md)。 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。

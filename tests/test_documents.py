@@ -22,8 +22,36 @@ class DocumentTests(unittest.TestCase):
         if cut < len(values): args.argv=values[cut+1:]
         return dispatch(self.project,args)[0]
     def create(self,id='login'):
-        self.cmd('new',id,'--title','Login')
+        self.cmd('new',id,'--title','Login','--legacy-layout')
         return read(self.root/'.gsp/runs'/id/'state.json')
+    def test_default_new_uses_fixed_work_archive_and_defers_plan(self):
+        self.cmd('new','fresh','--title','Fresh task')
+        state=read(self.root/'.gsp/runs/fresh/state.json')
+        spec=self.project.document(state,'design')
+        self.assertIn('docs/work/',state['documents']['design'])
+        self.assertEqual(spec.name,'spec.md')
+        self.assertFalse(self.project.document(state,'plan').exists())
+        spec.write_text('# A real specification with acceptance criteria',encoding='utf-8')
+        self.cmd('approve','fresh','--quote','approved')
+        self.assertTrue(self.project.document(state,'plan').exists())
+        self.assertTrue((spec.parent/'record.json').exists())
+
+    def test_existing_project_document_can_be_bound_in_place(self):
+        a=self.create()
+        spec=self.root/'docs/old-spec.md'; plan=self.root/'docs/old-plan.md'
+        spec.write_text('# Existing specification',encoding='utf-8');plan.write_text('# Existing implementation plan',encoding='utf-8')
+        self.cmd('documents-adopt','login','--spec','docs/old-spec.md','--plan','docs/old-plan.md','--reason','existing project source')
+        state=read(self.root/'.gsp/runs/login/state.json')
+        self.assertEqual(self.project.document(state,'design'),spec)
+
+    def test_interrupted_new_can_continue_same_orphan_run(self):
+        from gsp.documents import Governance
+        b=Governance(self.root);r=b.create('Saved idea','goal','user',run_id='interrupted')
+        r=b.stage(r['uuid'],'design','discussion')
+        (self.root/'.gsp/runs/interrupted').mkdir(parents=True)
+        atomic(self.root/'.gsp/active.json',{'task':'interrupted'})
+        self.cmd('new','interrupted','--title','Saved idea','--work',r['uuid'])
+        self.assertEqual(read(self.root/'.gsp/runs/interrupted/state.json')['work_uuid'],r['uuid'])
     def test_classified_unique_documents_and_plan_link(self):
         a=self.create();b=self.create('payment')
         spec=self.project.document(a,'design');plan=self.project.document(a,'plan')

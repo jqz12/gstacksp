@@ -1,5 +1,7 @@
 # SP 原版保留与 GstackSP 适配契约
 
+> 0.7 文档治理更新：新任务默认固定档案 docs/work/<年份>/<编号-初始标题>/spec.md、plan.md，其他文档按阶段产生；旧布局继续绑定兼容。下文的 docs/superpowers 与 docs/gsp/tasks 路径为旧布局说明，实际以 status/resume 返回路径为准。documents-adopt 现允许项目 docs 内已有 Markdown。完整新规则见 [文档治理](document-governance.md)。
+
 这是差异说明，不是原版摘要。固定基线为本地 Superpowers 7.0.2 文件快照，82 个文件逐个 SHA-256；未验证父本独立 Git 提交。完整原文件在 ../upstream/。主技能正文保留全部原文，只定向正文 Markdown 资源链接，不删除步骤、示例、反例、检查清单。英文原文避免翻译漂移。
 
 ## 原版名称映射

@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -125,9 +126,14 @@ def snapshot(root):
     separate approval/review hashes; dependency directories are not inputs.
     """
     root = Path(root)
-    records = {}
+    records = {'@gsp-input-schema':'2'}
     for folder, dirs, files in os.walk(root, followlinks=False):
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not Path(folder, d).is_symlink())
+        # Historical workflow artifacts have separate contract bindings. Prune
+        # traversal itself, not just hashing, so closed history is not an input.
+        if Path(folder).relative_to(root).as_posix() in ('docs/work', 'docs/superpowers', 'docs/gsp'):
+            dirs[:] = []
+            continue
         for name in sorted(files):
             path = Path(folder, name)
             rel = path.relative_to(root).as_posix()
@@ -147,6 +153,18 @@ def snapshot(root):
         raise WorkflowError('FINGERPRINT_FAILED backlog execution records escape project')
     if backlog_records.is_file():
         records['.gsp/backlog/records.json'] = digest(backlog_records)
+    policy=root/'.gsp/verification-inputs.json'
+    if not inside(root,policy): raise WorkflowError('VERIFICATION_POLICY_ESCAPE')
+    if policy.exists():
+        data=read(policy)
+        patterns=data.get('include',[])
+        if not isinstance(patterns,list) or any(not isinstance(p,str) or Path(p).is_absolute() or '..' in Path(p).parts for p in patterns):
+            raise WorkflowError('VERIFICATION_POLICY_INVALID')
+        records['.gsp/verification-inputs.json']=digest(policy)
+        for pattern in patterns:
+            for p in root.glob(pattern):
+                if not inside(root,p):raise WorkflowError('VERIFICATION_INPUT_ESCAPE')
+                if p.is_file():records[p.relative_to(root).as_posix()]=digest(p)
     return records
 
 
@@ -216,6 +234,13 @@ class Project:
     def paths(self, task_id):
         slug(task_id)
         paths = (self.meta / 'runs' / task_id, self.root / 'docs/gsp/tasks' / task_id)
+        state_file=paths[0]/'state.json'
+        if state_file.exists():
+            rel=read(state_file).get('doc_dir')
+            if rel:
+                if Path(rel).is_absolute() or '..' in Path(rel).parts or not rel.startswith('docs/work/'):
+                    raise WorkflowError('TASK_PATH_ESCAPE')
+                paths=(paths[0],self.root/rel)
         if not all(inside(self.root, p) for p in paths):
             raise WorkflowError('TASK_PATH_ESCAPE')
         return paths
@@ -231,9 +256,9 @@ class Project:
         rel = state['documents'].get(kind)
         if not isinstance(rel, str) or Path(rel).is_absolute():
             raise WorkflowError('DOCUMENT_PATH_INVALID')
-        base = self.root / ('docs/superpowers/specs' if kind == 'design' else 'docs/superpowers/plans')
+        rel=Path(rel).as_posix()
         file = self.root / rel
-        if not inside(self.root, base) or not inside(base, file) or file.suffix != '.md':
+        if '..' in Path(rel).parts or not inside(self.root, file) or file.suffix != '.md' or not rel.startswith('docs/'):
             raise WorkflowError('DOCUMENT_PATH_ESCAPE')
         return file
 
@@ -249,6 +274,8 @@ class Project:
         return state, run, doc
 
     def state(self, task_id, execution=False, allow_head_change=False, release_scope=False):
+        if (self.meta/'document-transaction.json').exists() or (self.meta/'document-migration.json').exists():
+            raise WorkflowError('DOCUMENT_TRANSACTION_PENDING recover document operations first')
         run, doc = self.paths(task_id)
         state = read(run / 'state.json')
         ident = self.identity()
@@ -275,10 +302,12 @@ class Project:
                 stale = True
         if stale:
             state['status'] = 'needs-verification'
-            atomic(run / 'state.json', state)
-            invalidate_delivery(doc, '项目文件、设计、计划或审查已变化，需要重新验证、审查并 ready。')
-            self.dashboard()
+            self.write(state,'delivery-invalidated','项目文件、设计、计划或审查已变化，需要重新验证、审查并 ready。')
         if execution:
+            if state.get('work_uuid'):
+                from .documents import Governance
+                if Governance(self.root).get(state['work_uuid'])['stage'] in ('paused','cancelled','delivered','closed'):
+                    raise WorkflowError('WORK_NOT_ACTIVE resume or create related work before execution')
             self.valid_design(state, doc)
             self.valid_plan(state, doc)
             if state.get('scope', {}).get('mode') == 'pending':
@@ -308,46 +337,86 @@ class Project:
         event_file = run / 'events.jsonl'
         with event_file.open('a', encoding='utf-8') as stream:
             stream.write(json.dumps({'at': now(), 'event': event, 'detail': redact(detail)}, ensure_ascii=False) + '\n')
-        self.dashboard()
+        if state.get('work_uuid'):
+            from .documents import Governance
+            book=Governance(self.root); record=book.get(state['work_uuid'])
+            if record.get('run_id')!=state['id']: raise WorkflowError('WORK_ACTIVE_RUN_MISMATCH')
+            before_record=json.dumps(record,sort_keys=True)
+            stages={'design':'design','plan':'approved','execute':'implementing','checking':'implementing',
+                    'review':'implementing','ready':'ready','needs-verification':'implementing','blocked':'implementing'}
+            if record['stage'] not in ('closed','delivered','paused','cancelled'):
+                record['stage']=stages.get(state['status'],'implementing')
+            record['documents'].update({k:v for k,v in state.get('documents',{}).items() if (self.root/v).exists()})
+            if json.dumps(record,sort_keys=True)!=before_record: book._save(record)
+            book.refresh(list(record['documents'].values())+[(doc/name).relative_to(self.root).as_posix() for name in ('review.md','decisions.md','delivery.md')])
+        self.dashboard(state)
 
-    def dashboard(self):
+    def dashboard(self, updated=None):
         lines = ['# GstackSP 任务索引', '', '这是给人看的入口；AI 恢复时先运行 resume，再读本任务设计、计划与状态。', '',
                  '| 任务 | 状态 | 当前任务 | 设计 | 计划 | 交付 |', '|---|---|---|---|---|---|']
-        for file in sorted((self.meta / 'runs').glob('*/state.json')):
-            state = read(file)
+        cache=self.meta/'dashboard.json'
+        states=read(cache) if cache.exists() else {}
+        if updated: states[updated['id']]=updated
+        states=dict(sorted(states.items(),key=lambda pair:pair[1].get('updated',''),reverse=True)[:50])
+        atomic(cache,states)
+        for state in states.values():
             tid = state['id']
             pending = ', '.join(t['id'] + ':' + t['status'] for t in state['tasks'] if t['status'] != 'done') or '无'
             title = state['title'].replace('|', '\\|').replace('\n', ' ')
-            lines.append(f"| [{title}](tasks/{tid}/decisions.md) | {state['status']} | {pending} | [规格]({self.document_link(state, 'design', self.root / 'docs/gsp')}) | [计划]({self.document_link(state, 'plan', self.root / 'docs/gsp')}) | [交付](tasks/{tid}/delivery.md) |")
+            folder=self.paths(tid)[1]
+            link=lambda name: os.path.relpath(folder/name,self.root/'docs/gsp').replace('\\','/')
+            lines.append(f"| [{title}]({link('decisions.md')}) | {state['status']} | {pending} | [规格]({self.document_link(state, 'design', self.root / 'docs/gsp')}) | [计划]({self.document_link(state, 'plan', self.root / 'docs/gsp')}) | [交付]({link('delivery.md')}) |")
+        lines += ['', '最近最多 50 个已更新执行记录；历史使用 docs-search / docs-index。']
         atomic(self.root / 'docs/gsp/README.md', '\n'.join(lines) + '\n')
 
     def new(self, args):
         self.identity()
         active = self.meta / 'active.json'
         if active.exists():
-            other, _, _ = self.active_state()
-            if other['scope']['mode'] == 'frozen':
-                raise WorkflowError('OTHER_TASK_FROZEN explicitly release or continue the existing task before creating another')
+            active_id=read(active)['task']
+            orphan=(active_id==args.id and bool(getattr(args,'work',None)) and not (self.meta/'runs'/args.id/'state.json').exists())
+            if not orphan:
+                other, _, _ = self.active_state()
+                if other['scope']['mode'] == 'frozen':
+                    raise WorkflowError('OTHER_TASK_FROZEN explicitly release or continue the existing task before creating another')
         run, doc = self.paths(args.id)
-        if run.exists() or doc.exists():
+        resume_empty=bool(getattr(args,'work',None)) and run.exists() and not any(run.iterdir())
+        if (run.exists() and not resume_empty) or doc.exists():
             raise WorkflowError('TASK_EXISTS choose another task id')
         if args.mode == 'unattended' and not args.quote:
             raise WorkflowError('AUTHORIZATION_REQUIRED quote the actual user instruction for unattended mode')
         date = datetime.now().astimezone().date().isoformat()
         documents = {'design': f'docs/superpowers/specs/{date}-{args.id}-design.md',
                      'plan': f'docs/superpowers/plans/{date}-{args.id}.md'}
+        record=None
+        if not getattr(args,'legacy_layout',False):
+            from .documents import Governance
+            book=Governance(self.root)
+            if getattr(args,'work',None):
+                record=book.get(args.work)
+                if record.get('run_id') and record['run_id']!=args.id: raise WorkflowError('WORK_ALREADY_HAS_RUN')
+                if record['stage'] not in ('idea','design','paused'): raise WorkflowError('WORK_STAGE_INVALID')
+                record=book.stage(record['uuid'],'design','User requested execution workflow; approval still required')
+                record['run_id']=args.id;book._save(record)
+            else:
+                record=book.create(args.title,args.title,args.quote or 'user requested new task',run_id=args.id)
+                record=book.stage(record['uuid'],'design','Begin design discussion')
+            doc=self.root/record['folder']
+            documents={'design':record['documents']['design'],'plan':record['folder']+'/plan.md'}
         probe = {'id': args.id, 'documents': documents}
         for kind in documents:
             file = self.document(probe, kind)
-            if file.exists():
+            if file.exists() and not record:
                 raise WorkflowError('DOCUMENT_EXISTS refusing to overwrite ' + str(file))
-        run.mkdir(parents=True)
-        doc.mkdir(parents=True)
+        run.mkdir(parents=True,exist_ok=resume_empty)
+        doc.mkdir(parents=True,exist_ok=bool(record))
         state = {'schema': 1, 'id': args.id, 'title': args.title, 'root': str(self.root),
                  'project_id': self.identity()['id'], 'created': now(), 'status': 'design',
                  'mode': args.mode, 'mode_quote': args.quote, 'documents': documents, 'design_approval': None, 'plan_seal': None,
                  'scope': {'mode': 'pending'}, 'tasks': [], 'evidence': [], 'review': None,
                  'authorizations': [], 'git': git_identity(self.root)}
+        if record:
+            state.update({'doc_dir':record['folder'],'work_uuid':record['uuid']})
         templates = {
             'design.md': f'# {args.title} — 设计\n\n状态：草稿；填写目标、范围、方案、验收、非目标。用户确认前不实施。\n',
             'plan.md': f'# {args.title} — 实施计划\n\n规格：[design.md](design.md)\n\n计划尚未编写。具体任务应登记到运行状态，写清验收。\n',
@@ -356,11 +425,13 @@ class Project:
             'decisions.md': '# 决策记录\n\n每项写明选择、依据、代价、来源；用户原话与 AI 建议分别标记。\n',
         }
         for name, text in templates.items():
+            if record and name in ('plan.md','review.md','delivery.md','decisions.md'):
+                continue
             if name in ('design.md', 'plan.md'):
                 kind = name[:-3]
                 if kind == 'plan':
                     text = text.replace('(design.md)', '(' + self.document_link(state, 'design', self.document(state, 'plan').parent) + ')')
-                atomic(self.document(state, kind), text)
+                if not self.document(state,kind).exists(): atomic(self.document(state, kind), text)
             else:
                 atomic(doc / name, text)
         atomic(self.meta / 'active.json', {'task': args.id})
@@ -481,15 +552,15 @@ def run_check(project, state, run, args):
     return receipt, status == 'pass'
 
 
-def evidence_for(project, state, task_id):
+def evidence_for(project, state, task_id, current_fingerprint=None, current_contract=None):
     rows = [read(project.root / p) for p in state['evidence']]
     rows = [r for r in rows if r['task'] in (task_id, 'all')]
     if not rows:
         raise WorkflowError('EVIDENCE_MISSING ' + task_id)
     latest = rows[-1]
-    if latest['status'] != 'pass' or latest['fingerprint'] != fingerprint(project.root):
+    if latest['status'] != 'pass' or latest['fingerprint'] != (current_fingerprint or fingerprint(project.root)):
         raise WorkflowError('EVIDENCE_STALE_OR_FAILED ' + task_id)
-    if latest.get('contract') != contract_hash(project, state, project.paths(state['id'])[1]):
+    if latest.get('contract') != (current_contract or contract_hash(project, state, project.paths(state['id'])[1])):
         raise WorkflowError('EVIDENCE_CONTRACT_CHANGED ' + task_id)
     if latest.get('verification_epoch', 0) != state.get('verification_epoch', 0):
         raise WorkflowError('EVIDENCE_BEFORE_RECOVERY ' + task_id)
@@ -594,6 +665,8 @@ def parser():
     sub = p.add_subparsers(dest='command', required=True)
     sub.add_parser('init')
     n = sub.add_parser('new'); n.add_argument('id'); n.add_argument('--title', required=True); n.add_argument('--mode', choices=['interactive', 'unattended'], default='interactive'); n.add_argument('--quote')
+    n.add_argument('--legacy-layout',action='store_true',help='compatibility: separated spec/plan layout')
+    n.add_argument('--work',help='continue a saved idea by UUID or number')
     for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'run', 'scope', 'check-path', 'review', 'ready', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'observe-head', 'recover-run', 'documents-adopt'):
         q = sub.add_parser(name); q.add_argument('id')
         if name == 'documents-adopt':
@@ -617,10 +690,13 @@ def parser():
         elif name == 'observe-head': q.add_argument('--reason', required=True)
         elif name == 'recover-run': q.add_argument('--evidence', required=True); q.add_argument('--outcome', choices=['not-run', 'failed'], required=True)
     q = sub.add_parser('health'); q.add_argument('--host', choices=['claude', 'codex', 'both'], default='both')
+    q.add_argument('--documents',action='store_true',help='include document governance audit')
+    q.add_argument('--documents-only',action='store_true',help='read-only target; no installation checks')
+    q.add_argument('--report-dir',help='explicit report destination (default: target docs/gsp/reports/document-governance)')
     for name in ('install','upgrade','uninstall','install-recover'):
-        q = sub.add_parser(name)
+        q = sub.add_parser(name, description='Scopes: project = this project; user = global for the current user.')
         q.add_argument('--host', choices=['claude','codex','both'], required=True)
-        q.add_argument('--scope', choices=['project','user'], default='project' if name=='install' else 'user')
+        q.add_argument('--scope', choices=['project','user'], default='project' if name=='install' else 'user', help='project: target project skills; user: current user profile skills (install defaults to project)')
         q.add_argument('--profile', help='explicit user profile root; defaults to the selected host profile')
         q.add_argument('--optional', nargs='*', default=[])
         q.add_argument('--dry-run', action='store_true')
@@ -645,7 +721,21 @@ def parser():
     sub.add_parser('hook')
     from .driver import configure
     configure(sub)
+    from .documents import add_parsers
+    add_parsers(sub)
     return p
+
+
+def install_notice(scope, host, paths):
+    # Human guidance goes to stderr; stdout stays a machine-readable JSON result.
+    print('安装范围 / Installation scope:\n'
+          '  --scope project: 项目级，仅当前目标项目 / this project only.\n'
+          '  --scope user: 用户全局级，当前用户多个项目共用 / current user across projects.\n'
+          f'当前选择 / Selected: {scope}; host={host}\n' +
+          '\n'.join('  技能位置 / Skills: ' + str(path) for path in paths) + '\n'
+          '用户全局安装不会新建目标项目技能目录 / User install does not create target-project skill directories.\n'
+          '已有项目技能目录不会自动删除 / Existing project skill directories are not automatically removed.\n'
+          '规格、计划和证据仍保存于各目标项目 / Task documents and evidence stay in each project.', file=sys.stderr)
 
 
 def main(argv=None):
@@ -661,31 +751,53 @@ def main(argv=None):
             return 0
         if args.command == 'hook':
             print(json.dumps(hook(project.root), ensure_ascii=False)); return 0
+        if args.command in ('docs-move','docs-move-recover'):
+            from .document_migration import move,recover
+            if args.command=='docs-move' and not args.apply:
+                result=move(project.root,args.source,args.destination)
+            else:
+                with locked(project.root):
+                    result=recover(project.root) if args.command=='docs-move-recover' else move(project.root,args.source,args.destination,True)
+            print(json.dumps(result,ensure_ascii=False,indent=2));return 0
         if args.command == 'health':
-            result = health(project.root, args.host)
+            if args.report_dir and not (args.documents or args.documents_only): raise WorkflowError('DOCUMENT_AUDIT_REQUIRED --report-dir needs --documents')
+            result = health(project.root, args.host) if not args.documents_only else {'static_ok':True,'checks':[],'live_verified':False}
+            if args.documents or args.documents_only:
+                from .document_health import audit
+                report=audit(project.root,args.report_dir)
+                result['documents']={key:report[key] for key in ('report_markdown','report_json','inventory','integrity_ok','checks')}
+                result['documents']['delta_counts']={key:len(report['delta'][key]) for key in ('new','resolved','persisting')}
+                result['static_ok'] &= report['integrity_ok']
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0 if result['static_ok'] else 1
         if args.command in ('install','upgrade','uninstall','install-recover'):
             if args.scope == 'user':
                 from .user_install import UserInstall
                 manager = UserInstall(args.host, args.profile)
+                if args.command == 'install':
+                    install_notice('user', args.host, [manager.root / 'skills'])
                 result = manager.recover(args.dry_run) if args.command=='install-recover' else manager.apply(args.command,args.optional,args.dry_run)
                 print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
             if args.command != 'install' or args.profile or args.dry_run:
                 raise WorkflowError('USER_SCOPE_REQUIRED maintenance/dry-run/profile requires --scope user')
             from .install import install
+            targets = ['claude', 'codex'] if args.host == 'both' else [args.host]
+            install_notice('project', args.host, [project.root / ('.claude/skills' if host == 'claude' else '.agents/skills') for host in targets])
             result = install(project.root, args.host, args.optional)
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
         with locked(project.root):
             result, success = dispatch(project, args)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if success else 1
-    except (WorkflowError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+    except (WorkflowError, OSError, ValueError, sqlite3.Error, subprocess.TimeoutExpired) as exc:
         print(f'GSP_ERROR: {exc}', file=sys.stderr)
         return 1
 
 
 def dispatch(project, args):
     command = args.command
+    if command.startswith(('work-','module-')) or command in ('docs-search','docs-index','docs-recover'):
+        from .documents import handle
+        return handle(project,args),True
     if command == 'init':
         project.initialize(); return {'project': str(project.root)}, True
     if command == 'new':
@@ -771,10 +883,12 @@ def dispatch(project, args):
         invalidate_delivery(doc, '规格与计划正本已重新关联，需要重新批准、封存和验证。')
     elif command == 'approve':
         design = project.document(state, 'design').read_text(encoding='utf-8')
-        if len(design.strip()) < 15 or '状态：草稿；填写目标' in design:
+        if len(design.strip()) < 15 or '状态：草稿；填写目标' in design or 'Draft: discuss goals, constraints' in design:
             raise WorkflowError('DESIGN_EMPTY write the actual design first')
         state['design_approval'] = {'sha256': digest(project.document(state, 'design')), 'quote': args.quote, 'at': now(), 'source': 'caller-attributed-user'}
         state['status'] = 'plan'
+        if not project.document(state,'plan').exists():
+            atomic(project.document(state,'plan'),f'# {state["title"]} — 实施计划\n\n规格：[spec]({project.document_link(state,"design",project.document(state,"plan").parent)})\n\n计划尚未编写。\n')
     elif command == 'task-add':
         slug(args.task)
         if args.task == 'all': raise WorkflowError('RESERVED_TASK_ID all is the final regression lane')
@@ -865,16 +979,16 @@ def dispatch(project, args):
             raise WorkflowError('BACKLOG_BLOCKING unresolved required work: ' + ', '.join(blockers))
         if state.get('inflight'): raise WorkflowError('EXECUTION_UNKNOWN')
         if not state['tasks'] or any(t['status'] != 'done' for t in state['tasks']): raise WorkflowError('TASKS_INCOMPLETE')
-        final = [read(project.root / p) for p in state['evidence'] if read(project.root / p)['task'] == 'all']
-        if not final or final[-1]['status'] != 'pass' or final[-1]['fingerprint'] != fingerprint(project.root) or final[-1].get('contract') != contract_hash(project, state, doc) or final[-1].get('verification_epoch', 0) != state.get('verification_epoch', 0):
+        fp=fingerprint(project.root);contract=contract_hash(project,state,doc)
+        final = [r for r in (read(project.root / p) for p in state['evidence']) if r['task'] == 'all']
+        if not final or final[-1]['status'] != 'pass' or final[-1]['fingerprint'] != fp or final[-1].get('contract') != contract or final[-1].get('verification_epoch', 0) != state.get('verification_epoch', 0):
             raise WorkflowError('FINAL_REGRESSION_REQUIRED run the final whole-project checks with --task all')
-        for task in state['tasks']: evidence_for(project, state, task['id'])
+        checks=[evidence_for(project,state,task['id'],fp,contract) for task in state['tasks']]
         review = state['review']
-        if not review or review['blocking'] or review['fingerprint'] != fingerprint(project.root) or review['sha256'] != digest(doc / 'review.md') or review.get('contract') != contract_hash(project, state, doc):
+        if not review or review['blocking'] or review['fingerprint'] != fp or review['sha256'] != digest(doc / 'review.md') or review.get('contract') != contract:
             raise WorkflowError('REVIEW_MISSING_STALE_OR_BLOCKING')
         state['status'] = 'ready'
-        state['delivery_fingerprint'] = fingerprint(project.root)
-        checks = [evidence_for(project, state, t['id']) for t in state['tasks']]
+        state['delivery_fingerprint'] = fp
         text = f'# {state["title"]} — 交付准备\n\nREADY：本地交付检查通过。外部发布动作由用户授权另行执行。\n\n'
         text += f'- 项目：`{project.root}`\n- 审查：{review["reviewer"]}（self 不等于独立审查）\n- 任务：{len(state["tasks"])} 个完成\n'
         text += '- 未覆盖：浏览器、线上服务、独立审查和多宿主的实际覆盖以 [review.md](review.md) 和日志为准。\n\n'
@@ -884,6 +998,7 @@ def dispatch(project, args):
             link = os.path.relpath(receipt, doc).replace('\\', '/')
             text += f'| {task["id"]} | {row["kind"]}: {row["status"]} (lane: {row["task"]}) | {row["tests_ran"]} | [receipt]({link}) |\n'
         text += f"\n自主决定：[decisions.md](decisions.md)。规格：[design]({project.document_link(state, 'design', doc)})。计划：[plan]({project.document_link(state, 'plan', doc)})。\n"
+        if not (doc/'decisions.md').exists(): atomic(doc/'decisions.md','# 决策记录\n\n本任务无额外决定记录。\n')
         backlog_link = os.path.relpath(backlog['file'], doc).replace('\\', '/')
         text += f'\n项目待办：[{Path(backlog["file"]).name}]({backlog_link})；结构化未完成 {backlog["open"]} 项。\n'
         for item in backlog['items']:
@@ -930,7 +1045,7 @@ def dispatch(project, args):
         invalidate_delivery(doc, '未知或失败执行已调查，旧证据不能用于新的交付。')
     elif command == 'save':
         checkpoint = {'schema': 1, 'at': now(), 'project_id': state['project_id'], 'root': str(project.root), 'git': git_identity(project.root),
-                      'fingerprint': fingerprint(project.root), 'design': digest(project.document(state, 'design')), 'plan': digest(project.document(state, 'plan'))}
+                      'fingerprint': fingerprint(project.root), 'design': digest(project.document(state, 'design')), 'plan': digest(project.document(state, 'plan')) if project.document(state,'plan').exists() else None}
         atomic(run / 'checkpoint.json', checkpoint)
     elif command == 'resume':
         if state.get('inflight'): raise WorkflowError('EXECUTION_UNKNOWN inspect the recorded argv and evidence folder; do not redispatch blindly')
@@ -938,7 +1053,7 @@ def dispatch(project, args):
         if check:
             if check['git'] != git_identity(project.root) or check['fingerprint'] != fingerprint(project.root):
                 raise WorkflowError('RESTORE_DIVERGED inspect changed files, branch or HEAD; saved state is not permission to overwrite')
-            if check['design'] != digest(project.document(state, 'design')) or check['plan'] != digest(project.document(state, 'plan')):
+            if check['design'] != digest(project.document(state, 'design')) or check['plan'] != (digest(project.document(state, 'plan')) if project.document(state,'plan').exists() else None):
                 raise WorkflowError('RESTORE_PLAN_CHANGED')
         elif state['git'].get('head') != git_identity(project.root).get('head'):
             raise WorkflowError('HEAD_CHANGED inspect before continuation')

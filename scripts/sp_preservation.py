@@ -47,6 +47,11 @@ def integration(name):
         'names using the contract; never load a second SP installation. Relative prompts/scripts '
         'are based on the corresponding ORIGINAL.md directory. Resource links below are redirected '
         'to the complete preserved files. Missing host capabilities must be reported honestly.\n\n')
+    shared += ('Artifact layout is adapted, not the method: use the paths returned by GSP status/resume. '
+               'New tasks live in docs/work/<year>/<stable-folder>/ (spec.md, plan.md and stage artifacts); '
+               'existing bindings stay authoritative. Read [document governance](../gsp-workflow/references/document-governance.md) '
+               'for saved ideas, module relations, discovery, health reports and controlled migration. '
+               'Do not create a second spec or plan at the upstream default path.\n\n')
     if EXTRA.get(name):
         shared += 'Read these complete originals and their dependencies before using the corresponding mode:\n\n'
         for item in EXTRA[name]:
@@ -67,7 +72,7 @@ def build(root):
         file=root/'skills'/('gsp-'+name)/'SKILL.md'
         text=file.read_text(encoding='utf-8')
         front='---'+text.split('---',2)[1]+'---\n\n'
-        file.write_text(front+integration(name)+BEGIN+'\n'+preserved(root,original)+'\n'+END+'\n',encoding='utf-8')
+        file.write_text(front+integration(name)+BEGIN+'\n'+preserved(root,original)+'\n'+END+'\n',encoding='utf-8',newline='\n')
     file=root/'skills/gsp-workflow/SKILL.md'
     text=file.read_text(encoding='utf-8').split('\n'+BEGIN)[0].rstrip()
     # Router is hand maintained. Its original SP foundation remains fully available.

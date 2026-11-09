@@ -1,4 +1,4 @@
 interface:
   display_name: "GstackSP health"
-  short_description: "GstackSP 项目工作流：当前工作流安装、依赖、技能发现或跨宿主能力需要检查时"
+  short_description: "GstackSP 项目工作流：当前工作流安装、依赖、技能发现、项目文档结构或跨宿主能力需要检查时"
   default_prompt: "Use $gsp-health for the relevant part of this project task."

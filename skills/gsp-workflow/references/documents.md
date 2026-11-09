@@ -1,5 +1,7 @@
 # 规格与计划治理
 
+> 0.7 文档治理更新：新任务默认固定档案 docs/work/<年份>/<编号-初始标题>/spec.md、plan.md，其他文档按阶段产生；旧布局继续绑定兼容。下文的 docs/superpowers 与 docs/gsp/tasks 路径为旧布局说明，实际以 status/resume 返回路径为准。documents-adopt 现允许项目 docs 内已有 Markdown。完整新规则见 [文档治理](document-governance.md)。
+
 新任务先 init，再 new <id> --title <标题>；ID 由调用者明确选择，不自动编号，已存在就拒绝。日期是创建时本机日期，仅创建时计算，不随跨天工作变化。status 的 documents 和 resume 的 read_next 是定位依据。
 
 - docs/superpowers/specs/YYYY-MM-DD-<id>-design.md：brainstorming 形成的设计规格唯一正本。

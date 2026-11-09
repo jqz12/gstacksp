@@ -1,3 +1,4 @@
+from process_helpers import docfolder
 from process_helpers import document
 """Backlog lifecycle behavior; isolated projects, real verification subprocesses."""
 from contextlib import redirect_stdout, redirect_stderr
@@ -42,7 +43,7 @@ class TodoTests(unittest.TestCase):
 
     def work(self):
         self.cli('new', 'work', '--title', 'Fixture implementation')
-        doc = self.root / 'docs/gsp/tasks/work'
+        doc = docfolder(self.root,'work')
         document(self.root, 'work', 'design').write_text('# Design\nHandle the configuration path with a meaningful result.\n', encoding='utf-8')
         self.cli('approve', 'work', '--quote', 'SYNTHETIC TEST fixture approval')
         self.cli('task-add', 'work', 'T1', '--title', 'Configuration', '--acceptance', 'Missing configuration handled')

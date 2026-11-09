@@ -24,3 +24,11 @@ def document(root, task, kind):
     root=Path(root)
     state=json.loads((root/'.gsp/runs'/task/'state.json').read_text(encoding='utf-8'))
     return root/state['documents'][kind] if 'documents' in state else root/'docs/gsp/tasks'/task/(kind+'.md')
+
+
+def docfolder(root, task):
+    from pathlib import Path
+    import json
+    root=Path(root)
+    state=json.loads((root/'.gsp/runs'/task/'state.json').read_text(encoding='utf-8'))
+    return root/state.get('doc_dir','docs/gsp/tasks/'+task)

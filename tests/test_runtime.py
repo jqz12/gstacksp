@@ -1,3 +1,4 @@
+from process_helpers import docfolder
 from process_helpers import document
 import importlib.util
 import json
@@ -88,7 +89,7 @@ class WorkflowTests(unittest.TestCase):
     def task(self):
         self.cli('init')
         self.cli('new', 'login', '--title', 'Login')
-        folder = self.project / 'docs/gsp/tasks/login'
+        folder = docfolder(self.project,'login')
         document(self.project, 'login', 'design').write_text('# Design\nLogin returns a session.\n', encoding='utf-8')
         self.cli('approve', 'login', '--quote', 'I approve this design')
         self.cli('task-add', 'login', 'T1', '--title', 'Implement login', '--acceptance', 'Unit tests pass')
@@ -277,7 +278,7 @@ class WorkflowTests(unittest.TestCase):
                  "print('Ran 1 test')", ok=False)
         self.cli('recover-run', 'login', '--evidence', 'missing.md', '--outcome', 'failed', ok=False)
         (folder / 'recovery.md').write_text('Fixture investigation: process stopped; no result available.', encoding='utf-8')
-        self.cli('recover-run', 'login', '--evidence', 'docs/gsp/tasks/login/recovery.md', '--outcome', 'failed')
+        self.cli('recover-run', 'login', '--evidence', str((folder/'recovery.md').relative_to(self.project)), '--outcome', 'failed')
         self.passing()
 
     def test_head_change_cannot_be_absorbed_by_decision(self):
@@ -307,7 +308,7 @@ class WorkflowTests(unittest.TestCase):
         state['inflight'] = {'id': 'new-unknown-all', 'task': 'all', 'argv': ['test']}
         file.write_text(json.dumps(state), encoding='utf-8')
         (folder / 'recovery.md').write_text('Fixture process failed, no new passing result.', encoding='utf-8')
-        self.cli('recover-run', 'login', '--evidence', 'docs/gsp/tasks/login/recovery.md', '--outcome', 'failed')
+        self.cli('recover-run', 'login', '--evidence', str((folder/'recovery.md').relative_to(self.project)), '--outcome', 'failed')
         self.cli('ready', 'login', ok=False)
 
     def test_ready_task_freeze_still_requires_release(self):
@@ -412,6 +413,7 @@ class WorkflowTests(unittest.TestCase):
         state = json.loads(self.cli('status', 'login').stdout)
         self.assertNotEqual(state['status'], 'ready')
         self.assertNotIn('\n\nREADY：', (folder / 'delivery.md').read_text(encoding='utf-8'))
+        self.assertNotEqual(json.loads((folder/'record.json').read_text(encoding='utf-8'))['stage'],'ready')
         archived = list(folder.glob('delivery-history-*.md'))
         self.assertTrue(archived)
         self.assertEqual(archived[0].read_text(encoding='utf-8'), original)
@@ -425,6 +427,8 @@ class WorkflowTests(unittest.TestCase):
         state = json.loads(self.cli('status', 'login').stdout)
         self.assertNotEqual(state['status'], 'ready')
         self.assertNotIn('\n\nREADY：', (folder / 'delivery.md').read_text(encoding='utf-8'))
+        self.assertNotEqual(json.loads((folder/'record.json').read_text(encoding='utf-8'))['stage'],'ready')
+        self.assertIn('needs-verification',(self.project/'docs/gsp/README.md').read_text(encoding='utf-8'))
 
     def test_blocking_review_revokes_human_ready_report(self):
         folder = self.completed()

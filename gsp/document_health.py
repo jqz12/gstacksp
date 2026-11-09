@@ -1,0 +1,181 @@
+"""Read-only document audit. Reports are evidence, never automatic cleanup."""
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+from urllib.parse import unquote
+import uuid
+
+from .runtime import WorkflowError, atomic, digest, git_identity, inside, now, read, redact, sha
+
+RULE_VERSION=1
+SKIP={'.git','.gsp','.gstack','.claude','.agents','node_modules','.venv','venv','target','dist','build','__pycache__'}
+ROLES={'product':'current','reference':'reference','howto':'operation','work':'task','research':'research',
+       'archive':'historical','ops':'verification','gsp':'workflow','specs':'legacy-spec','reviews':'legacy-review','designs':'legacy-design','reverse':'research'}
+
+
+def markdown_links(text):
+    """Conservative inline link parser; reference/HTML/anchor validation excluded."""
+    visible=[];fence=None
+    for line in text.splitlines():
+        m=re.match(r'^\s*(`{3,}|~{3,})',line)
+        if m:
+            if fence is None: fence=m.group(1)[0]
+            elif m.group(1)[0]==fence: fence=None
+            continue
+        if fence is None: visible.append(line)
+    clean=re.sub(r'`[^`\n]+`','', '\n'.join(visible))
+    return re.findall(r'!?\[[^\]\n]*\]\((<[^>]+>|[^\s)]+)(?:\s+"[^"]*")?\)',clean)
+
+
+def audit(root, report_dir=None, max_files=100000, max_bytes=2_000_000):
+    root=Path(root).resolve()
+    if not root.is_dir(): raise WorkflowError('PROJECT_MISSING')
+    reports=Path(report_dir).resolve() if report_dir else root/'docs/gsp/reports/document-governance'
+    if reports==root or inside(reports,root): raise WorkflowError('REPORT_DIRECTORY_OVERLAPS_PROJECT')
+    if max_files<1 or max_bytes<1: raise WorkflowError('AUDIT_LIMIT_INVALID')
+    findings=[]; inventory=[];contents={};hashes=defaultdict(list);referenced=set();records=[]
+    def finding(rule,path,detail,severity='WARN',confidence='confirmed',related=None):
+        key=rule+'|'+path+'|'+('|'.join(sorted(related or [])))
+        findings.append({'id':'DOC-'+sha(key.encode())[:14],'rule':rule,'path':path,'detail':redact(detail),
+                         'severity':severity,'confidence':confidence,'related':related or [],'action':'review'})
+    def read_doc(p):
+        rel=p.relative_to(root).as_posix()
+        if p.is_symlink() or not inside(root,p):
+            finding('symlink-skipped',rel,'Symbolic link or escape: content not read',confidence='not-checked');return
+        try:
+            if p.stat().st_size>max_bytes:
+                finding('large-document-skipped',rel,'Exceeds per-file content limit',confidence='not-checked');return
+            data=p.read_bytes();text=data.decode('utf-8-sig')
+        except (OSError,UnicodeError) as exc:
+            finding('unreadable-document',rel,type(exc).__name__,severity='ERROR');return
+        parts=p.relative_to(root).parts
+        role=ROLES.get(parts[1],'unclassified') if len(parts)>2 and parts[0]=='docs' else 'entry'
+        if len(parts)>2 and parts[0]=='docs' and parts[1].startswith(('reference-','howto-','explanation-')): role='reference'
+        if len(parts)==2 and parts[0]=='docs':
+            role='reference' if p.name.startswith(('reference-','howto-','explanation-','tutorial-')) else 'unclassified'
+        inventory.append({'path':rel,'bytes':len(data),'sha256':sha(data),'role':role})
+        contents[rel]=text;hashes[sha(data)].append(rel)
+        if role=='unclassified': finding('classification-review',rel,'Register document role or plan controlled migration',confidence='candidate')
+    candidates=list(root.glob('*.md'))
+    docs_root=root/'docs'
+    if docs_root.is_symlink() or not inside(root,docs_root):
+        finding('symlink-skipped','docs','Document root is a link; not scanned',severity='ERROR',confidence='not-checked')
+        walk=[]
+    else:walk=os.walk(docs_root,followlinks=False)
+    for folder,dirs,files in walk:
+        dirs[:]=[d for d in dirs if d not in SKIP and not (Path(folder)/d).is_symlink() and not inside(reports,Path(folder)/d)]
+        for name in files:
+            p=Path(folder)/name
+            if inside(reports,p): continue
+            if p.suffix.lower()=='.md': candidates.append(p)
+            elif (name=='record.json' and p.relative_to(root).as_posix().startswith('docs/work/')) or (p.parent.as_posix().endswith('product/modules') and p.suffix=='.json'):
+                records.append(p)
+        if len(candidates)+len(records)>max_files: break
+    if len(candidates)+len(records)>max_files:
+        finding('scan-truncated','docs','File limit reached: inventory is incomplete',severity='ERROR',confidence='not-checked')
+    for p in sorted(candidates)[:max_files]: read_doc(p)
+    for group in hashes.values():
+        group.sort()
+        if len(group)>1: finding('duplicate-content',group[0],'Identical bytes; preserve source meaning before deciding cleanup',confidence='candidate',related=group[1:])
+    for rel,text in contents.items():
+        for raw in markdown_links(text):
+            link=unquote(raw.strip('<>'))
+            if not link or link.startswith(('#','http:','https:','mailto:','data:','plugin:','app:')): continue
+            path=link.split('#',1)[0].split('?',1)[0]
+            if not path: continue
+            target=(root/rel).parent/path
+            if not inside(root,target):
+                finding('external-local-link',rel,'Local reference leaves project; not followed',confidence='not-checked',related=[redact(path)]);continue
+            target_rel=target.resolve().relative_to(root).as_posix();referenced.add(target_rel)
+            if not target.exists(): finding('broken-link',rel,'Local target does not exist',related=[target_rel])
+    ids={};numbers=defaultdict(list)
+    for p in records[:max_files]:
+        rel=p.relative_to(root).as_posix()
+        try:
+            if p.is_symlink() or not inside(root,p) or p.stat().st_size>max_bytes: raise ValueError('unsafe/oversized metadata')
+            r=json.loads(p.read_text(encoding='utf-8-sig'))
+            if r.get('kind') not in ('work','module') or not re.fullmatch('[a-f0-9]{32}',r.get('uuid','')): raise ValueError('invalid identity/kind')
+            if r['uuid'] in ids: finding('duplicate-identity',rel,'UUID conflict',severity='ERROR',related=[ids[r['uuid']]])
+            ids[r['uuid']]=rel
+            if r.get('number'): numbers[r['number']].append(rel)
+            for kind,doc in r.get('documents',{}).items():
+                target=root/doc
+                referenced.add(doc)
+                if not inside(root,target) or not target.is_file(): finding('invalid-binding',rel,'Missing/unsafe '+kind+' document',severity='ERROR',related=[doc])
+        except (OSError,ValueError,TypeError,AttributeError) as exc:
+            finding('invalid-record',rel,type(exc).__name__+': '+str(exc),severity='ERROR')
+    for number,paths in numbers.items():
+        if len(paths)>1: finding('ambiguous-number',paths[0],number+' requires UUID disambiguation',severity='ERROR',related=paths[1:])
+    # Legacy runtime bindings are checked without calling state(), which could
+    # invalidate delivery and write into the supposedly read-only target.
+    from .runtime import Project
+    project=Project(root)
+    states=[]
+    if inside(root,root/'.gsp/runs'):
+        states=list((root/'.gsp/runs').glob('*/state.json'))
+    for p in states[:max_files]:
+        rel=p.relative_to(root).as_posix()
+        try:
+            if p.is_symlink() or not inside(root,p) or p.stat().st_size>max_bytes: raise ValueError('unsafe/oversized state')
+            s=read(p)
+            for kind in ('design','plan'):
+                doc=project.document(s,kind);docrel=doc.relative_to(root).as_posix();referenced.add(docrel)
+                if not doc.exists():
+                    if kind=='plan' and s.get('status')=='design': continue
+                    finding('invalid-binding',rel,'Runtime document missing',severity='ERROR',related=[docrel]);continue
+                binding=s.get('design_approval' if kind=='design' else 'plan_seal')
+                if binding and binding['sha256']!=digest(doc): finding('stale-approval' if kind=='design' else 'stale-plan',rel,'Document differs from bound version',severity='ERROR',related=[docrel])
+        except (WorkflowError,OSError,ValueError,KeyError,TypeError) as exc:
+            finding('invalid-runtime-state',rel,type(exc).__name__+': '+str(exc),severity='ERROR')
+    for item in inventory:
+        if item['path'].startswith('docs/') and item['path'] not in referenced:
+            finding('unlinked-document',item['path'],'No incoming inline link/binding in scanned scope; may still be a valid entry',confidence='candidate')
+    ident=git_identity(root)
+    tracked=None;status=None
+    try:
+        flags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0
+        r=subprocess.run(['git','ls-files','-z'],cwd=root,capture_output=True,timeout=20,creationflags=flags)
+        if r.returncode==0:
+            paths=set(r.stdout.decode('utf-8').split('\0'));tracked=sum(i['path'] in paths for i in inventory)
+            for item in inventory:
+                if item['path'] not in paths: finding('untracked-document',item['path'],'Not tracked in this checkout; backup/commit policy needs review',confidence='candidate')
+            r=subprocess.run(['git','status','--porcelain','-z','--untracked-files=no'],cwd=root,capture_output=True,timeout=20,creationflags=flags)
+            status={'available':r.returncode==0,'tracked_dirty':bool(r.stdout),'raw_paths_stored':False}
+    except (OSError,UnicodeError,subprocess.TimeoutExpired): pass
+    stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')+'-'+uuid.uuid4().hex
+    folder=reports/stamp
+    previous=None
+    if (reports/'latest.json').is_file():
+        try:
+            pointer=read(reports/'latest.json');prior=reports/pointer['run']/'report.json'
+            if inside(reports,prior): previous=read(prior)
+        except (WorkflowError,KeyError): pass
+    old={f['id'] for f in previous.get('findings',[])} if previous and previous.get('project')==str(root) else set()
+    current={f['id'] for f in findings}
+    report={'schema':1,'rule_version':RULE_VERSION,'run':stamp,'at':now(),'project':str(root),'git':ident,'working_tree':status,
+            'method':'deterministic read-only scan; not an AI semantic review',
+            'inventory':{'markdown_files':len(inventory),'tracked_markdown':tracked,'records':len(records),'run_states':len(states),'roles':dict(Counter(i['role'] for i in inventory))},
+            'limits':{'files':max_files,'per_file_bytes':max_bytes},'exclusions':sorted(SKIP)+[str(reports)],
+            'checks':{'structure':'CHECKED','inline-local-links':'CHECKED','byte-duplicates':'CHECKED','bindings':'CHECKED',
+                      'semantic-correctness':'NOT_CHECKED','code-conformance':'NOT_CHECKED','reference-links-html-anchors':'NOT_CHECKED','live-hosts':'NOT_CHECKED'},
+            'findings':findings,'files':inventory,'integrity_ok':not any(f['severity']=='ERROR' for f in findings),
+            'delta':{'previous_run':previous.get('run') if previous else None,'new':sorted(current-old),'resolved':sorted(old-current),'persisting':sorted(current&old)},
+            'report_markdown':str(folder/'report.md'),'report_json':str(folder/'report.json')}
+    # Unique mkdir reserves this run; never overwrite earlier evidence.
+    folder.mkdir(parents=True,exist_ok=False)
+    atomic(folder/'report.json',report)
+    lines=['# 项目文档治理检查报告','',f'项目：`{root}`',f'检查：{stamp}；规则版本：{RULE_VERSION}',
+           '', '只读程序检查；未自动修复、移动或删除文档。语义正确性与代码符合性未检查。',
+           '', '## 盘点', '', '```json',json.dumps(report['inventory'],ensure_ascii=False,indent=2),'```','',
+           '## 发现', '', '| ID | 级别 / 可信度 | 规则 | 位置 | 说明 |','|---|---|---|---|---|']
+    clean=lambda s:str(s).replace('|','\\|').replace('\n',' ')
+    for f in findings:
+        lines.append('| '+' | '.join(map(clean,[f['id'],f['severity']+' / '+f['confidence'],f['rule'],f['path'],f['detail']+' '+', '.join(f['related'])]))+' |')
+    lines+=['','## 差异与边界','',f'新增 {len(current-old)}；本次未再发现 {len(old-current)}；持续 {len(current&old)}。未再发现不等于已人工确认修复，范围变化也会影响差异。',
+            '', '检查范围、排除项、文件哈希和未检查项见同目录 report.json。疑似冗余、孤立、未追踪均不等于可以删除。']
+    atomic(folder/'report.md','\n'.join(lines)+'\n');atomic(reports/'latest.json',{'run':stamp,'project':str(root)})
+    return report

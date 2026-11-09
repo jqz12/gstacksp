@@ -1,3 +1,4 @@
+from process_helpers import docfolder
 from process_helpers import document
 """Real unittest subprocesses in isolated fixture projects, no paid/live services."""
 from pathlib import Path
@@ -39,7 +40,7 @@ class EndToEndTests(unittest.TestCase):
             call('init')
             self.assertIn('.gsp/', (project / '.gitignore').read_text(encoding='utf-8'))
             call('new', 'hello', '--title', 'Fixture greeting', '--mode', 'unattended', '--quote', 'SYNTHETIC TEST ONLY: use recommendations')
-            docs = project / 'docs/gsp/tasks/hello'
+            docs = docfolder(project,'hello')
             document(project, 'hello', 'design').write_text('# Fixture design\nNormalize whitespace and greet a name.\n', encoding='utf-8')
             call('approve', 'hello', '--quote', 'SYNTHETIC TEST ONLY: approve this fixture design')
             call('task-add', 'hello', 'T1', '--title', 'Normalize', '--acceptance', 'Whitespace is trimmed')

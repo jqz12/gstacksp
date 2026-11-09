@@ -18,6 +18,15 @@ description: Use when starting a development task in a project using GstackSP, o
 用户明确要求后台无人值守时读 [持久驱动器](references/driver.md)：当前提供 Codex headless 适配器，设计确认和冻结选择后配置检查命令并启动；普通 unattended 标志本身不会创建后台进程。
 
 给用户看 `docs/gsp/README.md`、根待办和任务 `delivery.md`；运行状态是恢复记录，用户消息才是授权来源。技能不会自动创建代理或启动付费服务。
+## 安装请求的范围选择
+
+用户要求安装本工作流时，先说明两种方式：项目级（--scope project）复制到目标项目 .agents/skills/gsp-* 或 .claude/skills/gsp-*；用户全局级（--scope user）安装到当前用户的宿主 profile，多个项目共用，不新建目标项目技能目录。全局不代表系统所有账户，现有项目安装也不会自动删除。
+
+用户未选择且没有既有明确选择时，询问一次安装范围，并展示实际目标路径后执行；已有明确选择直接沿用，不重复问。Codex 与 Claude 分别选择宿主，全局安装分别执行，不因一个宿主的授权改另一个宿主。任务规格、计划、待办和证据始终各自在目标项目中。日常开发不因没有项目技能目录而要求重复安装；先检查已存在的用户级安装。
+
+## 文档治理
+
+文档位置与生命周期见 [治理契约](references/document-governance.md)。明确保存想法用 work-new；开始任务前 docs-search 检索相关模块与历史，已有想法用 new --work 接续。新任务按阶段生成 docs/work 下档案，不在原版默认目录重复创建。文档检查调用 gsp-health 的 --documents-only；旧项目统一布局先盘点、再预览迁移，不长期双写。
 <!-- sp-preserved-body:begin -->
 <SUBAGENT-STOP>
 If you were dispatched as a subagent to execute a specific task, ignore this skill.

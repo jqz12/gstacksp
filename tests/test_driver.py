@@ -1,3 +1,4 @@
+from process_helpers import docfolder
 from process_helpers import document
 """Durable controller behavior, real subprocess fixtures, no paid model calls."""
 from contextlib import redirect_stdout, redirect_stderr
@@ -25,7 +26,7 @@ class DriverTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.cli('init')
         self.cli('new', 'work', '--title', 'Fixture feature', '--mode', 'unattended', '--quote', 'SYNTHETIC TEST: run locally')
-        self.doc = self.root / 'docs/gsp/tasks/work'
+        self.doc = docfolder(self.root,'work')
         document(self.root, 'work', 'design').write_text('# Fixture design\nImplement add(a,b) and verify integer addition.\n', encoding='utf-8')
         self.cli('approve', 'work', '--quote', 'SYNTHETIC TEST: approve fixture')
         self.cli('scope', 'work', '--off', '--quote', 'SYNTHETIC TEST: fixture choice')

@@ -20,7 +20,11 @@
 
 早期《技能解析》《一阶段设计》、技能取舍讨论和父本源码研究统一放在 `research/`，入口为 `research/README.md`。它们是来源档案，不作为当前运行规范，不随安装包发布。
 
-## 安装到目标项目
+## 安装范围
+
+可以选择项目级（`--scope project`）或当前用户全局级（`--scope user`）。全局安装供多个项目共用，不新建目标项目技能目录；任务文档和证据仍保存在各项目。AI 协助安装时，范围未说明先询问一次。具体路径与命令见 [安装与使用](docs/安装与使用.md)。
+
+下面是项目级安装示例：
 
 需要 Python 3.10+，不需要 Bun、WSL、数据库或付费 API。
 
@@ -39,6 +43,8 @@ python E:\GstackSP\scripts\gsp.py --project E:\MyProject install --host both --o
 装好后在实际宿主调用 `gsp-workflow`，再调用 `gsp-health` 验证真实发现。Claude 通常为 `/gsp-workflow`，Codex 为 `$gsp-workflow`；实际列表由宿主决定，项目引导文件提供读取路径。脚本检查文件存在不等于真实会话已加载。
 
 ## 日常使用
+
+新任务采用 `docs/work/<年份>/<固定档案>/`，先保存想法用 `work-new`，文档按阶段生成。`health --documents-only` 检查结构并保存独立报告；旧项目先预览再整理。命令及边界见 [文档治理与健康检查](docs/文档治理与健康检查.md)。旧任务继续兼容，以 status/resume 返回路径为准。
 
 告诉 AI：“用 GstackSP 做这个需求，先讨论设计；确认后按推荐连续推进，准备交付。”
 
