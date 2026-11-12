@@ -19,4 +19,19 @@ worker 被杀、超时、控制文件变化、结果格式错误等均视为执�
 
 Windows 后台使用隐藏、独立进程组并请求脱离父 Job；系统拒绝则报 DETACH_UNAVAILABLE，不能声称后台独立成功。关闭创建者与终止 worker 是不同情况；电脑关机/睡眠、驱动器自身崩溃后不会自动开机重启。Codex 使用现有登录/配置，-a never、只读计划/审查、workspace-write 实施，不使用权限绕过。控制文件校验是事后检测，工作区不是完整 OS 沙箱，不能保证项目外或忽略目录完全受控。
 
-人读：`docs/gsp/tasks/<id>/driver-report.md`、delivery/review/decisions。AI 恢复：同目录 design/plan 及 `.gsp/runs/<id>/driver/state.json`、`gates/`、`attempts/<uuid>/`、`events.jsonl`。真实检查证据仍在 `.gsp/runs/<id>/evidence/`；日志只留本地，常见凭据模式脱敏不代表全面秘密扫描。
+人读：status/resume返回的任务档案内 `driver-report.md`、delivery/review/decisions。AI 恢复：实际绑定的 spec/design与plan 及 `.gsp/runs/<id>/driver/state.json`、`gates/`、`attempts/<uuid>/`、`events.jsonl`。真实检查证据仍在 `.gsp/runs/<id>/evidence/`；日志只留本地，常见凭据模式脱敏不代表全面秘密扫描。
+
+
+## 新后台计划的接纳（0.8.9）
+
+新后台计划由 worker 返回完整正文与匹配的任务列表。worker 做内容自查；主控负责登记任务、结构检查与封存，不要求只读 worker 执行 GSP 记账命令。
+
+主控在 accepted.json、正式计划与任务写入之前，生成含实际 Spec 链接的候选正文，按 UTF-8 1 MiB 上限和现有 check_plan 核对。失败保留原始 response.json，并写同 attempt 的 rejected.json（job、响应哈希、quality）；不写 accepted，不改变绑定计划、任务与 seal。job.plan_findings 将结构诊断交给下一次规划。
+
+结构缺项自动进入 plan 修复链：初次不计修复，重试派发前记入 fix_rounds.plan，复用 max_fix_rounds、总派发数与绝对截止时间，重启不清零。有效修复接纳后清除当前反馈与 pending_fix，保留历史次数，正常实施不继续计作计划修复。超过预算停止并报告原因；不能手改计数解除。
+
+实际写入后仍以 seal-plan --check-structure 核对绑定正文。已有任务不能自动清空重建；旧无开关 CLI、已有封存和历史任务保持兼容。结构结果始终 semantic_review=NOT_CHECKED，不证明迁移方案、接口含义或需求覆盖正确。
+
+格式不可信、状态改变、进程/文件写入中断仍属于未知执行，需要按 drive-recover 调查恢复。存在 accepted.json 或 rejected.json 的未完成接纳禁止直接重放；标记后持久状态写入失败也不能当成普通计划缺项重试。保留原始响应不等于其已被接纳。
+
+恢复会核验 pending attempt 的拒绝记录（job、响应哈希及实际结构诊断），恢复原有计划反馈与修复链，预算不清零；不匹配报 PLAN_REJECTION_MISMATCH，必须继续调查。若计划已封存而驱动状态写入中断，核对 seal 后才转 execute、清除临时计划修复标志，历史 fix_rounds 保留。

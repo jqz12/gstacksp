@@ -1,0 +1,50 @@
+import importlib.util
+from pathlib import Path
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class SkillHandoffGenerationTests(unittest.TestCase):
+    def test_primary_stages_route_to_artifact_checks(self):
+        for name in ('brainstorming', 'writing-plans', 'execute', 'review', 'verify', 'ship'):
+            with self.subTest(stage=name):
+                text = (ROOT/'skills'/('gsp-'+name)/'SKILL.md').read_text(encoding='utf-8')
+                self.assertIn('artifact-fidelity.md', text.split('<!-- sp-preserved-body:begin -->')[0])
+
+    def test_asset_governance_rules_reach_generated_skills(self):
+        governance = (ROOT/'skills/gsp-document-governance/SKILL.md').read_text(encoding='utf-8')
+        health = (ROOT/'skills/gsp-health/SKILL.md').read_text(encoding='utf-8')
+        self.assertIn('非Markdown', governance)
+        self.assertIn('保留规则', governance)
+        self.assertIn('asset_scan', health)
+        self.assertIn('动态生成路径', health)
+
+    def test_one_fixed_skill_report_format_for_stages_and_final(self):
+        contract = (ROOT/'skills/gsp-workflow/references/output-handoff.md').read_text(encoding='utf-8')
+        self.assertIn('## 本轮技能执行顺序', contract)
+        self.assertIn('| 顺序 | 实际执行的技能 | 本次动作 | 结果/产物/证据 |', contract)
+        self.assertIn('阶段总结与最终交付使用同一标题和四列', contract)
+        self.assertNotIn('格式按任务规模精简', contract)
+        self.assertNotIn('结果很小时可用一段话或短列表', contract)
+        ship = (ROOT/'skills/gsp-ship/SKILL.md').read_text(encoding='utf-8').split('<!-- sp-preserved-body:begin -->')[0]
+        self.assertIn('本轮技能执行顺序', ship)
+
+    def test_final_primary_skills_keep_lifecycle_adaptations(self):
+        spec = importlib.util.spec_from_file_location('skill_definitions', ROOT/'scripts/build_skills.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        names = ('brainstorming', 'writing-plans', 'execute', 'systematic-debugging', 'review', 'verify', 'ship')
+        for name in names:
+            with self.subTest(name=name):
+                text = (ROOT/'skills'/('gsp-'+name)/'SKILL.md').read_text(encoding='utf-8')
+                adaptation = text.split('<!-- sp-preserved-body:begin -->')[0]
+                self.assertIn(module.LIFECYCLE_NOTES[name], adaptation)
+
+    def test_every_final_skill_routes_to_shared_handoff_contract(self):
+        import json
+        catalog = json.loads((ROOT/'catalog.json').read_text(encoding='utf-8'))
+        for item in catalog['skills']:
+            with self.subTest(name=item['name']):
+                text = (ROOT/'skills'/item['name']/'SKILL.md').read_text(encoding='utf-8')
+                self.assertIn('output-handoff.md', text.split('<!-- sp-preserved-body:begin -->')[0])

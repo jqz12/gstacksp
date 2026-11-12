@@ -9,4 +9,8 @@ description: "Use when 已授权部署后需要在约定时间观察健康指标
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 先明确服务、版本、观察窗口、指标阈值和失败后的授权动作。使用已有监控或无副作用健康请求，记录时间与结果。观察结束给出结论和未覆盖；不能声称在会话结束后仍后台监控。回滚只在已明确授权范围执行，费用和线上负载均按真实约束。

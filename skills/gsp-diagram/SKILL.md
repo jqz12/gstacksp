@@ -9,4 +9,8 @@ description: "Use when 架构、状态或交互关系用图比文字更清楚时
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 读取真实设计/代码，选择合适的架构图、时序图或状态图，产出任务目录 diagram.mmd 或项目可编辑格式。检查每节点、接口和箭头能对应实际证据，未知标明。需要 SVG/PNG 时使用已安装渲染器并验证文件；无渲染器保留源码，不能声称已生成图片。

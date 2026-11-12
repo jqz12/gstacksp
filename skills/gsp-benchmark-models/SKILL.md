@@ -9,4 +9,8 @@ description: "Use when 用户需要比较多个模型在同一工作流任务上
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 复用 eval-plan 定义共同样本、计分、无技能对照、随机次序和预算。先验证评测脚本，再在授权额度内运行各模型；保留失败和未知费用，不能只挑成功样本。结果同时比较正确性、时间、费用和方差，说明样本局限，脚本不会自带模型密钥或替用户买额度。

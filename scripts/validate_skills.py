@@ -36,8 +36,9 @@ def validate():
         meta = metadata.read_text(encoding='utf-8')
         assert '$' + name in meta, metadata
         assert 'allow_implicit_invocation: false' not in meta, metadata
-    assert len(names) == 47
-    assert sum(s['pack'] == 'core' for s in catalog['skills']) == 20
+    assert len(names) == 50
+    assert 'gsp-document-governance' in names
+    assert sum(s['pack'] == 'core' for s in catalog['skills']) == 22
     assert len(catalog['excluded']) == 15
     for name in catalog['excluded']:
         assert 'gsp-' + name not in names, name
@@ -49,7 +50,7 @@ def validate():
         for link in re.findall(r'\]\(([^)]+)\)', file.read_text(encoding='utf-8')):
             if not link.startswith(('https://', 'http://', '#')):
                 assert (file.parent / link).is_file(), (file, link)
-    print(json.dumps({'skills': 47, 'core': 20, 'optional': 27, 'structural_checks': 'PASS', 'live_host': 'NOT_CHECKED'}))
+    print(json.dumps({'skills': 50, 'core': 22, 'optional': 28, 'structural_checks': 'PASS', 'live_host': 'NOT_CHECKED'}))
 
 
 if __name__ == '__main__':

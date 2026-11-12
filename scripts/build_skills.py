@@ -14,12 +14,21 @@ from gsp import __version__
 
 # name, pack, upstream sources, trigger, actual task-specific instructions
 DEFINITIONS = [
+('git','core',['GSP:git-lifecycle','SP:using-git-worktrees','SP:finishing-a-development-branch'],
+ 'Git health route 指向 Git 专业处理，或用户要求检查分支、归属、提交和分支收尾时',
+ '读取 Git health 的短 handoff，不加载完整报告。检查仓库、分支、HEAD、工作区归属和任务绑定；输出下一动作。新任务建议 feature/GSP-<编号>-<slug>、fix/...、docs/...、test/...、refactor/...、chore/...、research/...。提交使用 Conventional Commit，正文包含 GSP 编号。提交、推送、合并、删除分支必须分别取得精确授权；不自动 git add .、reset、clean 或拆分未知修改。完成提交后核对 diff、测试和 HEAD，再用 observe-head 登记。保留完整 SP worktree 与 finishing branch 原文，真实远程 Git 和宿主触发未验证时标记 NOT_CHECKED。'),
+('document-governance','optional',['GSP:document-governance'],
+ '新项目需要建立文档入口、老项目需要完整接入或整理，或本次改动需要维护相关文档正本时',
+ '先读 [文档治理执行规则](../gsp-workflow/references/document-governance-execution.md) 和 [共同治理契约](../gsp-workflow/references/document-governance.md)。核对用户原始目标，明确新项目、老项目完整治理或日常局部维护；区分仅检查与已授权整改，不把完整治理缩小为报告或迁移预览。修改前按执行规则选择独立任务、嵌套维护或只读路径；独立整改必须实际resume并建立当前任务验收，不能只沿用旧文件夹。复用现有 GSP 设计、计划、执行和验证，不另设重复批准。完整治理先用 health 获取发现，再逐项阅读、确认正本及归属，按授权受控处理，最后复查；日常仅核对受影响资料，必要时才全量 health。记录盘点、预览、迁移、验收的实际阶段；报告通过不等于治理完成。交付必须对应原始目标，并披露未完成、例外及证据。本技能是执行指导，不是 CLI 自动强制门禁。完整治理同时盘点根目录资料、非Markdown证据和本地工作产物，核对生成工具及输出位置、唯一正本、共享范围和保留规则；详情按共同治理契约的项目资料与工作产物章节执行。'),
 ('health','core',['GS:health','GS:gstack-doctor'],
  '当前工作流安装、依赖、技能发现、项目文档结构或跨宿主能力需要检查时',
- '运行 `<gsp> health --host claude|codex|both`。报告每一项 PASS、FAIL、NOT_CHECKED；先区分文件检查、CLI 存在和真实技能触发。让当前宿主实际调用本技能并指出加载的安装路径，作为单独的人工观察记录。浏览器、子代理、hook 需当前宿主实测，不从静态配置推断。缺失组件提供实际修复路径，未经执行不报告修复完成。将结果保存到任务 review.md 或单独的 docs/gsp/health.md；此技能不做代码质量打分。'),
+ '运行 `<gsp> health --host claude|codex|both`。报告每一项 PASS、FAIL、NOT_CHECKED；先区分文件检查、CLI 存在和真实技能触发。Git 检查同时产生短 route：status、findings、next_skill、blocking、user_decision_required、decision_kind、handoff、evidence；AI先读取 route 再决定是否进入 gsp-git，不要求用户阅读完整报告。clean 且无决策时继续 workflow/brainstorming；脏工作区、分支不匹配、detached HEAD、无仓库或未知状态交给 gsp-git。让当前宿主实际调用本技能并指出加载的安装路径，作为单独的人工观察记录。浏览器、子代理、hook 需当前宿主实测，不从静态配置推断。缺失组件提供实际修复路径，未经执行不报告修复完成。将结果保存到任务 review.md 或单独的 docs/gsp/health.md；此技能不做代码质量打分。'),
+('code-quality','core',['GSP:code-quality','GS:health','GS:test-audit','SP:verification-before-completion'],
+ '项目需要建立基线、检查本次改动质量或在交付前执行完整质量门禁时',
+ '按场景选择 `change`、`baseline` 或 `release`。先读取项目 `.gsp/quality.json`；只运行其中明确登记的 argv，不遍历 target/build/node_modules，不猜测命令，也不自动修复。质量栈至少可以声明 build/type、format/lint、test、security、maintainability 和 contract 检查；每项写明 id、kind、cwd、modes、required 和 timeout。运行 `<gsp> quality --mode change|baseline|release --task <任务ID>`，结果保存到 `.gsp/runs/<任务ID>/quality/<运行ID>/report.json`、`report.md`、`commands.jsonl` 和 `evidence/`。`FAIL` 是已启动的必需检查失败，`BLOCKED` 是必需检查无法启动，`NOT_CHECKED` 是没有声明式质量栈；工具特征推断出的命令只能列为候选。change 通过后交给 gsp-review，baseline 通过后回到 gsp-workflow 让用户决定基线，release 通过后交给 gsp-verify；失败回到 gsp-execute，先用 systematic-debugging 定位再修复。报告不得以单一分数替代证据，不把质量门禁冒称为真实宿主触发或业务验收。'),
 ('context-restore','core',['GS:context-restore'],
  '恢复中断任务、压缩后的上下文或将同一项目交给另一个宿主时',
- '从 `.gsp/active.json` 找任务，运行 `<gsp> resume <id>`。按输出读取 design.md、plan.md、decisions.md、review.md 和当前状态。核对已完成任务及证据，不重派。恢复拒绝时列出实际目录、Git 状态和文件差异，判断是正常变更还是错误项目；不得为了继续而修改 UUID 或删除检查点。需要迁移时先完整核实并记录迁移决定。输出当前阶段、下一任务和仍有效的授权。'),
+ '从 `.gsp/active.json` 找任务，运行 `<gsp> resume <id>`。按输出读取实际绑定的 spec/design、plan、decisions、review 和当前状态，不猜旧路径。核对已完成任务及证据，不重派。恢复拒绝时列出实际目录、Git 状态和文件差异，判断是正常变更还是错误项目；不得为了继续而修改 UUID 或删除检查点。需要迁移时先完整核实并记录迁移决定。输出当前阶段、下一任务和仍有效的授权。'),
 ('freeze','core',['GS:freeze','GS:unfreeze'],
  '本次任务需要选择、设置、查看或解除允许修改的目录范围时',
  '首次实现前若用户未说明，询问一次“是否冻结本次任务的修改目录”，给出推荐路径；已有选择直接执行。无人值守按实际授权采用推荐并记录理由。设置用 `<gsp> scope <id> --path <已有目录> --quote "来源和选择"`，不冻结或解除用 `--off`。每次文件修改前用 `<gsp> check-path <id> <路径>`；查看 status 确认边界。需要扩大范围时遵循原授权，普通推荐选择可由无人值守处理。只宣称实际覆盖的工具；PowerShell/Bash 不受自动沙箱保护。受控命令越界后保留现场，不自动删除用户文件。'),
@@ -61,7 +70,7 @@ DEFINITIONS = [
  '查项目实际声明的检查命令，完整运行并读输出。每个任务应有有效证据；最终代码变化后，运行 `<gsp> run <id> --task all --kind tests -- <完整回归 argv>`，若全是非测试变更则有任务级理由后使用 check。测试启动失败、零测试、未知测试数、失败输出或范围越界不算绿。检查所有验收是否覆盖，静态交付物与运行行为分开。缺失浏览器/远程平台不能自动记通过。完成审查后 ready；只有脚本和人工证据共同支持的范围才能报告完成。'),
 ('ship','core',['GS:ship','SP:finishing-a-development-branch','GS:document-release'],
  '实现和审查结束，需要准备交付或执行已授权的发布分支操作时',
- '先核对任务、最终回归和整体审查。只按实际变更更新必要 README、接口或版本说明；不默认加 VERSION/CHANGELOG。运行 `<gsp> ready <id>`，给用户 docs/gsp/tasks/<id>/delivery.md，补充实际变化、运行方式、未覆盖与自主取舍。默认到本地交付准备。对真实已有的推送、PR、合并、删除分支、发布授权，用 authorize/authority 记录并核对精确范围后执行宿主实际命令，不重复询问；未授权则保留可审查结果。每次实际外部动作验证结果后记到交付文档，失败如实记录。'),
+ '先核对任务、最终回归和整体审查。只按实际变更更新必要 README、接口或版本说明；不默认加 VERSION/CHANGELOG。运行 `<gsp> ready <id>`，给用户 status/resume 返回的任务档案内 delivery.md，补充实际变化、运行方式、未覆盖与自主取舍。默认到本地交付准备。对真实已有的推送、PR、合并、删除分支、发布授权，用 authorize/authority 记录并核对精确范围后执行宿主实际命令，不重复询问；未授权则保留可审查结果。每次实际外部动作验证结果后记到交付文档，失败如实记录。'),
 ('learn','core',['GS:learn'],
  '需要保存、检索或修正本项目已验证的可复用经验时',
  '先判断是否可复用并有证据；一次性进度写任务记录，用户偏好写 plan-tune。先用 `<gsp> learn --query "关键词"` 查询有效项；保存用 `learn --text "结论及条件" --source "证据位置"`，相同规范化原文合并来源。纠错用 `--supersedes <旧ID> --text "新结论" --reason "原因" --source "新证据"`，失效用 `--invalidate <ID> --reason "原因" --source "证据"`；追溯用 `--history`。旧记录及事件保留，不直接改 JSONL、不自动复活无效项、不猜测语义相似就合并。详见 [经验事件规则](../gsp-workflow/references/learnings.md)。经验不授权动作，不自动跨项目合并或外发到 gbrain；不要保存凭据和完整敏感会话。'),
@@ -141,7 +150,7 @@ LIFECYCLE_NOTES = {
     'context-save': '保存前核对根 TODOS.md，未解决问题必须有来源和下一步。任务进度、长期待办和已验证经验分别保存；不把尚未解决事项当作经验结论。',
     'context-restore': 'resume 返回根待办路径及当前事项；读取原文和人工历史内容，不只读机器计数。先核实关联问题状态，不重做已完成任务，也不丢失延期事项。',
     'learn': '经验回答什么已被证实，待办回答什么尚未完成；未解决问题先登记根待办，不用经验条目替代后续工作。',
-    'health': '自动检测同时扫描项目级和用户级安装，并分别核对清单；全局正常不能掩盖项目损坏。文档治理使用 `<gsp> health --documents-only`；同时检查安装时用 `--documents`。默认报告保存在目标项目 docs/gsp/reports/document-governance/<唯一运行ID>/report.md 与 report.json；用户明确指定集中目录时传 --report-dir，不把开发者本机目录当产品默认。读取报告检查分类、绑定、断链、重复、孤立、未追踪和差异。程序未检查语义与代码符合性，按需要复核并将依据写到独立复核材料，不能冒称程序已验证。旧项目先盘点和迁移预览，未知分类、未入链或重复副本不等于可删除。只出报告，不自动删文件、迁移或改全局配置。新建资料按统一职责，旧布局是待整理过渡或有依据例外。安装扫描仍不证明真实宿主行为；新环境另做实际技能触发检查。文档规则与命令见 [治理契约](../gsp-workflow/references/document-governance.md)。',
+    'health': '自动检测同时扫描项目级和用户级安装，并分别核对清单；全局正常不能掩盖项目损坏。文档治理使用 `<gsp> health --documents-only`；同时检查安装时用 `--documents`。默认报告保存在目标项目 docs/gsp/reports/document-governance/<唯一运行ID>/report.md 与 report.json；用户明确指定集中目录时传 --report-dir，不把开发者本机目录当产品默认。读取报告检查分类、绑定、断链、重复、孤立、未追踪和差异。报告同时包含assets元数据清单、根目录产物候选、Git忽略状态和有界Python字面量输出候选；先读asset_scan的范围、截断和未检查项，其他语言与动态生成路径由执行者核对。程序未检查语义与代码符合性，按需要复核并将依据写到独立复核材料，不能冒称程序已验证。旧项目先盘点和迁移预览，未知分类、未入链或重复副本不等于可删除。只出报告，不自动删文件、迁移或改全局配置。新建资料按统一职责，旧布局是待整理过渡或有依据例外。安装扫描仍不证明真实宿主行为；新环境另做实际技能触发检查。文档规则与命令见 [治理契约](../gsp-workflow/references/document-governance.md)。',
 }
 
 
@@ -152,6 +161,9 @@ def build():
             sources = sources + ['GS:claude-code']
         if name in LIFECYCLE_NOTES:
             body += '\n\n' + LIFECYCLE_NOTES[name] + ' 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。'
+        if name == 'health':
+            body += '\n\n文档问题只读报告后，按 [治理执行规则](../gsp-workflow/references/document-governance-execution.md) 交接给 gsp-document-governance。已有完整整改授权则继续执行；仅检查授权则停在报告并给出整改范围。报告结论必须区分检查完成与治理完成，迁移预览不能代替实际迁移验收。不因检查自动改文件，也不因只读职责丢弃已授权的后续整改。'
+            body += '\n\nCodex 全局 hooks 用 `<gsp> hooks-status` 检查归属完整性，用 `<gsp> hooks-report` 汇总当前项目的元数据事件；安装/升级/卸载/恢复分别是 hooks-install/hooks-upgrade/hooks-uninstall/hooks-recover，支持 --dry-run 和 --profile。安装需用户授权，原生信任由用户在 /hooks 审查。静态通过不代表真实触发，Shell 冻结与特殊工具路径仍有覆盖缺口。'
         full = 'gsp-' + name
         folder = ROOT / 'skills' / full
         folder.mkdir(parents=True, exist_ok=True)
@@ -159,6 +171,8 @@ def build():
         text = f'---\nname: {full}\ndescription: {json.dumps(description, ensure_ascii=False)}\n---\n\n# {name}\n\n'
         text += '<!-- Generated by scripts/build_skills.py; edit that source. -->\n\n'
         text += '共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。\n\n'
+        text += '阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。\n\n'
+        text += '路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。\n\n'
         text += body + '\n'
         (folder / 'SKILL.md').write_text(text, encoding='utf-8', newline='\n')
         agents = folder / 'agents'
@@ -172,7 +186,7 @@ def build():
                'excluded': ['office-hours','spec','design-html','design-motion','pair-agent','runaway-stopper','gstack-upgrade','ubicloud','ios-clean','ios-design-review','ios-fix','ios-qa','ios-sync','deslop-shared-libs','retro']}
     (ROOT / 'catalog.json').write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + '\n', encoding='utf-8', newline='\n')
     from sp_preservation import build as preserve_sp
-    preservation = preserve_sp(ROOT)
+    preservation = preserve_sp(ROOT, LIFECYCLE_NOTES)
     for entry in entries:
         file = ROOT / 'skills' / entry['name'] / 'SKILL.md'
         text = file.read_text(encoding='utf-8')

@@ -9,6 +9,10 @@ description: "Use when 恢复中断任务、压缩后的上下文或将同一项
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
-从 `.gsp/active.json` 找任务，运行 `<gsp> resume <id>`。按输出读取 design.md、plan.md、decisions.md、review.md 和当前状态。核对已完成任务及证据，不重派。恢复拒绝时列出实际目录、Git 状态和文件差异，判断是正常变更还是错误项目；不得为了继续而修改 UUID 或删除检查点。需要迁移时先完整核实并记录迁移决定。输出当前阶段、下一任务和仍有效的授权。
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
+从 `.gsp/active.json` 找任务，运行 `<gsp> resume <id>`。按输出读取实际绑定的 spec/design、plan、decisions、review 和当前状态，不猜旧路径。核对已完成任务及证据，不重派。恢复拒绝时列出实际目录、Git 状态和文件差异，判断是正常变更还是错误项目；不得为了继续而修改 UUID 或删除检查点。需要迁移时先完整核实并记录迁移决定。输出当前阶段、下一任务和仍有效的授权。
 
 resume 返回根待办路径及当前事项；读取原文和人工历史内容，不只读机器计数。先核实关联问题状态，不重做已完成任务，也不丢失延期事项。 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。

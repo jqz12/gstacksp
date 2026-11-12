@@ -101,6 +101,9 @@ class UserInstall:
         manifest = {'schema':2,'scope':self.scope,'host':self.host,'source':str(Path(__file__).resolve().parents[1]),'version':version,'installed_at':previous.get('installed_at',now()),'updated_at':now(),'skills':skills,'files':{rel:sha(data) for rel,data in files.items()},'instruction_block_sha256':block_hash,'live_discovery':'NOT_CHECKED'}
         changes[manifest_rel] = None if action=='uninstall' else (json.dumps(manifest,ensure_ascii=False,indent=2)+'\n').encode()
         result = {'action':action,'scope':self.scope,'profile':str(self.root),'version':version,'files':len(files),'dry_run':dry_run,'paths':sorted(changes),'live_discovery':'NOT_CHECKED'}
+        if self.host == 'codex' and action in ('install','upgrade'):
+            from .codex_hook_install import HookInstall
+            result['hooks'] = HookInstall(self.root).status()
         if dry_run: return result
         self.root.mkdir(parents=True, exist_ok=True)
         with locked(self.root):

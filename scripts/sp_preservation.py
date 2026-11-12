@@ -1,5 +1,6 @@
 """Deterministic full-text SP preservation; no summarization or external source access."""
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -40,7 +41,7 @@ def preserved(root, name):
         return ']('+os.path.relpath(dest,target).replace('\\','/')+')'
     return re.sub(r'\]\(([^)]+)\)',link,body)
 
-def integration(name):
+def integration(name, lifecycle_notes=None):
     shared = ('## GstackSP adaptation (only the explicitly listed differences)\n\n'
         'Read the [SP adaptation contract](../gsp-workflow/references/sp-adapter.md) first. '
         'The complete upstream body follows, not a summary. Resolve upstream `superpowers:*` '
@@ -48,18 +49,62 @@ def integration(name):
         'are based on the corresponding ORIGINAL.md directory. Resource links below are redirected '
         'to the complete preserved files. Missing host capabilities must be reported honestly.\n\n')
     shared += ('Artifact layout is adapted, not the method: use the paths returned by GSP status/resume. '
-               'New tasks live in docs/work/<year>/<stable-folder>/ (spec.md, plan.md and stage artifacts); '
+               'New tasks live in docs/work/<year>/<month>/<stable-folder>/ (spec.md, plan.md and stage artifacts); '
                'existing bindings stay authoritative. Read [document governance](../gsp-workflow/references/document-governance.md) '
                'for saved ideas, module relations, discovery, health reports and controlled migration. '
                'Do not create a second spec or plan at the upstream default path.\n\n')
+    shared += ('Use the [output and handoff contract](../gsp-workflow/references/output-handoff.md) '
+               'for actual results, honestly attributed skills used, evidence, next action and owner. '
+               'Return nested methods to the current task; continue authorized work without a redundant approval.\n\n')
+    if lifecycle_notes and name in lifecycle_notes:
+        shared += '### GSP stage integration\n\n' + lifecycle_notes[name] + '\n\n'
+    if name in ('writing-plans', 'ship'):
+        shared += ('Previously confirmed content and explicit execution/integration authorization take precedence '
+                   'over the upstream repeated plan confirmation or fixed completion menu. '
+                   'A substantive design change or a new external action still needs the applicable authorization.\n\n')
+    if name == 'ship':
+        shared += ('Before claiming an independent development/remediation task complete, actually check its current '
+                   'status/resume and finish current evidence, review and ready. Do not substitute a raw saved '
+                   'ready flag, health report or a manual addition to an old delivery.md. Nested methods return '
+                   'to the parent task; read-only reports do not require an artificial development task.\n\n')
+        shared += ('Final task report: follow the gsp-ship final-summary section of the '
+                   '[output and handoff contract](../gsp-workflow/references/output-handoff.md). '
+                   'Use the exact heading 本轮技能执行顺序 and the fixed four-column table in that contract for both stage and final reports. '
+                   'Include an ordered table of skills actually used, their actions and results, '
+                   'including repair/review/reverification loops; distinguish reference-only material. '
+                   'Show the ordered summary in the final reply and retain details in the existing delivery.md.\n\n')
     if EXTRA.get(name):
         shared += 'Read these complete originals and their dependencies before using the corresponding mode:\n\n'
         for item in EXTRA[name]:
             shared += f'- [{item}](../gsp-workflow/upstream/skills/{item}/ORIGINAL.md)\n'
         shared += '\n'
+    if name in ('brainstorming', 'writing-plans', 'review', 'verify', 'ship'):
+        shared += ('For document onboarding or governance, compare the original user objective with '
+                   'the spec, plan and delivered artifacts; a narrower spec does not silently supersede that objective. '
+                   'Use the [governance execution rules](../gsp-workflow/references/document-governance-execution.md). '
+                   'Inventory or migration preview is not completed migration or acceptance. '
+                   'Required unfinished work remains blocking unless the user actually changes the scope.\n\n')
+    if name in ('brainstorming', 'writing-plans', 'execute', 'review', 'verify', 'ship'):
+        shared += ('Before handing this stage onward, apply the [artifact fidelity checks]'
+                   '(../gsp-workflow/references/artifact-fidelity.md) to the actual bound artifacts. '
+                   'Read the complete upstream method below; this integration is not its replacement. '
+                   'Plan authors use plan-check then seal-plan --check-structure after the upstream self-review. '
+                   'Structural success, preserved source text and a skills-used table do not prove semantic compliance.\n\n')
+        shared += ('Use the same artifact contract to route applicable engineering responsibilities from '
+                   'design to tasks, evidence and current documentation: data/recovery, configuration/dependencies, '
+                   'integration, project materials, delivery and maintenance. Expand only the topics triggered '
+                   'by this change; no extra mandatory table, document set or skill sequence. '
+                   'Headless plan workers return self-reviewed content; the controller owns registration and sealing.\n\n')
     return shared
 
-def build(root):
+def build(root, lifecycle_notes=None):
+    if lifecycle_notes is None:
+        # Standalone preservation builds must use the same maintained notes as
+        # build_skills, including when root is a temporary source snapshot.
+        spec = importlib.util.spec_from_file_location('gsp_skill_definitions', Path(__file__).with_name('build_skills.py'))
+        definitions = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(definitions)
+        lifecycle_notes = definitions.LIFECYCLE_NOTES
     root=Path(root)
     baseline=json.loads((root/'sources/superpowers/baseline.json').read_text(encoding='utf-8'))
     for rel, expected in baseline['files'].items():
@@ -72,7 +117,7 @@ def build(root):
         file=root/'skills'/('gsp-'+name)/'SKILL.md'
         text=file.read_text(encoding='utf-8')
         front='---'+text.split('---',2)[1]+'---\n\n'
-        file.write_text(front+integration(name)+BEGIN+'\n'+preserved(root,original)+'\n'+END+'\n',encoding='utf-8',newline='\n')
+        file.write_text(front+integration(name,lifecycle_notes)+BEGIN+'\n'+preserved(root,original)+'\n'+END+'\n',encoding='utf-8',newline='\n')
     file=root/'skills/gsp-workflow/SKILL.md'
     text=file.read_text(encoding='utf-8').split('\n'+BEGIN)[0].rstrip()
     # Router is hand maintained. Its original SP foundation remains fully available.

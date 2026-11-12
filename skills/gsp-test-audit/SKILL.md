@@ -9,4 +9,8 @@ description: "Use when 已有测试套件需要判断低价值、重复或缺失
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 选任务相关测试，给每项说明保护的行为、失效时应如何失败、未覆盖什么。重复代码不等于重复价值；不因测试慢或与实现相似就直接删。提出删除/重写候选及回归风险，授权内改动后运行受影响套件。区分代码覆盖率和测试文件行数，不以评分代替证据。

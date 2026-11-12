@@ -7,13 +7,23 @@ description: "Use when 已确认设计与计划需要连续实施、测试和完
 
 Read the [SP adaptation contract](../gsp-workflow/references/sp-adapter.md) first. The complete upstream body follows, not a summary. Resolve upstream `superpowers:*` names using the contract; never load a second SP installation. Relative prompts/scripts are based on the corresponding ORIGINAL.md directory. Resource links below are redirected to the complete preserved files. Missing host capabilities must be reported honestly.
 
-Artifact layout is adapted, not the method: use the paths returned by GSP status/resume. New tasks live in docs/work/<year>/<stable-folder>/ (spec.md, plan.md and stage artifacts); existing bindings stay authoritative. Read [document governance](../gsp-workflow/references/document-governance.md) for saved ideas, module relations, discovery, health reports and controlled migration. Do not create a second spec or plan at the upstream default path.
+Artifact layout is adapted, not the method: use the paths returned by GSP status/resume. New tasks live in docs/work/<year>/<month>/<stable-folder>/ (spec.md, plan.md and stage artifacts); existing bindings stay authoritative. Read [document governance](../gsp-workflow/references/document-governance.md) for saved ideas, module relations, discovery, health reports and controlled migration. Do not create a second spec or plan at the upstream default path.
+
+Use the [output and handoff contract](../gsp-workflow/references/output-handoff.md) for actual results, honestly attributed skills used, evidence, next action and owner. Return nested methods to the current task; continue authorized work without a redundant approval.
+
+### GSP stage integration
+
+会话内执行仍遵守修复纪律。用户明确需要脱离会话连续执行时，读取 [驱动器](../gsp-workflow/references/driver.md)，配置真实检查并使用 drive-init/drive-start；不要同时由会话和驱动器修改项目。Codex 驱动器持久消费 max_fix_rounds，按每个任务和最终审查修复链计数，初次实施不算修复；失败命令数不等于修复轮次。Claude 暂无 headless 适配器。未解决问题按共同待办规则保存并带入最终审查。
 
 Read these complete originals and their dependencies before using the corresponding mode:
 
 - [subagent-driven-development](../gsp-workflow/upstream/skills/subagent-driven-development/ORIGINAL.md)
 - [dispatching-parallel-agents](../gsp-workflow/upstream/skills/dispatching-parallel-agents/ORIGINAL.md)
 - [using-git-worktrees](../gsp-workflow/upstream/skills/using-git-worktrees/ORIGINAL.md)
+
+Before handing this stage onward, apply the [artifact fidelity checks](../gsp-workflow/references/artifact-fidelity.md) to the actual bound artifacts. Read the complete upstream method below; this integration is not its replacement. Plan authors use plan-check then seal-plan --check-structure after the upstream self-review. Structural success, preserved source text and a skills-used table do not prove semantic compliance.
+
+Use the same artifact contract to route applicable engineering responsibilities from design to tasks, evidence and current documentation: data/recovery, configuration/dependencies, integration, project materials, delivery and maintenance. Expand only the topics triggered by this change; no extra mandatory table, document set or skill sequence. Headless plan workers return self-reviewed content; the controller owns registration and sealing.
 
 <!-- sp-preserved-body:begin -->
 # Executing Plans

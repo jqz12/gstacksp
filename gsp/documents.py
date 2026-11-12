@@ -62,7 +62,8 @@ class Governance:
     def rebuild(self):
         if self.pending.exists(): raise WorkflowError('DOCUMENT_TRANSACTION_PENDING run docs-recover')
         records = []
-        for directory, pattern in ((self.base, '*/*/record.json'), (self.modules, '*.json')):
+        for directory, pattern in ((self.base, '*/*/record.json'),
+                                   (self.base, '*/*/*/record.json'), (self.modules, '*.json')):
             self.path(directory.relative_to(self.root))
             for p in directory.glob(pattern):
                 self.path(p.relative_to(self.root))
@@ -173,7 +174,8 @@ class Governance:
                 number=max(number,(maximum or 0)+1)
         token='GSP-'+str(number).zfill(6); wid=uuid.uuid4().hex
         suffix=re.sub('[^a-z0-9]+','-',title.lower()).strip('-')[:36] or 'work'
-        folder=folder or f'docs/work/{datetime.now().year}/{token}-{suffix}'
+        created = datetime.now()
+        folder=folder or f'docs/work/{created.year}/{created.month:02d}/{token}-{suffix}'
         if self.path(folder).exists(): raise WorkflowError('DOCUMENT_FOLDER_EXISTS')
         record={'schema':1,'kind':'work','uuid':wid,'number':token,'title':title,'summary':brief[:320],
                 'source':redact(source),'stage':'idea','folder':folder,'documents':{'brief':folder+'/brief.md'},

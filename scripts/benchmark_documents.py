@@ -22,7 +22,7 @@ def main():
         created=0
         for size in sorted(a.sizes):
             for n in range(created+1,size+1):
-                folder=f'docs/work/2026/GSP-{n:06d}-fixture';path=root/folder;path.mkdir(parents=True)
+                folder=f'docs/work/2026/{((n-1)%12)+1:02d}/GSP-{n:06d}-fixture';path=root/folder;path.mkdir(parents=True)
                 record={'schema':1,'kind':'work','uuid':uuid.uuid5(uuid.NAMESPACE_URL,'gsp-scale-'+str(n)).hex,'number':f'GSP-{n:06d}',
                         'title':f'Task {n}','summary':'Historical account constraint','source':'synthetic fixture','stage':'closed',
                         'folder':folder,'documents':{'brief':folder+'/brief.md'},'modules':[module['uuid']],'relations':[],

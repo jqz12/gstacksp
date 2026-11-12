@@ -9,6 +9,10 @@ description: "Use when 实现后需要验证浏览器、API 或 CLI 的实际使
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 先明确只报告还是允许修复；用户要求只读则不改代码。按设计验收走最关键成功、失败和边界路径，记录实际输入、输出、期望、严重度和复现步骤。UI 通过 browse；API/CLI 使用项目实际工具和受控测试数据。只在授权环境执行，不把线上数据当测试夹具。修复模式下回到 execute/TDD，验证后再关闭问题；不要为达到评分无限优化。未覆盖项写 review.md，原始证据存运行目录，测试通过不等于所有 QA 已完成。
 
 先给基线发现再修复；每次在 .gsp/runs/<id>/qa/<唯一运行ID>/ 保存报告、基线及截图，目录存在则换新 ID，禁止覆盖旧材料。报告关联设计/计划中的测试矩阵。未解决项按待办规则登记，已回退修复与未验证修复不得标成 verified。 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。

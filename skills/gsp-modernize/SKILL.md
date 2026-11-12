@@ -9,4 +9,8 @@ description: "Use when 已有老旧 PR 或任务分支需要评估是否继续�
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 先只读核对 PR 目标、分支差异和当前基线，列出冲突、已被替代需求与剩余价值。给出继续/重做/关闭建议。fetch、改分支、推送、关闭 PR 按用户指令范围执行，保留原分支证据，不自动强推。选择继续后将剩余工作转为任务并回归验证。

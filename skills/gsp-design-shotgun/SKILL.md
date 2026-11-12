@@ -9,4 +9,8 @@ description: "Use when 用户明确希望比较多套界面视觉方案时."
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 基于同一设计和验收产生两三套有实质区别的方向，记录差异与推荐；用现有前端或图像工具产出可看结果，截图附路径。额外模型/图像服务需已有工具及费用授权；没有则用本地 HTML 方案并说明。用户选定后只把选中方向更新到 ui-design.md，避免维护多套正式实现。

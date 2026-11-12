@@ -9,4 +9,8 @@ description: "Use when 功能、模块或项目确有缺失的使用说明或接
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 从真实代码、运行配置和已确认行为提炼读者任务；优先最短可运行示例、参数、失败处理和验证方式。实际执行文档命令，未知行为明确标记。写到项目正常文档路径并在任务计划关联，不复制全部源码、不强制每次改动生成整套文档。

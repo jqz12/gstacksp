@@ -30,7 +30,7 @@ class EndToEndTests(unittest.TestCase):
             call('install', '--host', 'both', '--optional', 'design-review')  # ownership-aware idempotence
             for base in ('.claude', '.agents'):
                 skills = list((project / base / 'skills').glob('gsp-*/SKILL.md'))
-                self.assertEqual(len(skills), 21)
+                self.assertEqual(len(skills), 23)
                 self.assertFalse((project / base / 'skills/gsp-retro').exists())
                 installed_cli = project / base / 'skills/gsp-workflow/scripts/gsp.py'
                 report = json.loads(call('health', '--host', 'both', script=installed_cli).stdout)

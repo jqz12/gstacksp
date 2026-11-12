@@ -9,4 +9,8 @@ description: "Use when 用户选择用 gbrain 作为本地经验之外的可选�
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 先检测 CLI 和当前配置，不读取无关秘密。确认本地或远端后端、保存范围与权限；依据已安装版本帮助配置，不硬编码旧命令。用无敏感测试记录做写入、读回并清理，记录真实可用性。缺服务则本地 learn 继续可用，配置/网络/费用动作按实际授权。

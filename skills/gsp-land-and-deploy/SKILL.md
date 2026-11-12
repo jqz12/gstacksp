@@ -9,4 +9,8 @@ description: "Use when 交付已准备且用户授权合并或部署到具体环
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 核对 ship 结果、当前 HEAD、目标分支/环境和实际授权。按项目已有流程合并并验证合并后代码，再部署；记录每一步真实输出和目标版本。失败停止后续发布并保留恢复位置，不擅自回滚用户数据。服务健康和真实部署成功需要观察证据，不能只凭命令提交成功。

@@ -9,4 +9,8 @@ description: "Use when 用户明确需要将本项目选定知识同步到已配
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 核对 setup-gbrain 的验证结果、目标与授权，预览具体文件和来源，不默认上传完整仓库/会话。排除凭据，逐项同步后读回验证；区分本地记录、远端写入和 Git 提交/推送。冲突或失败保留队列与证据，不报告已同步。没有 gbrain 时不阻断正常开发。

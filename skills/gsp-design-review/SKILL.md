@@ -9,4 +9,8 @@ description: "Use when 已有可运行页面需要检查视觉质量与交互一
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 先明确只报告还是允许修改，读 UI 规范并用 browse 检查真实页面的桌面/窄屏、层级、间距、对比度、表单状态和交互。截图和复现记录到运行目录。优先实际影响，不为得分反复润色；允许修复时走 execute、回归并再截图。浏览器不可用只做静态检查并明确未覆盖。

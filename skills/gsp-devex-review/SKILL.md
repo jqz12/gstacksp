@@ -9,4 +9,8 @@ description: "Use when 工具实现后需要实际验证安装、首次使用、
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 按目标用户从干净临时环境走 README/示例：安装、配置、首次有用结果、一个故意错误、恢复。记录真实命令、时间范围和输出；不要靠读源码猜行为。使用临时目录和测试凭据，改文档/实现需在任务授权内。将阻塞与未覆盖写 review.md；不要求每个普通应用都做此审查。

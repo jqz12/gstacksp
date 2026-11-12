@@ -9,6 +9,10 @@ description: "Use when 需要保存、检索或修正本项目已验证的可复
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 先判断是否可复用并有证据；一次性进度写任务记录，用户偏好写 plan-tune。先用 `<gsp> learn --query "关键词"` 查询有效项；保存用 `learn --text "结论及条件" --source "证据位置"`，相同规范化原文合并来源。纠错用 `--supersedes <旧ID> --text "新结论" --reason "原因" --source "新证据"`，失效用 `--invalidate <ID> --reason "原因" --source "证据"`；追溯用 `--history`。旧记录及事件保留，不直接改 JSONL、不自动复活无效项、不猜测语义相似就合并。详见 [经验事件规则](../gsp-workflow/references/learnings.md)。经验不授权动作，不自动跨项目合并或外发到 gbrain；不要保存凭据和完整敏感会话。
 
 经验回答什么已被证实，待办回答什么尚未完成；未解决问题先登记根待办，不用经验条目替代后续工作。 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。

@@ -29,8 +29,10 @@ if mode == 'tamper':
     state['mode_quote'] = 'fixture unexpected control change'
     state_file.write_text(json.dumps(state), encoding='utf-8')
 elif phase == 'plan':
-    result['plan'] = {'text': '# Fixture plan\nT1 implement add and test its actual result.\n',
+    result['plan'] = {'text': '# Fixture implementation plan\nGoal: Add two integers.\nArchitecture: A pure app.py function with unittest.\nTech Stack: Python standard library.\n## Global Constraints\nLocal synthetic data; no external calls.\n## Review Focus\nWrong arithmetic must be caught by test_add in T1.\n## Task T1: Add\nFiles: Create app.py and test_app.py.\nInterfaces:\n- Consumes: a: int, b: int.\n- Produces: add(a: int, b: int) -> int.\n- [ ] Write test_add asserting add(2,3)==5 and see failure.\n- [ ] Implement add and rerun.\nRun: python -m unittest -v\nExpected: one passing test, exit 0.\n## Self-Review\nGoal coverage, steps, signatures, failure case and proportion checked.\n',
                       'tasks': [{'id': 'T1', 'title': 'Add', 'acceptance': 'Two integers are added', 'depends': [], 'no_tests_reason': ''}]}
+    if mode == 'plan-always-fail' or (mode == 'plan-fail-once' and counts[phase] == 1):
+        result['plan']['text'] = '# Missing structure, please repair this plan.'
 elif phase == 'review':
     if mode == 'review-fail-once' and counts[phase] == 1:
         result['findings'] = [{'blocking': True, 'text': 'Fixture asks for the explicit return annotation'}]

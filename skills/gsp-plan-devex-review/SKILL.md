@@ -9,4 +9,8 @@ description: "Use when CLI、SDK、API 或技能计划需要检查使用者上�
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 从已确认用户和目标找出首次有用结果路径，检查安装、配置、示例、命令/参数、错误和恢复、文档是否可理解。GstackSP 可检查冻结如何开/关、失败后怎么办。只补实际缺口，不强制人物画像、竞品评分和八轮流程。结论写 decisions.md 并修正相关计划，运行体验留给 devex-review；无开发者界面则跳过。

@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP document-governance"
+  short_description: "GstackSP 项目工作流：新项目需要建立文档入口、老项目需要完整接入或整理，或本次改动需要维护相关文档正本时"
+  default_prompt: "Use $gsp-document-governance for the relevant part of this project task."

@@ -7,7 +7,25 @@ description: "Use when 实现和审查结束，需要准备交付或执行已授
 
 Read the [SP adaptation contract](../gsp-workflow/references/sp-adapter.md) first. The complete upstream body follows, not a summary. Resolve upstream `superpowers:*` names using the contract; never load a second SP installation. Relative prompts/scripts are based on the corresponding ORIGINAL.md directory. Resource links below are redirected to the complete preserved files. Missing host capabilities must be reported honestly.
 
-Artifact layout is adapted, not the method: use the paths returned by GSP status/resume. New tasks live in docs/work/<year>/<stable-folder>/ (spec.md, plan.md and stage artifacts); existing bindings stay authoritative. Read [document governance](../gsp-workflow/references/document-governance.md) for saved ideas, module relations, discovery, health reports and controlled migration. Do not create a second spec or plan at the upstream default path.
+Artifact layout is adapted, not the method: use the paths returned by GSP status/resume. New tasks live in docs/work/<year>/<month>/<stable-folder>/ (spec.md, plan.md and stage artifacts); existing bindings stay authoritative. Read [document governance](../gsp-workflow/references/document-governance.md) for saved ideas, module relations, discovery, health reports and controlled migration. Do not create a second spec or plan at the upstream default path.
+
+Use the [output and handoff contract](../gsp-workflow/references/output-handoff.md) for actual results, honestly attributed skills used, evidence, next action and owner. Return nested methods to the current task; continue authorized work without a redundant approval.
+
+### GSP stage integration
+
+按共同待办规则核对新增、延期、已完成与未完成项；只凭有效任务证据关闭，不凭标题/提交信息猜完成。保留原内容和历史；交付必须链接根待办并披露未完成项。待办写入失败明确报告，绝不声称已保存；阻塞问题仍阻塞。
+
+Previously confirmed content and explicit execution/integration authorization take precedence over the upstream repeated plan confirmation or fixed completion menu. A substantive design change or a new external action still needs the applicable authorization.
+
+Before claiming an independent development/remediation task complete, actually check its current status/resume and finish current evidence, review and ready. Do not substitute a raw saved ready flag, health report or a manual addition to an old delivery.md. Nested methods return to the parent task; read-only reports do not require an artificial development task.
+
+Final task report: follow the gsp-ship final-summary section of the [output and handoff contract](../gsp-workflow/references/output-handoff.md). Use the exact heading 本轮技能执行顺序 and the fixed four-column table in that contract for both stage and final reports. Include an ordered table of skills actually used, their actions and results, including repair/review/reverification loops; distinguish reference-only material. Show the ordered summary in the final reply and retain details in the existing delivery.md.
+
+For document onboarding or governance, compare the original user objective with the spec, plan and delivered artifacts; a narrower spec does not silently supersede that objective. Use the [governance execution rules](../gsp-workflow/references/document-governance-execution.md). Inventory or migration preview is not completed migration or acceptance. Required unfinished work remains blocking unless the user actually changes the scope.
+
+Before handing this stage onward, apply the [artifact fidelity checks](../gsp-workflow/references/artifact-fidelity.md) to the actual bound artifacts. Read the complete upstream method below; this integration is not its replacement. Plan authors use plan-check then seal-plan --check-structure after the upstream self-review. Structural success, preserved source text and a skills-used table do not prove semantic compliance.
+
+Use the same artifact contract to route applicable engineering responsibilities from design to tasks, evidence and current documentation: data/recovery, configuration/dependencies, integration, project materials, delivery and maintenance. Expand only the topics triggered by this change; no extra mandatory table, document set or skill sequence. Headless plan workers return self-reviewed content; the controller owns registration and sealing.
 
 <!-- sp-preserved-body:begin -->
 # Finishing a Development Branch

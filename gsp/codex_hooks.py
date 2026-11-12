@@ -1,0 +1,260 @@
+"""Native Codex protocol adapter. Observations never update workflow state."""
+from contextlib import contextmanager
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import time
+import uuid
+
+from .runtime import Project, WorkflowError, atomic, inside, now, read, slug
+
+INPUT_LIMIT = 1024 * 1024
+SESSION_LIMIT = 32 * 1024 * 1024
+SHARD_LIMIT = 4 * 1024 * 1024
+REPORT_SESSIONS = 1000
+REPORT_SHARDS = 10
+EVENTS = {'SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Stop','Interrupt','SessionEnd'}
+
+
+def key(value):
+    return hashlib.sha256(str(value).encode('utf-8')).hexdigest()[:24]
+
+
+def safe_file(root, path):
+    """Refuse filesystem redirections for audit and metadata writes."""
+    path = Path(path)
+    if not inside(root,path):
+        raise WorkflowError('HOOK_PATH_ESCAPE')
+    for item in [path, *path.parents]:
+        if item == root: break
+        if item.is_symlink() or getattr(item,'is_junction',lambda:False)():
+            raise WorkflowError('HOOK_LINK_REFUSED')
+    return path
+
+
+def load(path):
+    if path.stat().st_size > INPUT_LIMIT:
+        raise WorkflowError('HOOK_METADATA_TOO_LARGE')
+    value=read(path)
+    if not isinstance(value,dict): raise WorkflowError('HOOK_METADATA_INVALID')
+    return value
+
+
+@contextmanager
+def audit_lock(path):
+    """OS lock released on process exit; never steal stale writer.lock."""
+    with path.open('a+b') as stream:
+        deadline=time.monotonic()+1.0
+        while True:
+            try:
+                stream.seek(0)
+                if os.name=='nt':
+                    import msvcrt
+                    msvcrt.locking(stream.fileno(),msvcrt.LK_NBLCK,1)
+                else:
+                    import fcntl
+                    fcntl.flock(stream.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic()>=deadline: raise WorkflowError('HOOK_AUDIT_BUSY')
+                time.sleep(.005)
+        try: yield
+        finally:
+            stream.seek(0)
+            if os.name=='nt':
+                import msvcrt
+                msvcrt.locking(stream.fileno(),msvcrt.LK_UNLCK,1)
+            else:
+                import fcntl
+                fcntl.flock(stream.fileno(),fcntl.LOCK_UN)
+
+
+def audit(root, payload, task, outcome, coverage, stage=None):
+    # Only metadata; do not hash/store prompt/command/result contents either.
+    session=key(payload.get('session_id','missing'))
+    folder=safe_file(root,root/'.gsp/audits/codex-hooks'/session)
+    folder.mkdir(parents=True,exist_ok=True)
+    from . import __version__
+    row={'schema':1,'event_id':uuid.uuid4().hex,'at':now(),'host':'codex','gsp_version':__version__,
+         'session':session,'turn':key(payload.get('turn_id','missing')),
+         'agent':key(payload.get('agent_id','unknown')),'task':task,'stage':stage,
+         'event':payload['hook_event_name'],'tool':re.sub(r'[^A-Za-z0-9_.:-]','?',str(payload.get('tool_name','')))[:100],
+         'call':key(payload.get('tool_use_id','missing')),'call_known':isinstance(payload.get('tool_use_id'),str) and bool(payload['tool_use_id']),
+         'outcome':outcome,'coverage':coverage}
+    data=(json.dumps(row,ensure_ascii=True,separators=(',',':'))+'\n').encode()
+    with audit_lock(safe_file(root,folder/'audit.lock')):
+        status_path=safe_file(root,folder/'coverage.json')
+        status=load(status_path) if status_path.exists() else {'schema':1,'bytes':0,'shard':1,'truncated':False}
+        # Recover accounting if the process died after append but before metadata.
+        shards=sorted(folder.glob('events-*.jsonl'))
+        if len(shards)>10:raise WorkflowError('HOOK_AUDIT_SHARD_LIMIT')
+        actual=sum(safe_file(root,p).stat().st_size for p in shards)
+        if actual!=status['bytes']:status['accounting_recovered']=True
+        status['bytes']=actual
+        if shards:
+            status['shard']=max(int(p.stem.split('-')[1]) for p in shards)
+        if status['bytes']+len(data)>SESSION_LIMIT:
+            status['truncated']=True
+        else:
+            file=safe_file(root,folder/f'events-{status["shard"]:06d}.jsonl')
+            if file.exists() and file.stat().st_size+len(data)>SHARD_LIMIT:
+                status['shard']+=1
+                file=safe_file(root,folder/f'events-{status["shard"]:06d}.jsonl')
+            with file.open('ab') as stream:
+                stream.write(data);stream.flush()
+            status['bytes']+=len(data)
+        status['last_event']=payload['hook_event_name']
+        status['coverage']='partial-native-events; shell-not-enforced; missing-result=unknown'
+        atomic(status_path,status)
+    return status['truncated']
+
+
+def patch_paths(command):
+    if not isinstance(command,str) or len(command.encode('utf-8'))>INPUT_LIMIT:
+        raise WorkflowError('HOOK_PATCH_INVALID')
+    lines=command.strip().splitlines()
+    if len(lines)<3 or lines[0]!='*** Begin Patch' or lines[-1]!='*** End Patch':
+        raise WorkflowError('HOOK_PATCH_INVALID')
+    paths=[]; operation=None
+    for line in lines[1:-1]:
+        match=re.fullmatch(r'\*\*\* (Add File|Update File|Delete File|Move to): (.+)',line)
+        if match:
+            kind,path=match.groups()
+            if kind=='Move to' and operation!='Update File': raise WorkflowError('HOOK_PATCH_INVALID_MOVE')
+            if not path or '\x00' in path or '\r' in path: raise WorkflowError('HOOK_PATCH_INVALID_PATH')
+            paths.append(path)
+            if kind!='Move to': operation=kind
+        elif line.startswith('*** ') and line!='*** End of File':
+            raise WorkflowError('HOOK_PATCH_UNKNOWN_DIRECTIVE')
+    if not paths: raise WorkflowError('HOOK_PATCH_NO_TARGETS')
+    return paths
+
+
+def locate(cwd):
+    if not isinstance(cwd,str) or not Path(cwd).is_absolute(): return None
+    cwd=Path(cwd).resolve()
+    for root in [cwd,*cwd.parents]:
+        if (root/'.gsp/project.json').is_file():
+            safe_file(root,root/'.gsp/project.json')
+            return root
+    return None
+
+
+def deny(reason):
+    return {'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'deny','permissionDecisionReason':reason}}
+
+
+def handle(payload):
+    if not isinstance(payload,dict) or payload.get('hook_event_name') not in EVENTS: return {}
+    event=payload['hook_event_name']; tool=payload.get('tool_name')
+    writing=event=='PreToolUse' and tool in ('apply_patch','Edit','Write','NotebookEdit')
+    try:
+        root=locate(payload.get('cwd'))
+        if root is None: return {}
+        identity=load(root/'.gsp/project.json')
+        if identity.get('root',str(root))!=str(root): raise WorkflowError('HOOK_PROJECT_MOVED')
+        state=None;task=None
+        active=safe_file(root,root/'.gsp/active.json')
+        if active.exists():
+            task=load(active).get('task');slug(task)
+            state=load(safe_file(root,root/'.gsp/runs'/task/'state.json'))
+            if state.get('id')!=task: raise WorkflowError('HOOK_TASK_MISMATCH')
+        result={};outcome='observed';coverage='metadata-only'
+        if event=='SessionStart':
+            context='GstackSP: read gsp-workflow and shared contract. '
+            if state:
+                context+=f'Active task {task}, status {state.get("status")}. Inspect status/resume before editing; do not silently overwrite interrupted work. '
+                context+='Bound documents: '+json.dumps({k:str(Project(root).document(state,k).relative_to(root)) for k in ('design','plan')},ensure_ascii=True)
+            else: context+='No active task. Discuss design before implementation.'
+            result={'hookSpecificOutput':{'hookEventName':event,'additionalContext':context[:1800]}}
+        if writing and state and state.get('scope',{}).get('mode')=='frozen':
+            try:
+                data=payload.get('tool_input')
+                if not isinstance(data,dict): raise WorkflowError('HOOK_EDIT_INPUT_INVALID')
+                paths=patch_paths(data.get('command')) if tool=='apply_patch' else [data.get('file_path') or data.get('notebook_path')]
+                for path in paths:
+                    if not isinstance(path,str) or not path: raise WorkflowError('HOOK_EDIT_PATH_REQUIRED')
+                    # Project's existing scope implementation handles workflow exceptions.
+                    Project(root).scope_path(state,str((Path(payload['cwd'])/path).resolve()))
+                outcome='allowed';coverage='direct-edit-paths'
+            except (WorkflowError,ValueError,TypeError,OSError):
+                outcome='denied';coverage='direct-edit-paths'
+                result=deny('GSP frozen edit refused: outside scope or unparseable edit. Inspect gsp scope/check-path; no scope was changed.')
+        elif tool in ('Bash','exec_command','write_stdin'):
+            coverage='shell-not-enforced'
+        try:
+            stage=state.get('status') if state else None
+            if stage not in ('design','plan','execute','review','ready','blocked','needs-verification'):stage='unknown'
+            truncated=audit(root,payload,task,outcome,coverage,stage)
+            if truncated: result.setdefault('systemMessage','GSP audit storage limit reached; process record is incomplete.')
+        except (OSError,WorkflowError,ValueError,KeyError,TypeError):
+            result.setdefault('systemMessage','GSP audit unavailable; process coverage is degraded. Task state unchanged.')
+        return result
+    except (WorkflowError,ValueError,TypeError,KeyError,OSError,AttributeError):
+        return deny('GSP metadata invalid; inspect project state before editing.') if writing else {'systemMessage':'GSP hook could not inspect project; coverage NOT_CHECKED.'}
+
+
+def run():
+    try:
+        raw=sys.stdin.buffer.read(INPUT_LIMIT+1)
+        if len(raw)>INPUT_LIMIT:
+            return {'systemMessage':'GSP hook input too large; project and edit coverage NOT_CHECKED.'}
+        return handle(json.loads(raw))
+    except (ValueError,UnicodeError,OSError,RecursionError):
+        return {'systemMessage':'GSP hook input invalid; project and edit coverage NOT_CHECKED.'}
+
+
+def report(root):
+    """Bounded offline metadata assessment, never an assertion of task success."""
+    root=Path(root).resolve()
+    folder=safe_file(root,root/'.gsp/audits/codex-hooks')
+    result={'schema':1,'audit_events_observed':False,'native_host_trigger':'NOT_CHECKED','coverage_state':'not_observed','sessions':0,'sessions_skipped':0,'shards_skipped':0,'events':0,'attempts':0,'results_observed':0,
+            'unknown_attempts':0,'denied':0,'replayed_events':0,'incomplete':False,
+            'assessment':'metadata only; does not prove skill compliance or business correctness',
+            'coverage_gaps':['shell-not-enforced','specialized/hosted tool paths','missing-result=unknown']}
+    if not folder.exists():return result
+    sessions=[p for p in sorted(folder.iterdir()) if p.is_dir() and re.fullmatch('[a-f0-9]{24}',p.name)]
+    result['sessions_skipped']=max(0,len(sessions)-REPORT_SESSIONS)
+    result['incomplete']=bool(result['sessions_skipped'])
+    for session in sessions[:REPORT_SESSIONS]:
+        safe_file(root,session)
+        result['sessions']+=1
+        seen=set();attempts={};responses=set();size=0
+        coverage=safe_file(root,session/'coverage.json')
+        try:
+            result['incomplete'] |= load(coverage).get('truncated',False)
+            shards=sorted(session.glob('events-*.jsonl'))
+            skipped=max(0,len(shards)-REPORT_SHARDS)
+            result['shards_skipped']+=skipped
+            result['incomplete'] |= bool(skipped)
+            for path in shards[:REPORT_SHARDS]:
+                safe_file(root,path)
+                size+=path.stat().st_size
+                if size>SESSION_LIMIT:result['incomplete']=True;break
+                with path.open(encoding='utf-8') as stream:
+                    for line in stream:
+                        row=json.loads(line)
+                        if not isinstance(row,dict):raise ValueError('invalid event')
+                        event=row.get('event');call=(row.get('turn'),row.get('agent'),row.get('call'))
+                        if not row.get('call_known') and event in ('PreToolUse','PostToolUse'):
+                            call=(row.get('turn'),row.get('agent'),row.get('event_id'))
+                            result['incomplete']=True
+                        ident=(event,*call)
+                        if event in ('PreToolUse','PostToolUse'):
+                            if ident in seen:result['replayed_events']+=1;continue
+                            seen.add(ident)
+                        result['events']+=1
+                        if event=='PreToolUse':
+                            attempts[call]=row.get('outcome')
+                            result['denied']+=row.get('outcome')=='denied'
+                        elif event=='PostToolUse':responses.add(call)
+            result['attempts']+=len(attempts)
+            result['results_observed']+=len(responses & attempts.keys())
+            result['unknown_attempts']+=sum(c not in responses and outcome!='denied' for c,outcome in attempts.items())
+        except (OSError,ValueError,KeyError,TypeError,WorkflowError):result['incomplete']=True
+    result['audit_events_observed']=result['events']>0
+    result['coverage_state']='partial' if result['events'] else 'not_observed'
+    return result

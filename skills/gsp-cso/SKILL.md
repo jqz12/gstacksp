@@ -9,4 +9,8 @@ description: "Use when 任务涉及身份、权限、敏感数据或暴露面，
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 确定授权目标和威胁范围，读真实数据流、权限与依赖；优先可证实问题。用本地测试/静态工具验证，不探测无关外部目标。发现写清路径、触发条件、影响、复现和修复；不能验证则标推测。修复需回归，缺少原 GS native helper 不冒称完整安全审计。

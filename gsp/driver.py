@@ -97,7 +97,7 @@ class Driver:
             self.data = {'schema': 1, 'task': self.task, 'root': str(self.project.root), 'project_id': state['project_id'],
                          'status': 'runnable', 'phase': 'execute' if state.get('plan_seal') else 'plan',
                          'reason': None, 'gate': None, 'pending': None, 'dispatches': 0, 'fix_rounds': {},
-                         'pending_fix': None, 'review_findings': [], 'answers': [], 'deadline': None,
+                         'pending_fix': None, 'review_findings': [], 'plan_findings': [], 'answers': [], 'deadline': None,
                          'binding': {'design': state['design_approval']['sha256'], 'scope': state['scope'], 'authorizations': state['authorizations'], 'mode_quote': state['mode_quote']},
                          'config': {'checks': checks, 'check_kind': args.check_kind, 'adapter': 'command' if command else 'codex',
                                     'host_command': command, 'codex_bin': args.codex_bin, 'max_fix_rounds': rounds,
@@ -245,7 +245,8 @@ class Driver:
                    'design': str(self.project.document(state, 'design')), 'plan_file': str(self.project.document(state, 'plan')),
                    'workflow_state': str(self.run / 'state.json'), 'driver_state': str(self.file),
                    'workflow_guard': digest(self.run / 'state.json'), 'input_fingerprint': fingerprint(self.project.root),
-                   'review_findings': self.data['review_findings'], 'answers': self.data['answers'][-5:],
+                   'review_findings': self.data['review_findings'], 'plan_findings': self.data.get('plan_findings', []),
+                   'answers': self.data['answers'][-5:],
                    'checks': self.data['config']['checks'], 'check_kind': self.data['config']['check_kind'],
                    'schema': str(folder / 'schema.json'), 'result': str(folder / 'response.json'),
                    'job_file': str(folder / 'job.json'), 'at': now(), 'worker': None}
@@ -284,6 +285,18 @@ class Driver:
             accepted = Path(job['result']).parent / 'accepted.json'
             if accepted.exists():
                 raise WorkflowError('RESULT_ALREADY_ACCEPTED inspect partially applied attempt; do not replay')
+            rejected = accepted.with_name('rejected.json')
+            if rejected.exists():
+                raise WorkflowError('RESULT_ALREADY_REJECTED inspect interrupted rejection; do not replay')
+            if job['phase'] == 'plan' and result['outcome'] == 'completed':
+                # Check before accepting, writing the bound plan or registering tasks.
+                _, quality = self.plan_candidate(state, result['plan'])
+                if not quality['structural_ok']:
+                    atomic(rejected, {'job': ident, 'sha256': digest(file), 'at': now(), 'quality': quality})
+                    self.data.update(pending=None, phase='plan', status='runnable', reason=None,
+                                     pending_fix='plan', plan_findings=quality['findings'])
+                    self.save('plan-rejected')
+                    return {'action': 'continue', 'phase': 'plan', 'quality': quality}
             atomic(accepted, {'job': ident, 'sha256': digest(file), 'exit': exit_code, 'at': now()})
             self.data['pending'] = None
             outcome = result['outcome']
@@ -307,7 +320,7 @@ class Driver:
                 return {'action': 'continue'}
             if job['phase'] == 'plan':
                 self.apply_plan(state, result['plan'])
-                self.data['phase'] = 'execute'
+                self.data.update(phase='execute', pending_fix=None, plan_findings=[])
             elif job['phase'] in ('execute', 'fix-task'):
                 receipt, passed = self.check(state, job['task']['id'])
                 if passed:
@@ -362,15 +375,28 @@ class Driver:
                     raise WorkflowError('RESULT_SCHEMA missing task acceptance')
                 seen.add(task['id'])
 
-    def apply_plan(self, state, plan):
+    def plan_candidate(self, state, plan):
+        from .plan_quality import MAX_PLAN_BYTES, check_plan
         if state['tasks']:
             raise WorkflowError('PLAN_RECONCILIATION_REQUIRED preserve existing tasks; seal their plan explicitly')
         spec_link = self.project.document_link(state, 'design', self.project.document(state, 'plan').parent)
-        atomic(self.project.document(state, 'plan'), f'Spec: [approved design]({spec_link})\n\n' + plan['text'])
+        text = f'Spec: [approved design]({spec_link})\n\n' + plan['text']
+        if len(text.encode('utf-8')) > MAX_PLAN_BYTES:
+            quality = {'schema': 1, 'structural_ok': False, 'semantic_review': 'NOT_CHECKED',
+                       'findings': [{'code': 'PLAN_TOO_LARGE', 'task': None, 'detail': 'Plan limit is 1 MiB UTF-8'}]}
+        else:
+            quality = check_plan(text, [task['id'] for task in plan['tasks']])
+        return text, quality
+
+    def apply_plan(self, state, plan):
+        text, quality = self.plan_candidate(state, plan)
+        if not quality['structural_ok']:
+            raise WorkflowError('PLAN_STRUCTURE_INVALID ' + json.dumps(quality['findings'], ensure_ascii=False))
+        atomic(self.project.document(state, 'plan'), text)
         for task in plan['tasks']:
             dispatch(self.project, Namespace(command='task-add', id=self.task, task=task['id'], title=task['title'],
                 acceptance=task['acceptance'], depends=','.join(task['depends']), no_tests_reason=task['no_tests_reason'] or None))
-        dispatch(self.project, Namespace(command='seal-plan', id=self.task))
+        dispatch(self.project, Namespace(command='seal-plan', id=self.task, check_structure=True))
 
     def record_answer(self, source, answer):
         self.data['answers'].append({'at': now(), 'source': source, 'answer': redact(answer)})
@@ -483,6 +509,34 @@ class Driver:
             atomic(file, redact(file.read_text(encoding='utf-8', errors='replace')))
         self.submit(job['id'], job['result'], code)
 
+    def rejected_plan_for_recovery(self, state, pending):
+        """Reconcile a durable rejection before changing either state file."""
+        if not pending or pending['phase'] != 'plan':
+            return None
+        attempt = self.folder / 'attempts' / slug(pending['id'])
+        marker = attempt / 'rejected.json'
+        if not marker.exists():
+            return None
+        try:
+            response = attempt / 'response.json'
+            rejected = read(marker)
+            if (Path(pending['result']).resolve() != response.resolve()
+                    or (attempt / 'accepted.json').exists()
+                    or response.stat().st_size > 2_000_000
+                    or rejected['job'] != pending['id']
+                    or rejected['sha256'] != digest(response)):
+                raise WorkflowError('rejection identity or response changed')
+            result = read(response)
+            self.validate_result(result, pending)
+            if result['outcome'] != 'completed':
+                raise WorkflowError('rejection does not describe a completed candidate')
+            _, quality = self.plan_candidate(state, result['plan'])
+            if quality['structural_ok'] or rejected['quality'] != quality:
+                raise WorkflowError('rejection diagnostics do not match candidate')
+            return quality
+        except (WorkflowError, OSError, ValueError, KeyError, TypeError) as exc:
+            raise WorkflowError('PLAN_REJECTION_MISMATCH inspect rejected attempt: ' + str(exc)) from exc
+
     def recover(self, args):
         report = Path(args.evidence).resolve()
         if not inside(self.project.root, report) or not report.is_file() or not args.reason.strip():
@@ -508,18 +562,24 @@ class Driver:
             self.project.valid_design(state, self.doc)
             if state['design_approval']['sha256'] != self.data['binding']['design']:
                 raise WorkflowError('DESIGN_RECONFIGURATION_REQUIRED do not rebind approval through recovery')
+            pending = self.data.get('pending')
+            rejected_plan = self.rejected_plan_for_recovery(state, pending)
+            sealed_plan = state.get('plan_seal') and self.data['phase'] == 'plan'
+            if sealed_plan:
+                self.project.valid_plan(state, self.doc)
             interrupted_check = state.pop('inflight', None)
             state['verification_epoch'] = state.get('verification_epoch', 0) + 1
             state['review'] = None
             state['status'] = 'needs-verification'
             self.project.write(state, 'driver-recovery', args.reason)
-            pending = self.data.get('pending')
-            if pending and pending['phase'] == 'review':
+            if rejected_plan:
+                self.data.update(phase='plan', pending_fix='plan', plan_findings=rejected_plan['findings'])
+            elif pending and pending['phase'] == 'review':
                 self.data['phase'] = 'verify'
             elif state.get('plan_seal') and state['tasks'] and all(t['status'] == 'done' for t in state['tasks']):
-                self.data.update(phase='verify', pending_fix=None)
-            elif state.get('plan_seal') and self.data['phase'] == 'plan':
-                self.data['phase'] = 'execute'
+                self.data.update(phase='verify', pending_fix=None, plan_findings=[])
+            elif sealed_plan:
+                self.data.update(phase='execute', pending_fix=None, plan_findings=[])
             check_process=self.data.get('pending_check')
             self.data.update(status='runnable', gate=None, reason=None, pending=None, pending_check=None, stop_requested=False)
             (self.folder/'stop.json').unlink(missing_ok=True)

@@ -64,7 +64,9 @@ def move(root,source,destination,apply=False):
         for rel in s.get('documents',{}).values():protected.add(safe(root,rel).resolve())
         folder=s.get('doc_dir','docs/gsp/tasks/'+s['id'])
         for name in ('design.md','plan.md','review.md','delivery.md','decisions.md'):protected.add(safe(root,folder+'/'+name).resolve())
-    for p in (root/'docs/work').glob('*/*/record.json'):
+    records = (p for pattern in ('*/*/record.json', '*/*/*/record.json')
+               for p in (root/'docs/work').glob(pattern))
+    for p in records:
         if not inside(root,p):raise WorkflowError('DOCUMENT_RECORD_ESCAPE')
         for rel in read(p).get('documents',{}).values():protected.add(safe(root,rel).resolve())
     if src in protected or dst in protected:raise WorkflowError('DOCUMENT_BOUND use explicit documents-adopt with approval/evidence reconciliation')

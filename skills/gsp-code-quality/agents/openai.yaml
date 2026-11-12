@@ -1,0 +1,4 @@
+interface:
+  display_name: "GstackSP code-quality"
+  short_description: "GstackSP 项目工作流：项目需要建立基线、检查本次改动质量或在交付前执行完整质量门禁时"
+  default_prompt: "Use $gsp-code-quality for the relevant part of this project task."

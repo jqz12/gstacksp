@@ -5,12 +5,17 @@ description: Use when starting a development task in a project using GstackSP, o
 
 # GstackSP 工作流
 
+阶段总结和交付使用固定“本轮技能执行顺序”四列表格，遵循 [交付与衔接](references/output-handoff.md)：展示实际成果、实际使用/仅参考的技能、证据及下一动作与执行者；已授权的当前工作继续推进，不等用户逐项提醒。
+
+路由选择遵循 [统一路由契约](references/routing.md)；事件和报告语义遵循 [观测日志](references/observability.md)，没有宿主事件时保留 `unknown`。
+
 先读 [共同契约](references/contract.md) 和 [SP 适配契约](references/sp-adapter.md)，只加载当前阶段需要的技能。运行脚本位置：本技能的 `scripts/gsp.py`；源码包则为仓库根 `scripts/gsp.py`。下面以 `<gsp>` 表示 `python "<脚本绝对路径>" --project "<目标项目绝对路径>"`。
 
 1. 看宿主真实工具列表；存在 `.gsp/active.json` 时运行 `<gsp> resume <id>`，按输出核对项目、规格、计划和决策。发现分歧先调查，不盲续、不覆盖。
 2. 新需求读 `gsp-brainstorming`。明确的小改可用短设计；已充分批准的方案继续执行，无需重新批准相同内容。建立任务用 `<gsp> init`、`<gsp> new <id> --title "标题"`。
 3. 在首次写实现前落实工作位置和冻结选择。未指定冻结时问一次并给推荐；明确的小修改可原地冻结。无人值守须有用户实际授权，按推荐记录，不假造用户答复。
 4. 设计确认后依次使用 `gsp-writing-plans`、`gsp-execute`；计划评审 `gsp-autoplan` 按复杂度使用。测试、调试、审查在执行中调用。UI 按需调用 `gsp-browse`、`gsp-qa` 及已安装视觉扩展。
+   阶段交接核对[实际产物与接口文档](references/artifact-fidelity.md)，读取完整阶段正文，不能以本入口摘要代替方法；计划自查后使用 `plan-check` 和 `seal-plan --check-structure`。
 5. 所有任务完成后只做一次整体 `gsp-review`，由 `gsp-verify` 确认证据，`gsp-ship` 准备交付。有精确外部操作授权则执行对应动作，不重复问。保存恢复用 `gsp-context-save`。
 
 每个阶段按需读取项目根 `TODOS.md`，延期问题必须有归宿，必做问题不能靠延期解除阻塞。维护规则见 [待办生命周期](references/backlog.md)。
@@ -24,7 +29,13 @@ description: Use when starting a development task in a project using GstackSP, o
 
 用户未选择且没有既有明确选择时，询问一次安装范围，并展示实际目标路径后执行；已有明确选择直接沿用，不重复问。Codex 与 Claude 分别选择宿主，全局安装分别执行，不因一个宿主的授权改另一个宿主。任务规格、计划、待办和证据始终各自在目标项目中。日常开发不因没有项目技能目录而要求重复安装；先检查已存在的用户级安装。
 
+## Codex 全局 hooks
+
+已授权的 Codex 全局 hooks 使用 `<gsp> hooks-install` 独立安装；检查用 hooks-status，实验汇总用 hooks-report；维护用 hooks-upgrade/hooks-uninstall/hooks-recover，支持 --dry-run 与 --profile。不得改写宿主信任记录。只有 GSP 项目生效；冻结仅检查支持的直接编辑，不把 Shell/MCP 副作用宣传为已阻止。详细能力和限制见 [hooks 契约](references/codex-hooks.md)。
+
 ## 文档治理
+
+新项目文档入口、老项目完整接入或集中整理使用按需技能 gsp-document-governance；health 只检查并交接，已有整改授权则继续处理。执行见 [治理执行规则](references/document-governance-execution.md)。完整治理必须对照用户原始目标验收，不能在 spec 中静默缩小为盘点或预览。日常只维护受本次改动影响的资料，不重复启动全库治理。
 
 文档位置与生命周期见 [治理契约](references/document-governance.md)。明确保存想法用 work-new；开始任务前 docs-search 检索相关模块与历史，已有想法用 new --work 接续。新任务按阶段生成 docs/work 下档案，不在原版默认目录重复创建。文档检查调用 gsp-health 的 --documents-only；旧项目统一布局先盘点、再预览迁移，不长期双写。
 <!-- sp-preserved-body:begin -->

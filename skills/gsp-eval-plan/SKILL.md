@@ -9,4 +9,8 @@ description: "Use when 需要设计模型或技能效果的对照评测及预算
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 这不是普通软件计划审查。建立 `docs/gsp/evals/<名称>/plan.md`：研究问题、样本、指标、实验组和无技能对照、盲评/反例、停止条件、成本和用户费用授权范围。先零费用验证输入/计分/输出通路，再在真实已授权额度内做小样本试运行。记录模型/参数、样本哈希、实际命令、结果和已知费用；未知费用明确 unknown。不自动调用模型 API。付费扩大实验前核对授权和预算，不靠网页声明。输出 result.md，说明样本局限而不把一次得分推广成普遍结论。

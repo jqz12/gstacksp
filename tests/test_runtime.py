@@ -17,6 +17,19 @@ CLI = ROOT / 'scripts' / 'gsp.py'
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_ignored_test_script_change_invalidates_ready_on_status(self):
+        folder=self.task()
+        script=self.project/'.gsp/local-tests.py'
+        script.write_text("print('Ran 1 test')",encoding='utf-8')
+        self.cli('run','login','--task','T1','--',sys.executable,str(script))
+        self.cli('task-done','login','T1')
+        self.cli('run','login','--task','all','--',sys.executable,str(script))
+        (folder/'review.md').write_text('# Review\nFixture reviewed.',encoding='utf-8')
+        self.cli('review','login','--reviewer','self','--blocking','0')
+        self.cli('ready','login')
+        script.write_text("print('Ran 2 tests')",encoding='utf-8')
+        self.assertEqual(json.loads(self.cli('status','login').stdout)['status'],'needs-verification')
+
     def test_observed_commit_preserves_ready_only_for_unchanged_inputs(self):
         def git(*args):
             result = run(['git', '-C', str(self.project), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'core.hooksPath=', *args], capture_output=True)

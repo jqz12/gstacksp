@@ -1,6 +1,6 @@
 # SP 原版保留与 GstackSP 适配契约
 
-> 0.7 文档治理更新：新任务默认固定档案 docs/work/<年份>/<编号-初始标题>/spec.md、plan.md，其他文档按阶段产生；旧布局继续绑定兼容。下文的 docs/superpowers 与 docs/gsp/tasks 路径为旧布局说明，实际以 status/resume 返回路径为准。documents-adopt 现允许项目 docs 内已有 Markdown。完整新规则见 [文档治理](document-governance.md)。
+> 当前文档治理布局（0.8.4）：新任务默认固定档案 docs/work/<年份>/<月份>/<编号-初始标题>/spec.md、plan.md，其他文档按阶段产生；旧布局继续绑定兼容。docs/superpowers 与 docs/gsp/tasks 仅为旧布局兼容，实际以 status/resume 返回路径为准。documents-adopt 现允许项目 docs 内已有 Markdown。完整新规则见 [文档治理](document-governance.md)。
 
 这是差异说明，不是原版摘要。固定基线为本地 Superpowers 7.0.2 文件快照，82 个文件逐个 SHA-256；未验证父本独立 Git 提交。完整原文件在 ../upstream/。主技能正文保留全部原文，只定向正文 Markdown 资源链接，不删除步骤、示例、反例、检查清单。英文原文避免翻译漂移。
 
@@ -28,9 +28,9 @@ upstream 路径相对 gsp-workflow。进入子代理执行、并行调查、隔�
 
 ## 规格和计划治理
 
-采用原版 docs/superpowers/specs/YYYY-MM-DD-<任务ID>-design.md 和 docs/superpowers/plans/YYYY-MM-DD-<任务ID>.md。用 new 分配，status/resume 返回固定关联，不猜日期。design 就是 spec；plan 明确引用 spec，不另建重复 spec.md。结构与内容检查按完整 brainstorming/writing-plans 执行。
+新任务默认 docs/work/YYYY/MM/<编号-初始标题>/spec.md 与 plan.md；创建年月固定、两位月份，跨月不移动。旧年目录和旧 specs/plans 位置仅兼容已有绑定，不重新生成一份。实际以status/resume返回路径为准。spec是设计唯一正本，plan明确引用它。
 
-审查、决策、交付在 docs/gsp/tasks/<id>/，机器状态在 .gsp/runs/<id>/。approve 绑定规格，task-add 登记完整任务后 seal-plan。旧任务无 documents 字段则沿用旧目录，不静默搬迁。显式迁移先复制核对分类文档，再 documents-adopt --spec <相对路径> --plan <相对路径> --reason <原因>；CLI 保留旧关联和批准历史，撤销当前批准、封存和证据有效性；原文件作为历史保留，之后只编辑新正本，再重新确认批准。存在驱动现场或未知执行时禁止重新关联。
+审查、决策、交付在同一任务档案，机器状态在.gsp/runs/<运行ID>/。旧状态不静默搬迁。显式documents-adopt保留旧关联历史、撤销批准与证据，需核实后按真实授权重新确认；不得绕过在场驱动和未知执行保护。
 
 ## 执行账本与单一状态正本
 
@@ -53,6 +53,8 @@ SP 的 progress.md 是每个计划、每个工作树的 scratch ledger，不是�
 默认先讨论确认设计。对同一已确认内容不重复批准，改变设计仍需核对范围。只有真实无人值守授权才按有依据的推荐连续处理普通技术选择；不能削弱设计质量、测试、审查和失败上限。默认到交付准备。原版自动提交示例、固定收尾菜单、英语 discard 口令不能替代或扩大真实授权；已有精确推送/合并/删除授权不重问，付费、部署、消息等按实际范围。未提交或不归属本任务的文件不擅自删除。
 
 ## GS / CLI 接入点（不替代原版方法）
+
+实际产物的阶段检查见 [产物一致性](artifact-fidelity.md)。原版完整自查结果在本任务 plan.md 的 Self-Review 留痕；这是 GSP 的记录落点。计划自查后运行 plan-check，并以 seal-plan --check-structure 封存。结构合格不代替内容判断，也不回写历史任务伪造遵循。
 
 - brainstorming：读根待办；保留完整讨论、设计、builder check；确认后 approve。
 - writing-plans：保留完整任务粒度、全局约束、Review Focus、spec coverage；根待办按需关联，完整 task-add 后 seal-plan。按风险使用 autoplan/UI/devex，不叠加 GS 四阶段。

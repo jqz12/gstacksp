@@ -119,53 +119,9 @@ def git_identity(root):
 SKIP_DIRS = {'.git', '.gsp', '.agents', '.claude', '__pycache__', 'node_modules', '.venv', 'venv', '.pytest_cache'}
 
 
-def snapshot(root):
-    """Hash project inputs, including untracked files, without following links.
-
-    Hashes (not file bodies) remain local. Generated workflow documents have
-    separate approval/review hashes; dependency directories are not inputs.
-    """
-    root = Path(root)
-    records = {'@gsp-input-schema':'2'}
-    for folder, dirs, files in os.walk(root, followlinks=False):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not Path(folder, d).is_symlink())
-        # Historical workflow artifacts have separate contract bindings. Prune
-        # traversal itself, not just hashing, so closed history is not an input.
-        if Path(folder).relative_to(root).as_posix() in ('docs/work', 'docs/superpowers', 'docs/gsp'):
-            dirs[:] = []
-            continue
-        for name in sorted(files):
-            path = Path(folder, name)
-            rel = path.relative_to(root).as_posix()
-            if rel.startswith('docs/gsp/') or name.endswith('.pyc'):
-                continue
-            if path.is_symlink():
-                records[rel] = 'link:' + os.readlink(path)
-            else:
-                try:
-                    records[rel] = digest(path)
-                except OSError as exc:
-                    raise WorkflowError(f'FINGERPRINT_FAILED {rel}: {exc}') from exc
-    # Execution provenance is not a second backlog, but it controls completion
-    # and blockers. Unlike transient .gsp files, its changes revoke old evidence.
-    backlog_records = root / '.gsp/backlog/records.json'
-    if not inside(root, backlog_records):
-        raise WorkflowError('FINGERPRINT_FAILED backlog execution records escape project')
-    if backlog_records.is_file():
-        records['.gsp/backlog/records.json'] = digest(backlog_records)
-    policy=root/'.gsp/verification-inputs.json'
-    if not inside(root,policy): raise WorkflowError('VERIFICATION_POLICY_ESCAPE')
-    if policy.exists():
-        data=read(policy)
-        patterns=data.get('include',[])
-        if not isinstance(patterns,list) or any(not isinstance(p,str) or Path(p).is_absolute() or '..' in Path(p).parts for p in patterns):
-            raise WorkflowError('VERIFICATION_POLICY_INVALID')
-        records['.gsp/verification-inputs.json']=digest(policy)
-        for pattern in patterns:
-            for p in root.glob(pattern):
-                if not inside(root,p):raise WorkflowError('VERIFICATION_INPUT_ESCAPE')
-                if p.is_file():records[p.relative_to(root).as_posix()]=digest(p)
-    return records
+def snapshot(root, deadline=None, progress=None):
+    from .verification_inputs import scan
+    return scan(root, deadline=deadline, progress=progress)
 
 
 def fingerprint(root):
@@ -294,6 +250,8 @@ class Project:
             try:
                 self.valid_design(state, doc)
                 self.valid_plan(state, doc)
+                for rel in state.get('evidence',[])[-1:]:
+                    verify_command_inputs(self.root,read(self.root/rel))
                 review = state.get('review') or {}
                 stale |= (any(t['status'] != 'done' for t in state['tasks']) or
                           review.get('sha256') != digest(doc / 'review.md') or
@@ -365,7 +323,11 @@ class Project:
             title = state['title'].replace('|', '\\|').replace('\n', ' ')
             folder=self.paths(tid)[1]
             link=lambda name: os.path.relpath(folder/name,self.root/'docs/gsp').replace('\\','/')
-            lines.append(f"| [{title}]({link('decisions.md')}) | {state['status']} | {pending} | [规格]({self.document_link(state, 'design', self.root / 'docs/gsp')}) | [计划]({self.document_link(state, 'plan', self.root / 'docs/gsp')}) | [交付]({link('delivery.md')}) |")
+            title_link = f"[{title}]({link('decisions.md')})" if (folder/'decisions.md').is_file() else title
+            document_cell = lambda kind, label: (f"[{label}]({self.document_link(state, kind, self.root/'docs/gsp')})"
+                                                  if self.document(state, kind).is_file() else '待生成')
+            delivery_cell = f"[交付]({link('delivery.md')})" if (folder/'delivery.md').is_file() else '待生成'
+            lines.append(f"| {title_link} | {state['status']} | {pending} | {document_cell('design', '规格')} | {document_cell('plan', '计划')} | {delivery_cell} |")
         lines += ['', '最近最多 50 个已更新执行记录；历史使用 docs-search / docs-index。']
         atomic(self.root / 'docs/gsp/README.md', '\n'.join(lines) + '\n')
 
@@ -463,6 +425,9 @@ class Project:
 
 
 def test_count(output):
+    from .test_results import cargo_summary
+    cargo=cargo_summary(output)
+    if cargo is not None:return cargo['passed']+cargo['failed']
     counts = []
     for pattern in (r'Ran\s+(\d+)\s+tests?\b', r'(\d+)\s+passed\b', r'(\d+)\s+pass\b',
                     r'#\s*tests\s+(\d+)', r'Tests:\s+(\d+)\s+passed', r'(\d+)\s+tests?\s+passed'):
@@ -473,6 +438,26 @@ def test_count(output):
 def contract_hash(project, state, doc):
     return sha(json.dumps({'design': digest(project.document(state, 'design')), 'plan': digest(project.document(state, 'plan')),
                            'tasks': project.task_definition_hash(state)}, sort_keys=True).encode())
+
+
+def command_input_hashes(root, argv):
+    """Bind directly named local script entrypoints, including ignored .gsp files."""
+    root=Path(root).resolve();result={}
+    for arg in argv:
+        if not isinstance(arg,str) or arg.startswith('-') or '\n' in arg:continue
+        path=root/arg
+        if path.suffix.lower() not in ('.py','.ps1','.sh','.cmd','.bat','.js','.mjs'):continue
+        if path.is_file() and inside(root,path):
+            if path.is_symlink():raise WorkflowError('COMMAND_INPUT_LINK_REFUSED')
+            result[path.resolve().relative_to(root).as_posix()]=digest(path)
+    return result
+
+
+def verify_command_inputs(root, receipt):
+    for rel,expected in receipt.get('command_inputs',{}).items():
+        path=Path(root)/rel
+        if not inside(root,path) or not path.is_file() or path.is_symlink() or digest(path)!=expected:
+            raise WorkflowError('COMMAND_INPUT_CHANGED '+rel)
 
 
 def run_check(project, state, run, args):
@@ -490,28 +475,63 @@ def run_check(project, state, run, args):
         raise WorkflowError('COMMAND_REQUIRED use -- followed by executable and individual arguments')
     if args.timeout <= 0:
         raise WorkflowError('INVALID_TIMEOUT must be positive')
-    before = snapshot(project.root)
+    start = time.monotonic()
+    deadline = start + args.timeout
     evidence_id = uuid.uuid4().hex
     folder = run / 'evidence' / evidence_id
     folder.mkdir(parents=True, exist_ok=False)
-    state['inflight'] = {'id': evidence_id, 'task': args.task, 'at': now(), 'argv': [redact(a) for a in argv]}
+    state['inflight'] = {'id': evidence_id, 'task': args.task, 'phase':'pre-scan', 'at': now(), 'argv': [redact(a) for a in argv]}
     if args.task == 'all':
         state['status'] = 'checking'
         invalidate_delivery(project.paths(state['id'])[1], '新的最终回归尚未完成，需要验证后重新 ready。')
     project.write(state, 'run-start', evidence_id)
-    start = time.monotonic()
     launch_error = None
+    phase='pre-scan'
+    def progress(row):
+        atomic(folder/'scan-progress.json', {'phase':phase, **row})
+        print(f'GSP_SCAN {phase}: files={row["files"]} bytes={row["bytes"]} elapsed={row["elapsed_s"]}s',file=sys.stderr,flush=True)
+    try:
+        before = snapshot(project.root, deadline=deadline, progress=progress)
+        command_inputs=command_input_hashes(project.root,argv)
+        remaining=deadline-time.monotonic()
+        if remaining<=0:raise WorkflowError('SCAN_TIMEOUT budget expired before command launch')
+    except WorkflowError as exc:
+        atomic(folder/'scan-error.json',{'phase':phase,'error':str(exc),'command_started':False,'at':now()})
+        state.pop('inflight',None)
+        state['status']='needs-verification'
+        project.write(state,'scan-failed',evidence_id)
+        raise
+    state['inflight']['phase']='command'
+    project.write(state,'command-start',evidence_id)
     try:
         runner = getattr(args, 'runner', None)
         windows_flags = (subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == 'nt' else 0
-        result = (runner(argv, args.timeout) if runner else
+        remaining=deadline-time.monotonic()
+        if remaining<=0:
+            atomic(folder/'scan-error.json',{'phase':'pre-command','error':'SCAN_TIMEOUT','command_started':False,'at':now()})
+            state.pop('inflight',None);state['status']='needs-verification'
+            project.write(state,'scan-failed',evidence_id)
+            raise WorkflowError('SCAN_TIMEOUT budget expired before command launch')
+        result = (runner(argv, remaining) if runner else
                   subprocess.run(argv, cwd=project.root, capture_output=True, text=True,
-                                 encoding='utf-8', errors='replace', timeout=args.timeout, creationflags=windows_flags))
+                                 encoding='utf-8', errors='replace', timeout=remaining, creationflags=windows_flags))
         stdout, stderr, code = result.stdout, result.stderr, result.returncode
     except (OSError, subprocess.TimeoutExpired) as exc:
         stdout, stderr, code = '', str(exc), None
         launch_error = type(exc).__name__
-    after = snapshot(project.root)
+    atomic(folder / 'stdout.txt', redact(stdout))
+    atomic(folder / 'stderr.txt', redact(stderr))
+    atomic(folder/'command-result.json',{'exit':code,'launch_error':launch_error,'at':now()})
+    phase='post-scan'
+    state['inflight']['phase']=phase
+    project.write(state,'post-scan',evidence_id)
+    try:
+        after = snapshot(project.root, deadline=deadline, progress=progress)
+    except WorkflowError as exc:
+        atomic(folder/'scan-error.json',{'phase':phase,'error':str(exc),'command_started':True,'exit':code,'at':now()})
+        # Preserve inflight: a real command ran but its side effects are unverified.
+        project.write(state,'scan-failed',evidence_id)
+        raise
     changes = sorted(p for p in set(before) | set(after) if before.get(p) != after.get(p))
     violations = []
     if state['scope']['mode'] == 'frozen':
@@ -520,10 +540,16 @@ def run_check(project, state, run, args):
                 project.scope_path(state, file)
             except WorkflowError:
                 violations.append(file)
+    from .test_results import cargo_summary
+    summary=cargo_summary(stdout+'\n'+stderr) if args.kind=='tests' else None
     count = test_count(stdout + '\n' + stderr) if args.kind == 'tests' else None
     status = 'pass' if code == 0 else 'fail'
     if launch_error:
         status = 'not-run'
+    elif code != 0:
+        status = 'fail'
+    elif summary and summary['failed']:
+        status = 'failed-output'
     elif args.kind == 'tests' and count == 0:
         status = 'zero-tests'
     elif args.kind == 'tests' and count is None:
@@ -532,14 +558,15 @@ def run_check(project, state, run, args):
         status = 'failed-output'
     if violations:
         status = 'scope-violation'
-    if before != after and status == 'pass':
+    command_inputs_changed=command_input_hashes(project.root,argv)!=command_inputs
+    if (before != after or command_inputs_changed) and status == 'pass':
         status = 'inputs-changed'
     atomic(folder / 'stdout.txt', redact(stdout))
     atomic(folder / 'stderr.txt', redact(stderr))
     receipt = {'schema': 1, 'id': evidence_id, 'task': args.task, 'kind': args.kind, 'at': now(),
                'argv': [redact(a) for a in argv], 'exit': code, 'launch_error': launch_error,
-               'duration_s': round(time.monotonic() - start, 3), 'status': status, 'tests_ran': count,
-               'fingerprint': fingerprint(project.root), 'changed_paths': changes, 'scope_violations': violations,
+               'duration_s': round(time.monotonic() - start, 3), 'status': status, 'tests_ran': count, 'test_summary':summary,
+               'fingerprint': sha(json.dumps(after, sort_keys=True).encode()), 'changed_paths': changes, 'scope_violations': violations, 'command_inputs':command_inputs,
                'contract': contract_hash(project, state, project.paths(state['id'])[1]),
                'verification_epoch': state.get('verification_epoch', 0),
                'logs': {name: digest(folder / name) for name in ('stdout.txt', 'stderr.txt')}}
@@ -552,17 +579,25 @@ def run_check(project, state, run, args):
     return receipt, status == 'pass'
 
 
-def evidence_for(project, state, task_id, current_fingerprint=None, current_contract=None):
+def evidence_for(project, state, task_id, current_fingerprint=None, current_contract=None,
+                 allow_historical=False):
     rows = [read(project.root / p) for p in state['evidence']]
-    rows = [r for r in rows if r['task'] in (task_id, 'all')]
+    # A whole-project `all` receipt is the final regression lane, not the
+    # task's own evidence.  Mixing it into this lookup makes a later
+    # non-test check shadow a valid task test and incorrectly raises
+    # TESTS_REQUIRED during ready.
+    rows = [r for r in rows if r['task'] == task_id]
     if not rows:
         raise WorkflowError('EVIDENCE_MISSING ' + task_id)
     latest = rows[-1]
-    if latest['status'] != 'pass' or latest['fingerprint'] != (current_fingerprint or fingerprint(project.root)):
+    verify_command_inputs(project.root,latest)
+    expected_fingerprint = current_fingerprint or fingerprint(project.root)
+    if latest['status'] != 'pass' or (not allow_historical and latest['fingerprint'] != expected_fingerprint):
         raise WorkflowError('EVIDENCE_STALE_OR_FAILED ' + task_id)
     if latest.get('contract') != (current_contract or contract_hash(project, state, project.paths(state['id'])[1])):
         raise WorkflowError('EVIDENCE_CONTRACT_CHANGED ' + task_id)
-    if latest.get('verification_epoch', 0) != state.get('verification_epoch', 0):
+    if (not allow_historical and
+            latest.get('verification_epoch', 0) != state.get('verification_epoch', 0)):
         raise WorkflowError('EVIDENCE_BEFORE_RECOVERY ' + task_id)
     folder = project.root / next(p for p in state['evidence'] if p.endswith(latest['id'] + '/receipt.json'))
     for name, expected in latest['logs'].items():
@@ -664,14 +699,17 @@ def parser():
     p.add_argument('--project', default='.', help='absolute or relative target project directory')
     sub = p.add_subparsers(dest='command', required=True)
     sub.add_parser('init')
+    q = sub.add_parser('plan-check', help='read-only bound plan structure check; semantic review is separate')
+    q.add_argument('id')
     n = sub.add_parser('new'); n.add_argument('id'); n.add_argument('--title', required=True); n.add_argument('--mode', choices=['interactive', 'unattended'], default='interactive'); n.add_argument('--quote')
     n.add_argument('--legacy-layout',action='store_true',help='compatibility: separated spec/plan layout')
     n.add_argument('--work',help='continue a saved idea by UUID or number')
-    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'run', 'scope', 'check-path', 'review', 'ready', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'observe-head', 'recover-run', 'documents-adopt'):
+    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'run', 'scope', 'check-path', 'review', 'ready', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'observe-head', 'recover-run', 'documents-adopt', 'acceptance-enable', 'acceptance-record'):
         q = sub.add_parser(name); q.add_argument('id')
         if name == 'documents-adopt':
             q.add_argument('--spec', required=True); q.add_argument('--plan', required=True); q.add_argument('--reason', required=True)
         elif name == 'approve': q.add_argument('--quote', required=True)
+        elif name == 'seal-plan': q.add_argument('--check-structure', action='store_true', help='reject structural gaps before sealing; does not prove semantic quality')
         elif name == 'task-add':
             q.add_argument('task'); q.add_argument('--title', required=True); q.add_argument('--acceptance', required=True); q.add_argument('--depends', default=''); q.add_argument('--no-tests-reason')
         elif name in ('task-start', 'task-done'): q.add_argument('task')
@@ -689,10 +727,24 @@ def parser():
         elif name == 'block': q.add_argument('--reason', required=True)
         elif name == 'observe-head': q.add_argument('--reason', required=True)
         elif name == 'recover-run': q.add_argument('--evidence', required=True); q.add_argument('--outcome', choices=['not-run', 'failed'], required=True)
+        elif name == 'acceptance-record': q.add_argument('task'); q.add_argument('--card', required=True)
+    sub.add_parser('codex-hook', help='native Codex hook protocol (stdin JSON)')
+    sub.add_parser('hooks-report', help='bounded offline Codex hook audit summary for --project')
+    for name in ('hooks-install','hooks-upgrade','hooks-uninstall','hooks-recover','hooks-status'):
+        q = sub.add_parser(name, help='maintain GSP Codex user-level hooks only')
+        q.add_argument('--profile', help='Codex profile root (default: ~/.codex)')
+        q.add_argument('--dry-run', action='store_true')
     q = sub.add_parser('health'); q.add_argument('--host', choices=['claude', 'codex', 'both'], default='both')
     q.add_argument('--documents',action='store_true',help='include document governance audit')
     q.add_argument('--documents-only',action='store_true',help='read-only target; no installation checks')
     q.add_argument('--report-dir',help='explicit report destination (default: target docs/gsp/reports/document-governance)')
+    q = sub.add_parser('observe', help='build a local privacy-preserving GSP observability report')
+    q.add_argument('--run-id', help='stable report directory name; defaults to a unique UTC id')
+    q = sub.add_parser('quality', help='run the project-declared, bounded quality stack')
+    q.add_argument('--mode', choices=['change', 'baseline', 'release'], default='change')
+    q.add_argument('--task', default='quality')
+    q.add_argument('--run-id')
+    q.add_argument('--config', help='project-relative quality stack JSON (default .gsp/quality.json)')
     for name in ('install','upgrade','uninstall','install-recover'):
         q = sub.add_parser(name, description='Scopes: project = this project; user = global for the current user.')
         q.add_argument('--host', choices=['claude','codex','both'], required=True)
@@ -738,13 +790,72 @@ def install_notice(scope, host, paths):
           '规格、计划和证据仍保存于各目标项目 / Task documents and evidence stay in each project.', file=sys.stderr)
 
 
+def _emit_telemetry(project, args, result, success, event_name=None):
+    """Write a small, sanitized lifecycle event without changing command results."""
+    try:
+        from .telemetry import append_event
+        observed = {}
+        if isinstance(result, dict):
+            for key in ('status', 'event', 'next_skill', 'blocking', 'user_decision_required', 'decision_kind'):
+                if key in result:
+                    observed[key] = result[key]
+            route = result.get('route') or result.get('git_health')
+            if isinstance(route, dict):
+                observed['route'] = {key: route.get(key) for key in ('status', 'next_skill', 'blocking', 'user_decision_required', 'decision_kind') if key in route}
+            if result.get('id') and result.get('status'):
+                observed['task_status'] = result.get('status')
+        task_id = getattr(args, 'id', None)
+        payload = {
+            'project_id': None,
+            'task_id': task_id,
+            'host': 'codex' if os.environ.get('CODEX_HOME') or os.environ.get('CODEX_THREAD_ID') else 'unknown',
+            'gsp_version': __version__,
+            'event': event_name or getattr(args, 'command', 'unknown'),
+            'skill': result.get('skill') if isinstance(result, dict) else None,
+            'expected': result.get('expected') if isinstance(result, dict) else None,
+            'observed': observed,
+            'status': 'pass' if success else 'fail',
+            'decision_required': observed.get('user_decision_required', False),
+            'deviation': result.get('deviation') if isinstance(result, dict) else None,
+            'evidence': result.get('evidence', []) if isinstance(result, dict) else [],
+        }
+        if project.meta.joinpath('project.json').exists():
+            try:
+                payload['project_id'] = read(project.meta / 'project.json').get('id')
+            except WorkflowError:
+                pass
+        append_event(project.root, payload)
+    except Exception:
+        # Observability must never turn a successful workflow command into a failure.
+        pass
+
+
 def main(argv=None):
     values = list(sys.argv[1:] if argv is None else argv)
     split = values.index('--') if '--' in values else len(values)
     args = parser().parse_args(values[:split])
     args.argv = values[split + 1:]
+    project = None
     try:
+        if args.command == 'codex-hook':
+            from .codex_hooks import run
+            print(json.dumps(run(),ensure_ascii=False));return 0
+        if args.command == 'hooks-report':
+            from .codex_hooks import report
+            print(json.dumps(report(args.project),ensure_ascii=False,indent=2));return 0
+        if args.command.startswith('hooks-'):
+            from .codex_hook_install import HookInstall
+            manager=HookInstall(args.profile)
+            action=args.command.removeprefix('hooks-')
+            result=manager.status() if action=='status' else manager.recover(args.dry_run) if action=='recover' else manager.apply(action,args.dry_run)
+            print(json.dumps(result,ensure_ascii=False,indent=2))
+            return 1 if action=='status' and result.get('installed') and not result.get('integrity_ok') else 0
         project = Project(args.project)
+        if args.command == 'plan-check':
+            from .plan_quality import inspect_plan
+            result = inspect_plan(project, args.id)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result['structural_ok'] else 1
         if args.command.startswith('drive-'):
             from .driver import handle
             print(json.dumps(handle(project, args), ensure_ascii=False, indent=2))
@@ -762,13 +873,31 @@ def main(argv=None):
         if args.command == 'health':
             if args.report_dir and not (args.documents or args.documents_only): raise WorkflowError('DOCUMENT_AUDIT_REQUIRED --report-dir needs --documents')
             result = health(project.root, args.host) if not args.documents_only else {'static_ok':True,'checks':[],'live_verified':False}
+            # Health is the workflow entry point. Attach the compact Git
+            # handoff so telemetry records the route for the next skill.
+            from .document_health import git_route
+            result['route'] = git_route(project.root)
             if args.documents or args.documents_only:
                 from .document_health import audit
                 report=audit(project.root,args.report_dir)
                 result['documents']={key:report[key] for key in ('report_markdown','report_json','inventory','integrity_ok','checks')}
                 result['documents']['delta_counts']={key:len(report['delta'][key]) for key in ('new','resolved','persisting')}
                 result['static_ok'] &= report['integrity_ok']
+            _emit_telemetry(project, args, result, bool(result['static_ok']), 'health')
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0 if result['static_ok'] else 1
+        if args.command == 'observe':
+            from .telemetry import build_report
+            result = build_report(project.root, args.run_id)
+            _emit_telemetry(project, args, result, True, 'observe_report')
+            print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
+        if args.command == 'quality':
+            from .code_quality import run_quality
+            slug(args.task)
+            with locked(project.root):
+                result = run_quality(project.root, args.mode, args.task, args.run_id, args.config)
+            _emit_telemetry(project, args, result, result['status'] in {'pass', 'warn'}, 'quality')
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result['status'] in {'pass', 'warn'} else 1
         if args.command in ('install','upgrade','uninstall','install-recover'):
             if args.scope == 'user':
                 from .user_install import UserInstall
@@ -786,9 +915,12 @@ def main(argv=None):
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
         with locked(project.root):
             result, success = dispatch(project, args)
+        _emit_telemetry(project, args, result, success)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if success else 1
     except (WorkflowError, OSError, ValueError, sqlite3.Error, subprocess.TimeoutExpired) as exc:
+        if project is not None:
+            _emit_telemetry(project, args, {'status': 'failed', 'error_type': type(exc).__name__}, False, 'error')
         print(f'GSP_ERROR: {exc}', file=sys.stderr)
         return 1
 
@@ -902,11 +1034,36 @@ def dispatch(project, args):
                                'status': 'pending', 'no_tests_reason': args.no_tests_reason})
         state['plan_seal'] = None
         state['status'] = 'plan'
+    elif command == 'acceptance-enable':
+        state['acceptance_protocol'] = 'dual-track'
+        for task in state['tasks']:
+            task.setdefault('acceptance_cards', [])
+            task.setdefault('acceptance_track', {'status': 'acceptance_pending'})
+        state['status'] = 'execute'
+    elif command == 'acceptance-record':
+        from .acceptance_reporting import record_acceptance_card
+        task = project.item(state, args.task)
+        card = read(project.root / args.card)
+        card_id = card.get('id')
+        if not card_id:
+            raise WorkflowError('ACCEPTANCE_CARD_ID_REQUIRED')
+        cards = task.setdefault('acceptance_cards', [])
+        cards[:] = [existing for existing in cards if existing.get('id') != card_id]
+        cards.append(card)
+        task.setdefault('acceptance_track', {})['status'] = 'acceptance_pending'
+        record_acceptance_card(project.root, state['id'], args.task, card)
+        state['acceptance_protocol'] = 'dual-track'
+        state['status'] = 'execute'
     elif command == 'seal-plan':
         project.valid_design(state, doc)
         if not state['tasks']:
             raise WorkflowError('TASKS_MISSING register the complete implementation plan, not only review findings')
-        if '计划尚未编写' in project.document(state, 'plan').read_text(encoding='utf-8'):
+        if getattr(args, 'check_structure', False):
+            from .plan_quality import inspect_plan
+            quality = inspect_plan(project, args.id)
+            if not quality['structural_ok']:
+                raise WorkflowError('PLAN_STRUCTURE_INVALID ' + json.dumps(quality['findings'], ensure_ascii=False))
+        elif '计划尚未编写' in project.document(state, 'plan').read_text(encoding='utf-8'):
             raise WorkflowError('PLAN_EMPTY write the actual task plan first')
         state['plan_seal'] = {'sha256': digest(project.document(state, 'plan')), 'tasks_sha256': project.task_definition_hash(state), 'at': now()}
         state['status'] = 'execute'
@@ -930,6 +1087,9 @@ def dispatch(project, args):
         if task['status'] == 'done': raise WorkflowError('TASK_ALREADY_DONE do not rerun completed tasks blindly')
         if any(project.item(state, d)['status'] != 'done' for d in task['depends']): raise WorkflowError('DEPENDENCIES_PENDING')
         task['status'] = 'running'
+        if 'acceptance_cards' in task:
+            task.setdefault('implementation', {})['status'] = 'implementation_pending'
+            task.setdefault('acceptance_track', {})['status'] = 'acceptance_pending'
         state['status'] = 'execute'
     elif command == 'run':
         return run_check(project, state, run, args)
@@ -938,6 +1098,9 @@ def dispatch(project, args):
         if task['status'] != 'running': raise WorkflowError('TASK_NOT_RUNNING')
         task['evidence'] = evidence_for(project, state, args.task)['id']
         task['status'] = 'done'
+        if 'acceptance_cards' in task:
+            task.setdefault('implementation', {})['status'] = 'implementation_done'
+            task.setdefault('acceptance_track', {})['status'] = 'acceptance_pending'
         task['completed_at'] = now()
     elif command == 'task-reopen':
         if state.get('inflight'): raise WorkflowError('EXECUTION_UNKNOWN reconcile the running command before rework')
@@ -979,11 +1142,23 @@ def dispatch(project, args):
             raise WorkflowError('BACKLOG_BLOCKING unresolved required work: ' + ', '.join(blockers))
         if state.get('inflight'): raise WorkflowError('EXECUTION_UNKNOWN')
         if not state['tasks'] or any(t['status'] != 'done' for t in state['tasks']): raise WorkflowError('TASKS_INCOMPLETE')
+        from .acceptance import acceptance_track_status
+        for task in state['tasks']:
+            if 'acceptance_cards' in task:
+                status = acceptance_track_status(task['acceptance_cards'])
+                task.setdefault('acceptance_track', {})['status'] = status
+                if status != 'acceptance_verified':
+                    raise WorkflowError('ACCEPTANCE_PENDING ' + task['id'])
         fp=fingerprint(project.root);contract=contract_hash(project,state,doc)
         final = [r for r in (read(project.root / p) for p in state['evidence']) if r['task'] == 'all']
         if not final or final[-1]['status'] != 'pass' or final[-1]['fingerprint'] != fp or final[-1].get('contract') != contract or final[-1].get('verification_epoch', 0) != state.get('verification_epoch', 0):
             raise WorkflowError('FINAL_REGRESSION_REQUIRED run the final whole-project checks with --task all')
-        checks=[evidence_for(project,state,task['id'],fp,contract) for task in state['tasks']]
+        # The final `all` regression is the current whole-project fingerprint.
+        # Task-specific receipts may legitimately predate later task changes;
+        # retain their provenance while validating status, contract, logs and
+        # recovery epoch without requiring every task to rerun after each peer.
+        checks=[evidence_for(project,state,task['id'],current_contract=contract,
+                             allow_historical=True) for task in state['tasks']]
         review = state['review']
         if not review or review['blocking'] or review['fingerprint'] != fp or review['sha256'] != digest(doc / 'review.md') or review.get('contract') != contract:
             raise WorkflowError('REVIEW_MISSING_STALE_OR_BLOCKING')

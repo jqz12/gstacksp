@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "0.7.0",
+  "version": "0.8.10",
   "skills": [
     {
       "name": "gsp-workflow",
@@ -13,11 +13,40 @@
       "generated": false
     },
     {
+      "name": "gsp-git",
+      "pack": "core",
+      "sources": [
+        "GSP:git-lifecycle",
+        "SP:using-git-worktrees",
+        "SP:finishing-a-development-branch"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-document-governance",
+      "pack": "optional",
+      "sources": [
+        "GSP:document-governance"
+      ],
+      "generated": true
+    },
+    {
       "name": "gsp-health",
       "pack": "core",
       "sources": [
         "GS:health",
         "GS:gstack-doctor"
+      ],
+      "generated": true
+    },
+    {
+      "name": "gsp-code-quality",
+      "pack": "core",
+      "sources": [
+        "GSP:code-quality",
+        "GS:health",
+        "GS:test-audit",
+        "SP:verification-before-completion"
       ],
       "generated": true
     },

@@ -9,6 +9,10 @@ description: "Use when 任务将中断、换宿主、压缩上下文或需要可
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
+阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+
+路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+
 先更新任务状态和 decisions.md，确认已运行命令有证据，未完成问题和下一步清晰。运行 `<gsp> save <id>` 创建项目/分支/HEAD/文件指纹绑定的检查点。给用户任务索引、当前阶段、下一步和阻塞。保存是本地文件记录，不包括完整会话、未写入的思考、浏览器登录态或自动外部同步；下次必须 resume 验证，不能只凭摘要继续。
 
 保存前核对根 TODOS.md，未解决问题必须有来源和下一步。任务进度、长期待办和已验证经验分别保存；不把尚未解决事项当作经验结论。 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。
