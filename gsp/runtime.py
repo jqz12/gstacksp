@@ -1196,7 +1196,7 @@ def dispatch(project, args):
         # Task-specific receipts may legitimately predate later task changes;
         # retain their provenance while validating status, contract, logs and
         # recovery epoch without requiring every task to rerun after each peer.
-        checks=[evidence_for(project,state,task['id'],current_contract=contract,
+        checks=[evidence_for(project,state,task['id'],current_fingerprint=fp,current_contract=contract,
                              allow_historical=True) for task in state['tasks']]
         review = state['review']
         if not review or review['blocking'] or review['fingerprint'] != fp or review['sha256'] != digest(doc / 'review.md') or review.get('contract') != contract:
@@ -1240,8 +1240,9 @@ def dispatch(project, args):
         if preserve:
             # HEAD is provenance, not an input. Explicitly recheck the sealed
             # contract and real receipts before accepting an unchanged tree.
+            current_fingerprint = fingerprint(project.root)
             for task in state['tasks']:
-                evidence_for(project, state, task['id'])
+                evidence_for(project, state, task['id'], current_fingerprint=current_fingerprint)
         before = state['git']
         state['git'] = git_identity(project.root)
         state['head_reconciliation'] = {'previous': before, 'current': state['git'], 'reason': args.reason, 'at': now()}
