@@ -801,7 +801,7 @@ def _emit_telemetry(project, args, result, success, event_name=None):
                     observed[key] = result[key]
             route = result.get('route') or result.get('git_health')
             if isinstance(route, dict):
-                observed['route'] = {key: route.get(key) for key in ('status', 'next_skill', 'blocking', 'user_decision_required', 'decision_kind') if key in route}
+                observed['route'] = {key: route.get(key) for key in ('route_id', 'status', 'next_skill', 'blocking', 'user_decision_required', 'decision_kind') if key in route}
             if result.get('id') and result.get('status'):
                 observed['task_status'] = result.get('status')
         task_id = getattr(args, 'id', None)
@@ -815,6 +815,8 @@ def _emit_telemetry(project, args, result, success, event_name=None):
             'expected': result.get('expected') if isinstance(result, dict) else None,
             'observed': observed,
             'status': 'pass' if success else 'fail',
+            'observation_status': 'observed',
+            'source': 'gsp-cli',
             'decision_required': observed.get('user_decision_required', False),
             'deviation': result.get('deviation') if isinstance(result, dict) else None,
             'evidence': result.get('evidence', []) if isinstance(result, dict) else [],

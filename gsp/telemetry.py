@@ -92,10 +92,10 @@ def _report_markdown(report: dict) -> str:
         "# GSP 观测报告", "", f"运行：`{report['run_id']}`", "",
         f"事件数：{report['event_count']}；损坏行：{len(report['malformed_lines'])}", "",
         "## 路由与技能", "",
-        "| 技能/事件 | 次数 | unknown | 偏离 |", "|---|---:|---:|---:|",
+        "| 技能/事件 | 次数 | unknown | 偏离 | 证据入口 |", "|---|---:|---:|---:|---:|",
     ]
     for row in report["summary"]:
-        lines.append(f"| `{row['name']}` | {row['count']} | {row['unknown']} | {row['deviations']} |")
+        lines.append(f"| `{row['name']}` | {row['count']} | {row['unknown']} | {row['deviations']} | {row['evidence']} |")
     lines += ["", "## 观测限制", "", "日志只证明 CLI 或 hook 产生了可配对事件。没有原生宿主事件的技能调用记录为 `unknown`；日志不证明方法完整遵循。", "", "## 改进候选", ""]
     if report["improvement_candidates"]:
         lines.extend(f"- {item}" for item in report["improvement_candidates"])
@@ -115,10 +115,13 @@ def build_report(root, run_id: str | None = None) -> dict:
     unknown = 0
     for event in events:
         name = event.get("skill") or event.get("event") or "unknown"
-        row = grouped.setdefault(name, {"name": name, "count": 0, "unknown": 0, "deviations": 0})
+        row = grouped.setdefault(name, {"name": name, "count": 0, "unknown": 0, "deviations": 0, "evidence": 0})
         row["count"] += 1
-        status = event.get("status") or event.get("observed", {}).get("status")
-        if status in ("unknown", "not_checked") or event.get("observed") in (None, {}, "unknown"):
+        row["evidence"] += len(event.get("evidence", [])) if isinstance(event.get("evidence", []), list) else 0
+        status = event.get("observation_status") or event.get("status") or event.get("observed", {}).get("status")
+        if status in ("unknown", "not_checked") or (
+            "observation_status" not in event and event.get("observed") in (None, {}, "unknown")
+        ):
             row["unknown"] += 1
             unknown += 1
         if event.get("deviation"):

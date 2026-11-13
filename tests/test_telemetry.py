@@ -22,11 +22,15 @@ class TelemetryTests(unittest.TestCase):
         event = append_event(root, {
             "event": "health",
             "skill": "gsp-health",
+            "observation_status": "observed",
+            "source": "gsp-cli",
             "prompt": "do not persist",
             "observed": {"next_skill": "gsp-git", "status": "needs-decision"},
             "secret": "abc123",
         })
         self.assertEqual(event["observed"]["next_skill"], "gsp-git")
+        self.assertEqual(event["observation_status"], "observed")
+        self.assertEqual(event["source"], "gsp-cli")
         raw = telemetry_path(root).read_text(encoding="utf-8")
         self.assertNotIn("do not persist", raw)
         self.assertNotIn("abc123", raw)
@@ -41,6 +45,7 @@ class TelemetryTests(unittest.TestCase):
         self.assertTrue(report["improvement_candidates"])
         self.assertTrue((root / "docs/gsp/reports/observability/sample-run/report.json").is_file())
         self.assertTrue((root / "docs/gsp/reports/observability/sample-run/report.md").is_file())
+        self.assertIn("证据入口", (root / "docs/gsp/reports/observability/sample-run/report.md").read_text(encoding="utf-8"))
 
     def test_malformed_lines_are_isolated(self):
         root = self.root()

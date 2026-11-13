@@ -16,12 +16,10 @@ docs/gsp/reports/observability/<运行ID>/report.md
 
 ## 事件语义
 
-- `declared`：回复或交付记录声明使用了某技能。
-- `observed`：CLI、Codex hook 或 Claude hook 有可配对事件。
-- `inferred`：由任务状态或 route 推导，不能作为宿主调用证明。
-- `unknown` / `not_checked`：没有足够证据，必须保留未知状态。
+- `observation_status` 是证据状态：`observed` 表示 GSP CLI 产生了该事件；`declared` 表示回复或交付记录声明使用了某技能；`inferred` 表示由任务状态或 route 推导；`unknown` / `not_checked` 表示没有足够证据。
+- 顶层 `status` 只表示命令结果（`pass`/`fail`），不能代替证据状态。Codex/Claude 原生宿主触发仍需可配对 hook 事件，单独的 CLI 事件不能证明宿主调用。
 
-事件可以包含技能、预期下一技能、实际下一技能、偏离、人工决策、任务编号和收据路径摘要。禁止保存完整 prompt、响应、stdout、stderr、凭据、Cookie 和项目源代码。
+事件可以包含技能、预期下一技能、实际下一技能、偏离、人工决策、任务编号、route_id 和收据路径摘要。禁止保存完整 prompt、响应、stdout、stderr、凭据、Cookie 和项目源代码。
 
 ## 生成报告
 
