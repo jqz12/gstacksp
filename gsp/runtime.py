@@ -475,6 +475,9 @@ def run_check(project, state, run, args):
         raise WorkflowError('COMMAND_REQUIRED use -- followed by executable and individual arguments')
     if args.timeout <= 0:
         raise WorkflowError('INVALID_TIMEOUT must be positive')
+    scan_timeout = getattr(args, 'scan_timeout', 120)
+    if scan_timeout <= 0:
+        raise WorkflowError('INVALID_SCAN_TIMEOUT must be positive')
     start = time.monotonic()
     deadline = start + args.timeout
     evidence_id = uuid.uuid4().hex
@@ -491,7 +494,7 @@ def run_check(project, state, run, args):
         atomic(folder/'scan-progress.json', {'phase':phase, **row})
         print(f'GSP_SCAN {phase}: files={row["files"]} bytes={row["bytes"]} elapsed={row["elapsed_s"]}s',file=sys.stderr,flush=True)
     try:
-        before = snapshot(project.root, deadline=deadline, progress=progress)
+        before = snapshot(project.root, deadline=time.monotonic() + scan_timeout, progress=progress)
         command_inputs=command_input_hashes(project.root,argv)
         remaining=deadline-time.monotonic()
         if remaining<=0:raise WorkflowError('SCAN_TIMEOUT budget expired before command launch')
@@ -526,7 +529,7 @@ def run_check(project, state, run, args):
     state['inflight']['phase']=phase
     project.write(state,'post-scan',evidence_id)
     try:
-        after = snapshot(project.root, deadline=deadline, progress=progress)
+        after = snapshot(project.root, deadline=time.monotonic() + scan_timeout, progress=progress)
     except WorkflowError as exc:
         atomic(folder/'scan-error.json',{'phase':phase,'error':str(exc),'command_started':True,'exit':code,'at':now()})
         # Preserve inflight: a real command ran but its side effects are unverified.
@@ -715,7 +718,7 @@ def parser():
         elif name in ('task-start', 'task-done'): q.add_argument('task')
         elif name == 'task-reopen': q.add_argument('task'); q.add_argument('--reason', required=True)
         elif name == 'run':
-            q.add_argument('--task', required=True); q.add_argument('--kind', choices=['tests', 'check'], default='tests'); q.add_argument('--timeout', type=int, default=300)
+            q.add_argument('--task', required=True); q.add_argument('--kind', choices=['tests', 'check'], default='tests'); q.add_argument('--timeout', type=int, default=300); q.add_argument('--scan-timeout', type=int, default=120)
         elif name == 'scope':
             group = q.add_mutually_exclusive_group(required=True); group.add_argument('--path'); group.add_argument('--off', action='store_true'); q.add_argument('--quote', required=True)
         elif name == 'check-path': q.add_argument('path')
