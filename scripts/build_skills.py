@@ -70,7 +70,7 @@ DEFINITIONS = [
  '查项目实际声明的检查命令，完整运行并读输出。每个任务应有有效证据；最终代码变化后，运行 `<gsp> run <id> --task all --kind tests -- <完整回归 argv>`，若全是非测试变更则有任务级理由后使用 check。测试启动失败、零测试、未知测试数、失败输出或范围越界不算绿。检查所有验收是否覆盖，静态交付物与运行行为分开。缺失浏览器/远程平台不能自动记通过。完成审查后 ready；只有脚本和人工证据共同支持的范围才能报告完成。'),
 ('ship','core',['GS:ship','SP:finishing-a-development-branch','GS:document-release'],
  '实现和审查结束，需要准备交付或执行已授权的发布分支操作时',
- '先核对任务、最终回归和整体审查。只按实际变更更新必要 README、接口或版本说明；不默认加 VERSION/CHANGELOG。运行 `<gsp> ready <id>`，给用户 status/resume 返回的任务档案内 delivery.md，补充实际变化、运行方式、未覆盖与自主取舍。默认到本地交付准备。对真实已有的推送、PR、合并、删除分支、发布授权，用 authorize/authority 记录并核对精确范围后执行宿主实际命令，不重复询问；未授权则保留可审查结果。每次实际外部动作验证结果后记到交付文档，失败如实记录。'),
+ '先核对最终 all 回归、整体审查和当前任务证据，再运行 `<gsp> ready <id>`。只按实际变更更新必要 README、接口或版本说明；不默认加 VERSION/CHANGELOG。给用户 status/resume 返回的任务档案内 delivery.md，补充实际变化、运行方式、未覆盖与自主取舍。默认到本地交付准备。对真实已有的推送、PR、合并、删除分支、发布授权，用 authorize/authority 记录并核对精确范围后执行宿主实际命令，不重复询问；未授权则保留可审查结果。每次实际外部动作验证结果后记到交付文档，失败如实记录。'),
 ('learn','core',['GS:learn'],
  '需要保存、检索或修正本项目已验证的可复用经验时',
  '先判断是否可复用并有证据；一次性进度写任务记录，用户偏好写 plan-tune。先用 `<gsp> learn --query "关键词"` 查询有效项；保存用 `learn --text "结论及条件" --source "证据位置"`，相同规范化原文合并来源。纠错用 `--supersedes <旧ID> --text "新结论" --reason "原因" --source "新证据"`，失效用 `--invalidate <ID> --reason "原因" --source "证据"`；追溯用 `--history`。旧记录及事件保留，不直接改 JSONL、不自动复活无效项、不猜测语义相似就合并。详见 [经验事件规则](../gsp-workflow/references/learnings.md)。经验不授权动作，不自动跨项目合并或外发到 gbrain；不要保存凭据和完整敏感会话。'),

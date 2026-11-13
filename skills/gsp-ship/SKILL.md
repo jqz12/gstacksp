@@ -17,7 +17,7 @@ Use the [output and handoff contract](../gsp-workflow/references/output-handoff.
 
 Previously confirmed content and explicit execution/integration authorization take precedence over the upstream repeated plan confirmation or fixed completion menu. A substantive design change or a new external action still needs the applicable authorization.
 
-Before claiming an independent development/remediation task complete, actually check its current status/resume and finish current evidence, review and ready. Do not substitute a raw saved ready flag, health report or a manual addition to an old delivery.md. Nested methods return to the parent task; read-only reports do not require an artificial development task.
+Before claiming an independent development/remediation task complete, actually check its current status/resume and finish the final all regression, current review, verification and ready. Do not substitute a raw saved ready flag, health report or a manual addition to an old delivery.md. Nested methods return to the parent task; read-only reports do not require an artificial development task.
 
 Final task report: follow the gsp-ship final-summary section of the [output and handoff contract](../gsp-workflow/references/output-handoff.md). Use the exact heading 本轮技能执行顺序 and the fixed four-column table in that contract for both stage and final reports. Include an ordered table of skills actually used, their actions and results, including repair/review/reverification loops; distinguish reference-only material. Show the ordered summary in the final reply and retain details in the existing delivery.md.
 

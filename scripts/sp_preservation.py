@@ -68,7 +68,7 @@ def integration(name, lifecycle_notes=None):
                    'A substantive design change or a new external action still needs the applicable authorization.\n\n')
     if name == 'ship':
         shared += ('Before claiming an independent development/remediation task complete, actually check its current '
-                   'status/resume and finish current evidence, review and ready. Do not substitute a raw saved '
+                   'status/resume and finish the final all regression, current review, verification and ready. Do not substitute a raw saved '
                    'ready flag, health report or a manual addition to an old delivery.md. Nested methods return '
                    'to the parent task; read-only reports do not require an artificial development task.\n\n')
         shared += ('Final task report: follow the gsp-ship final-summary section of the '

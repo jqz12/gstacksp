@@ -26,7 +26,7 @@
         ├─ 测试失败 → gsp-systematic-debugging → gsp-execute
         ├─ 审查阻塞 → gsp-execute → gsp-review
         ├─ 证据过期 → gsp-verify
-        └─ 全部完成 → gsp-review → gsp-verify → gsp-ship
+        └─ 全部任务完成且最终 all 回归通过 → gsp-review → gsp-verify/ready → gsp-ship
 ```
 
 ## 条件规则

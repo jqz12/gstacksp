@@ -38,6 +38,11 @@ class RoutingRegistryTests(unittest.TestCase):
         self.assertTrue(route.blocking)
         self.assertEqual(route.decision_kind, "branch")
 
+    def test_completion_route_requires_final_regression_before_review(self):
+        route = next(route for route in ROUTES if route.route_id == "complete.review")
+        self.assertEqual(route.condition, "all_tasks_done_and_regression_passed")
+        self.assertEqual(route.next_skill, "gsp-review")
+
     def test_dirty_and_detached_routes_are_distinct(self):
         conditions = {route.condition for route in ROUTES}
         self.assertIn("dirty_or_untracked", conditions)

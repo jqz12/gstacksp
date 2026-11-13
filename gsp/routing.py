@@ -45,7 +45,7 @@ ROUTES = (
     Route("documents.findings", "gsp-health", "document_findings_with_authorized_governance", "gsp-document-governance", "gsp-workflow", False, False, None, "document-report", "gsp-workflow"),
     Route("documents.readonly", "gsp-health", "document_findings_readonly", "gsp-health", "gsp-workflow", False, True, "governance", "document-report", "gsp-workflow"),
     Route("restore.unknown", "gsp-context-restore", "resume_mismatch_or_unknown", "gsp-context-restore", "gsp-workflow", True, True, "investigation", "resume-state", "gsp-workflow"),
-    Route("complete.review", "gsp-execute", "all_tasks_done", "gsp-review", "gsp-workflow", False, False, None, "task-state", "gsp-workflow"),
+    Route("complete.review", "gsp-execute", "all_tasks_done_and_regression_passed", "gsp-review", "gsp-workflow", False, False, None, "task-state", "gsp-workflow"),
     Route("review.verify", "gsp-review", "review_passed", "gsp-verify", "gsp-review", False, False, None, "review", "gsp-workflow"),
     Route("verify.ship", "gsp-verify", "evidence_valid", "gsp-ship", "gsp-verify", False, False, None, "verification", "gsp-workflow"),
     Route("ship.ready", "gsp-ship", "delivery_prepared", "gsp-workflow", "gsp-ship", False, False, None, "delivery", "gsp-workflow"),

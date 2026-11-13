@@ -7,7 +7,7 @@
 3. `drive-init <id> --checks <JSON绝对路径> --quote "实际启动依据" --max-dispatches 20 --timeout 900 --max-seconds 14400`。需要时显式 `--codex-bin <exe>`。`--check-kind check` 仅适合各任务已有具体无测试理由的检查。初始化固化 max_fix_rounds 和限制；不能重新初始化清空消耗。
 4. `drive-start <id>` 返回独立进程身份；`drive-run <id>` 是前台控制器。`drive-status <id>` 查看最终状态与 gate；命令退出 0 代表查询/执行命令成功，不代表任务 completed。等待后台结果后看 `driver-report.md` 和 `delivery.md`。
 
-状态顺序：plan → execute/任务检查 → verify/整体回归 → review → deliver。失败触发对应修复与重新验证。每个任务修复链、最终审查修复链分别消费 max_fix_rounds；初次实施不计，派发前即计数。绝对截止时间和派发数包含恢复前消耗。实际金额未知，派发上限不是费用预算。
+状态顺序：plan → execute/任务检查 → final all regression → review/整体审查 → verify/ready → deliver。失败触发对应修复与重新验证。每个任务修复链、最终审查修复链分别消费 max_fix_rounds；初次实施不计，派发前即计数。绝对截止时间和派发数包含恢复前消耗。实际金额未知，派发上限不是费用预算。
 
 `drive-next` 持久生成一次 UUID job，重复调用只返回待收结果，不再派发；`drive-submit --job <id> --result <指定响应路径> --exit-code <真实退出码>` 只适合集成实际执行器。不要手工编造 worker 结果或退出码。内置控制器自动完成两步。`--host-command` 是显式命令集成/测试入口，不代表真实 Codex。
 
