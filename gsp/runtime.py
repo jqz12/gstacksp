@@ -745,6 +745,18 @@ def parser():
     q.add_argument('--task', default='quality')
     q.add_argument('--run-id')
     q.add_argument('--config', help='project-relative quality stack JSON (default .gsp/quality.json)')
+    q = sub.add_parser('source-resolve', help='resolve a GitHub stable tag into an isolated source directory')
+    q.add_argument('--source', required=True)
+    q.add_argument('--version', required=True)
+    q.add_argument('--target', required=True)
+    q.add_argument('--store')
+    q.add_argument('--manifest')
+    q.add_argument('--timeout', type=int, default=120)
+    q = sub.add_parser('version-status', help='show the current resolved source version')
+    q.add_argument('--store', required=True)
+    q = sub.add_parser('version-rollback', help='switch the source store to a previous version')
+    q.add_argument('--store', required=True)
+    q.add_argument('--version')
     for name in ('install','upgrade','uninstall','install-recover'):
         q = sub.add_parser(name, description='Scopes: project = this project; user = global for the current user.')
         q.add_argument('--host', choices=['claude','codex','both'], required=True)
@@ -864,6 +876,31 @@ def main(argv=None):
             return 0
         if args.command == 'hook':
             print(json.dumps(hook(project.root), ensure_ascii=False)); return 0
+        if args.command == 'source-resolve':
+            from .github_source import resolve_source
+            from .version_store import VersionStore
+            from .release_manifest import build_manifest
+            result = resolve_source(args.source, args.version, args.target, args.timeout)
+            if args.manifest:
+                manifest = build_manifest(args.target, args.source, args.version, result['commit'])
+                manifest_path = Path(args.manifest)
+                manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+                result['manifest'] = str(manifest_path.resolve())
+            if args.store:
+                VersionStore(args.store).switch(args.version, args.target)
+                result['store'] = str(Path(args.store).resolve())
+            print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
+        if args.command == 'version-status':
+            from .version_store import VersionStore
+            store = VersionStore(args.store)
+            current = store.current()
+            print(json.dumps({'current': current, 'modified': store.modified()}, ensure_ascii=False, indent=2)); return 0
+        if args.command == 'version-rollback':
+            from .version_store import VersionStore
+            store = VersionStore(args.store)
+            store.rollback(args.version)
+            print(json.dumps({'current': store.current(), 'modified': store.modified()}, ensure_ascii=False, indent=2)); return 0
         if args.command in ('docs-move','docs-move-recover'):
             from .document_migration import move,recover
             if args.command=='docs-move' and not args.apply:

@@ -1,0 +1,19 @@
+name: verify-release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify publish boundary
+        run: python scripts/release_check.py --check
+      - name: Run release focused tests
+        run: python -m unittest -q tests.test_release_manifest tests.test_release_boundary tests.test_github_source tests.test_version_store

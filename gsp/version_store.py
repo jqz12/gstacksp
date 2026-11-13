@@ -12,4 +12,4 @@ class VersionStore:
  def rollback(self,version=None):
   d=self._load(); target=d['versions'].get(version) if version else d.get('previous');
   if not target: raise RuntimeError('version unavailable')
-  d['current']=target; self.meta.write_text(json.dumps(d,indent=2),encoding='utf-8')
+  d['current']=target; self.meta.write_text(json.dumps(d,indent=2),encoding='utf-8'); return target
