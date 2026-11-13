@@ -1308,6 +1308,18 @@ def dispatch(project, args):
             state['status'] = 'needs-verification'
     elif command == 'recover-run':
         if not state.get('inflight'): raise WorkflowError('NO_UNKNOWN_EXECUTION')
+        inflight = state['inflight']
+        receipt_path = project.root / f".gsp/runs/{state['id']}/evidence/{inflight['id']}/receipt.json"
+        if receipt_path.is_file():
+            receipt = read(receipt_path)
+            if receipt.get('id') == inflight['id'] and receipt.get('task') == inflight.get('task') and receipt.get('status') in ('pass', 'fail', 'failed-output', 'zero-tests', 'test-count-unknown', 'inputs-changed', 'scope-violation'):
+                if receipt_path.relative_to(project.root).as_posix() not in state.get('evidence', []):
+                    state.setdefault('evidence', []).append(receipt_path.relative_to(project.root).as_posix())
+                state['last_recovery'] = {'execution': state.pop('inflight'), 'outcome': 'claimed-receipt', 'receipt': receipt_path.relative_to(project.root).as_posix(), 'at': now()}
+                if receipt.get('status') != 'pass':
+                    state['status'] = 'needs-verification'
+                project.write(state, 'recover-receipt', receipt.get('status', 'unknown'))
+                return {'task': state['id'], 'status': receipt.get('status'), 'recovered': 'claimed-receipt', 'receipt': receipt_path.relative_to(project.root).as_posix()}, receipt.get('status') == 'pass'
         file = (project.root / args.evidence).resolve()
         if not inside(project.root, file) or not file.is_file(): raise WorkflowError('RECOVERY_EVIDENCE_REQUIRED use a local investigation report')
         state['last_recovery'] = {'execution': state.pop('inflight'), 'outcome': args.outcome, 'report': str(file), 'sha256': digest(file), 'at': now()}

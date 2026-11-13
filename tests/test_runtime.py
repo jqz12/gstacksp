@@ -334,6 +334,20 @@ class WorkflowTests(unittest.TestCase):
         (folder / 'review.md').write_text('# Review\nChecked all changes without blockers.\n', encoding='utf-8')
         self.cli('review', 'login', '--reviewer', 'self', '--blocking', '0')
         self.cli('ready', 'login')
+
+    def test_close_releases_ready_task_active_and_scope(self):
+        folder = self.task()
+        self.passing()
+        self.cli('task-done', 'login', 'T1')
+        self.cli('run', 'login', '--task', 'all', '--kind', 'tests', '--', sys.executable, '-c', "print('Ran 1 test')")
+        (folder / 'review.md').write_text('# Review\nChecked all changes without blockers.\n', encoding='utf-8')
+        self.cli('review', 'login', '--reviewer', 'self', '--blocking', '0')
+        self.cli('ready', 'login')
+        self.cli('close', 'login', '--reason', 'Fixture delivery accepted and task boundary can be released')
+        self.assertFalse((self.project / '.gsp/active.json').exists())
+        state=json.loads((self.project / '.gsp/runs/login/state.json').read_text(encoding='utf-8'))
+        self.assertEqual(state['scope']['mode'], 'off')
+        self.assertIn('close_reason', state)
         self.cli('scope', 'login', '--path', '.', '--quote', 'Freeze project')
         self.cli('scope', 'other', '--off', '--quote', 'No freeze for other', ok=False)
 
