@@ -1,4 +1,6 @@
 import unittest
+import subprocess
+import tempfile
 from unittest.mock import patch
 
 import process_helpers
@@ -28,3 +30,20 @@ class HiddenProcessTests(unittest.TestCase):
         with patch('process_helpers.os.name', 'posix'), patch.object(process_helpers.subprocess, 'run') as launch:
             process_helpers.run(['fixture'])
             self.assertNotIn('creationflags', launch.call_args.kwargs)
+
+    def test_commit_number_warning_is_non_blocking(self):
+        from pathlib import Path
+        from gsp.runtime import commit_number_warnings
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            for args in (['init','-q'], ['config','user.name','Test'], ['config','user.email','test@example.com']):
+                subprocess.run(['git',*args],cwd=root,check=True,capture_output=True)
+            (root/'file.txt').write_text('x',encoding='utf-8')
+            subprocess.run(['git','add','file.txt'],cwd=root,check=True)
+            subprocess.run(['git','commit','-qm','chore: baseline'],cwd=root,check=True)
+            old=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
+            (root/'file.txt').write_text('y',encoding='utf-8')
+            subprocess.run(['git','commit','-am','fix: change'],cwd=root,check=True,capture_output=True)
+            new=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
+            warnings=commit_number_warnings(root,old,new,'GSP-000001')
+            self.assertEqual(warnings[0]['code'],'GIT_COMMIT_TASK_NUMBER_MISSING')

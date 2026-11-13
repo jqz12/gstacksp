@@ -13,4 +13,4 @@ description: "Use when Git health route 指向 Git 专业处理，或用户要�
 
 路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
 
-读取 Git health 的短 handoff，不加载完整报告。检查仓库、分支、HEAD、工作区归属和任务绑定；输出下一动作。新任务建议 feature/GSP-<编号>-<slug>、fix/...、docs/...、test/...、refactor/...、chore/...、research/...。提交使用 Conventional Commit，正文包含 GSP 编号。提交、推送、合并、删除分支必须分别取得精确授权；不自动 git add .、reset、clean 或拆分未知修改。完成提交后核对 diff、测试和 HEAD，再用 observe-head 登记。保留完整 SP worktree 与 finishing branch 原文，真实远程 Git 和宿主触发未验证时标记 NOT_CHECKED。
+读取 Git health 的短 handoff，不加载完整报告。检查仓库、分支、HEAD、工作区归属和任务绑定；输出下一动作。新任务建议 feature/GSP-<编号>-<slug>、fix/...、docs/...、test/...、refactor/...、chore/...、research/...。提交使用 Conventional Commit，正文包含 GSP 编号；用 `<gsp> authorize <id> commit --scope <范围> --quote "用户原话"` 登记提交授权。提交、推送、合并、删除分支必须分别取得精确授权；不自动 git add .、reset、clean 或拆分未知修改。完成提交后核对 diff、测试和 HEAD，再用 observe-head 登记。保留完整 SP worktree 原文 [using-git-worktrees](../gsp-workflow/upstream/skills/using-git-worktrees/ORIGINAL.md) 与 finishing branch 方法 [gsp-ship](../gsp-ship/SKILL.md)，真实远程 Git 和宿主触发未验证时标记 NOT_CHECKED。

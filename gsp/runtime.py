@@ -116,6 +116,30 @@ def git_identity(root):
         return {'root': None, 'branch': None, 'head': None}
 
 
+def commit_number_warnings(root, previous_head, current_head, task_number):
+    """Report missing task numbers without blocking HEAD reconciliation."""
+    if not previous_head or not current_head or previous_head == current_head or not task_number:
+        return []
+    try:
+        result = subprocess.run(
+            ['git', 'log', '--no-merges', '--format=%H%x00%B%x00', f'{previous_head}..{current_head}'],
+            cwd=root, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+        )
+        if result.returncode != 0:
+            return [{'level': 'info', 'code': 'GIT_COMMIT_NUMBER_UNCHECKED', 'detail': result.stderr.strip() or 'git log failed'}]
+        chunks = [part for part in result.stdout.split('\x00') if part]
+        warnings = []
+        for index in range(0, len(chunks), 2):
+            commit = chunks[index]
+            body = chunks[index + 1] if index + 1 < len(chunks) else ''
+            if task_number not in body:
+                warnings.append({'level': 'warning', 'code': 'GIT_COMMIT_TASK_NUMBER_MISSING', 'commit': commit, 'task': task_number})
+        return warnings
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [{'level': 'info', 'code': 'GIT_COMMIT_NUMBER_UNCHECKED', 'detail': type(exc).__name__}]
+
+
 SKIP_DIRS = {'.git', '.gsp', '.agents', '.claude', '__pycache__', 'node_modules', '.venv', 'venv', '.pytest_cache'}
 
 
@@ -723,7 +747,7 @@ def parser():
         elif name == 'review': q.add_argument('--reviewer', choices=['self', 'independent', 'fresh-context'], required=True); q.add_argument('--blocking', type=int, required=True)
         elif name == 'decision': q.add_argument('--text', required=True); q.add_argument('--source', choices=['user', 'agent'], required=True)
         elif name in ('authorize', 'authority'):
-            q.add_argument('action', choices=['push', 'create-pr', 'merge', 'delete-branch', 'publish', 'spend', 'send']); q.add_argument('--scope', required=True)
+            q.add_argument('action', choices=['commit', 'push', 'create-pr', 'merge', 'delete-branch', 'publish', 'spend', 'send']); q.add_argument('--scope', required=True)
             if name == 'authorize': q.add_argument('--quote', required=True)
         elif name == 'block': q.add_argument('--reason', required=True)
         elif name == 'observe-head': q.add_argument('--reason', required=True)
@@ -735,7 +759,7 @@ def parser():
         q = sub.add_parser(name, help='maintain GSP Codex user-level hooks only')
         q.add_argument('--profile', help='Codex profile root (default: ~/.codex)')
         q.add_argument('--dry-run', action='store_true')
-    q = sub.add_parser('health'); q.add_argument('--host', choices=['claude', 'codex', 'both'], default='both')
+    q = sub.add_parser('health'); q.add_argument('--host', choices=['claude', 'codex', 'both'], default='both'); q.add_argument('--strict', action='store_true', help='return non-zero for a blocking Git route')
     q.add_argument('--documents',action='store_true',help='include document governance audit')
     q.add_argument('--documents-only',action='store_true',help='read-only target; no installation checks')
     q.add_argument('--report-dir',help='explicit report destination (default: target docs/gsp/reports/document-governance)')
@@ -924,7 +948,12 @@ def main(argv=None):
                 result['documents']['delta_counts']={key:len(report['delta'][key]) for key in ('new','resolved','persisting')}
                 result['static_ok'] &= report['integrity_ok']
             _emit_telemetry(project, args, result, bool(result['static_ok']), 'health')
-            print(json.dumps(result, ensure_ascii=False, indent=2)); return 0 if result['static_ok'] else 1
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            if not result['static_ok']:
+                return 1
+            if args.strict and result.get('route', {}).get('blocking'):
+                return 2
+            return 0
         if args.command == 'observe':
             from .telemetry import build_report
             result = build_report(project.root, args.run_id)
@@ -1246,7 +1275,10 @@ def dispatch(project, args):
                 evidence_for(project, state, task['id'], current_fingerprint=current_fingerprint)
         before = state['git']
         state['git'] = git_identity(project.root)
-        state['head_reconciliation'] = {'previous': before, 'current': state['git'], 'reason': args.reason, 'at': now()}
+        state['head_reconciliation'] = {
+            'previous': before, 'current': state['git'], 'reason': args.reason, 'at': now(),
+            'commit_warnings': commit_number_warnings(project.root, before.get('head'), state['git'].get('head'), state.get('number')),
+        }
         if not preserve:
             state['review'] = None
             state['status'] = 'needs-verification'

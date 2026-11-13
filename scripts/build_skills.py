@@ -16,7 +16,7 @@ from gsp import __version__
 DEFINITIONS = [
 ('git','core',['GSP:git-lifecycle','SP:using-git-worktrees','SP:finishing-a-development-branch'],
  'Git health route 指向 Git 专业处理，或用户要求检查分支、归属、提交和分支收尾时',
- '读取 Git health 的短 handoff，不加载完整报告。检查仓库、分支、HEAD、工作区归属和任务绑定；输出下一动作。新任务建议 feature/GSP-<编号>-<slug>、fix/...、docs/...、test/...、refactor/...、chore/...、research/...。提交使用 Conventional Commit，正文包含 GSP 编号。提交、推送、合并、删除分支必须分别取得精确授权；不自动 git add .、reset、clean 或拆分未知修改。完成提交后核对 diff、测试和 HEAD，再用 observe-head 登记。保留完整 SP worktree 与 finishing branch 原文，真实远程 Git 和宿主触发未验证时标记 NOT_CHECKED。'),
+ '读取 Git health 的短 handoff，不加载完整报告。检查仓库、分支、HEAD、工作区归属和任务绑定；输出下一动作。新任务建议 feature/GSP-<编号>-<slug>、fix/...、docs/...、test/...、refactor/...、chore/...、research/...。提交使用 Conventional Commit，正文包含 GSP 编号；用 `<gsp> authorize <id> commit --scope <范围> --quote "用户原话"` 登记提交授权。提交、推送、合并、删除分支必须分别取得精确授权；不自动 git add .、reset、clean 或拆分未知修改。完成提交后核对 diff、测试和 HEAD，再用 observe-head 登记。保留完整 SP worktree 原文 [using-git-worktrees](../gsp-workflow/upstream/skills/using-git-worktrees/ORIGINAL.md) 与 finishing branch 方法 [gsp-ship](../gsp-ship/SKILL.md)，真实远程 Git 和宿主触发未验证时标记 NOT_CHECKED。'),
 ('document-governance','optional',['GSP:document-governance'],
  '新项目需要建立文档入口、老项目需要完整接入或整理，或本次改动需要维护相关文档正本时',
  '先读 [文档治理执行规则](../gsp-workflow/references/document-governance-execution.md) 和 [共同治理契约](../gsp-workflow/references/document-governance.md)。核对用户原始目标，明确新项目、老项目完整治理或日常局部维护；区分仅检查与已授权整改，不把完整治理缩小为报告或迁移预览。修改前按执行规则选择独立任务、嵌套维护或只读路径；独立整改必须实际resume并建立当前任务验收，不能只沿用旧文件夹。复用现有 GSP 设计、计划、执行和验证，不另设重复批准。完整治理先用 health 获取发现，再逐项阅读、确认正本及归属，按授权受控处理，最后复查；日常仅核对受影响资料，必要时才全量 health。记录盘点、预览、迁移、验收的实际阶段；报告通过不等于治理完成。交付必须对应原始目标，并披露未完成、例外及证据。本技能是执行指导，不是 CLI 自动强制门禁。完整治理同时盘点根目录资料、非Markdown证据和本地工作产物，核对生成工具及输出位置、唯一正本、共享范围和保留规则；详情按共同治理契约的项目资料与工作产物章节执行。'),

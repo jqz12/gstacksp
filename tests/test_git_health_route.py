@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 import unittest
@@ -27,6 +28,12 @@ class GitHealthRouteTests(unittest.TestCase):
     def test_non_repository_is_explicit_decision(self):
         with tempfile.TemporaryDirectory() as d:
             r=git_route(Path(d)); self.assertEqual(r['status'],'not-a-repository'); self.assertEqual(r['next_skill'],'gsp-git'); self.assertTrue(r['blocking'])
+
+    def test_strict_health_returns_nonzero_for_detached_route(self):
+        root=self.repo(); subprocess.run(['git','checkout','--quiet','--detach','HEAD'],cwd=root,check=True)
+        cli=Path(__file__).resolve().parents[1]/'scripts/gsp.py'
+        result=subprocess.run([sys.executable,str(cli),'--project',str(root),'health','--documents-only','--strict'],capture_output=True,text=True)
+        self.assertEqual(result.returncode,2,result.stderr)
 
     def test_audit_exposes_compact_route_and_keeps_report_read_only(self):
         root=self.repo(); before=sorted(p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()); report=audit(root,Path(tempfile.mkdtemp()))

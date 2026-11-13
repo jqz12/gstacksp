@@ -37,7 +37,7 @@
 
 ## 开始、冻结与隔离
 
-Git 生命周期由 health route、workflow 和按需 `gsp-git` 共同承接：health 只读分类，gsp-git 处理分支/归属/提交准备，workflow 接收短 handoff。新分支建议使用 `feature/GSP-<编号>-<slug>` 等类型前缀，提交使用 Conventional Commit 并在正文包含任务编号；旧分支保留历史语义。commit、push、merge、delete-branch 各自需要精确授权，任务批准不自动授予这些动作。
+Git 生命周期由 health route、workflow 和按需 `gsp-git` 共同承接：health 只读分类，gsp-git 处理分支/归属/提交准备，workflow 接收短 handoff。新分支建议使用 `feature/GSP-<编号>-<slug>` 等类型前缀，提交使用 Conventional Commit 并在正文包含任务编号；AI 协作提交按当前宿主默认署名 trailer 执行（Claude Code 使用其默认 `Co-Authored-By`，Codex 依其配置），项目不另造 trailer；旧分支保留历史语义。commit、push、merge、delete-branch 各自需要精确授权，任务批准不自动授予这些动作。
 
 首次实现前，只问一次是否冻结并给出建议；用户已经说明时直接执行。小修改可原地冻结，大功能/并行改动可用宿主原生 worktree，已有工作区先检测。现有 Git worktree 独立工作目录并共享 Git 数据，不是沙箱。
 
