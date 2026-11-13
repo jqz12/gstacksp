@@ -46,7 +46,7 @@ def validate():
         json.loads((ROOT / manifest).read_text(encoding='utf-8'))
     assert json.loads((ROOT / '.codex-plugin/plugin.json').read_text())['hooks'] == {}
     # All human guide links must refer to actual local files, excluding example output paths.
-    for file in (ROOT / 'README.md', ROOT / 'docs/安装与使用.md', ROOT / 'docs/文件流转与阅读指南.md'):
+    for file in (ROOT / 'README.md', ROOT / 'docs/README.md', ROOT / 'docs/安装与使用.md'):
         for link in re.findall(r'\]\(([^)]+)\)', file.read_text(encoding='utf-8')):
             if not link.startswith(('https://', 'http://', '#')):
                 assert (file.parent / link).is_file(), (file, link)
