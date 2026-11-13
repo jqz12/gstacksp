@@ -4,3 +4,13 @@
 # Python bytecode
 __pycache__/
 *.pyc
+# Private development records and local release artifacts
+docs/gsp/
+docs/work/
+docs/superpowers/
+research/
+dist/
+TODOS.md
+AGENTS.md
+CLAUDE.md
+.superpowers/
