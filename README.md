@@ -15,7 +15,7 @@
 
 ## 安装范围
 
-可以选择项目级（`--scope project`）或当前用户全局级（`--scope user`）。全局安装供多个项目共用，不新建目标项目技能目录。任务文档和证据保存在各项目本地。AI 协助安装时，范围未说明先询问一次。具体路径与命令见 [安装与使用](docs/安装与使用.md)。
+可以选择项目级（`--scope project`）或当前用户全局级（`--scope user`）。全局安装供多个项目共用，不新建目标项目技能目录。任务文档和证据保存在各项目本地。AI 协助安装时，范围未说明先询问一次。具体路径与命令见 [项目文档索引](docs/README.md)。
 
 下面是项目级安装示例：
 
@@ -37,15 +37,15 @@ python E:\GstackSP\scripts\gsp.py --project E:\MyProject install --host both --o
 
 ## 日常使用
 
-新任务采用 `docs/work/<年份>/<月份>/<固定档案>/`，先保存想法用 `work-new`，文档按阶段生成。`health --documents-only` 检查结构并保存独立报告；旧项目先预览再整理。命令及边界见 [文档治理与健康检查](docs/文档治理与健康检查.md)。旧任务继续兼容，以 status/resume 返回路径为准。
+新任务采用 `docs/work/<年份>/<月份>/<固定档案>/`，先保存想法用 `work-new`，文档按阶段生成。`health --documents-only` 检查结构并保存独立报告；旧项目先预览再整理。命令及边界见 [项目文档索引](docs/README.md)。旧任务继续兼容，以 status/resume 返回路径为准。
 
 告诉 AI：“用 GstackSP 做这个需求，先讨论设计；确认后按推荐连续推进，准备交付。”
 
 冻结没说明时问一次；已开启无人值守并授权推荐选择时记录后继续。小修改可以原地冻结，大功能可用隔离工作区。你已授权的推送、合并、删除分支等动作按精确范围执行，不重复问；默认只准备交付。
 
-你在目标项目打开 `docs/gsp/README.md` 看当前任务，沿任务链接确认 `docs/work/YYYY/MM/<固定档案>/spec.md`，查看同档案的 `plan.md` 和完成时的 `delivery.md`；根 `TODOS.md` 看跨任务未解决事项。旧任务以实际绑定为准。运行状态在 `.gsp/`，AI 通过脚本更新和恢复。计划结构检查与语义边界见[接口说明](docs/reference/plan-quality.md)。
+目标项目的任务记录和 `.gsp/` 状态由目标项目本地维护；公开仓库只提供运行时代码、技能和用户文档。计划结构检查与语义边界见[接口说明](docs/reference/plan-quality.md)。
 
-完整原文、局部差异及文档治理见 [SP 保留与适配清单](docs/SP保留与适配清单.md)。
+完整发布源和生成规则见 `scripts/build_skills.py`、`scripts/sp_preservation.py` 及 `skills/gsp-workflow/references/`。
 
 ## 开发此项目
 
