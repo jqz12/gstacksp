@@ -522,8 +522,6 @@ def run_check(project, state, run, args):
     except (OSError, subprocess.TimeoutExpired) as exc:
         stdout, stderr, code = '', str(exc), None
         launch_error = type(exc).__name__
-    atomic(folder / 'stdout.txt', redact(stdout))
-    atomic(folder / 'stderr.txt', redact(stderr))
     atomic(folder/'command-result.json',{'exit':code,'launch_error':launch_error,'at':now()})
     phase='post-scan'
     state['inflight']['phase']=phase
