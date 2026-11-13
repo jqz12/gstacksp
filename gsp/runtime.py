@@ -733,7 +733,7 @@ def parser():
     n = sub.add_parser('new'); n.add_argument('id'); n.add_argument('--title', required=True); n.add_argument('--mode', choices=['interactive', 'unattended'], default='interactive'); n.add_argument('--quote')
     n.add_argument('--legacy-layout',action='store_true',help='compatibility: separated spec/plan layout')
     n.add_argument('--work',help='continue a saved idea by UUID or number')
-    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'run', 'scope', 'check-path', 'review', 'ready', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'observe-head', 'recover-run', 'documents-adopt', 'acceptance-enable', 'acceptance-record'):
+    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'run', 'scope', 'check-path', 'review', 'ready', 'close', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'observe-head', 'recover-run', 'documents-adopt', 'acceptance-enable', 'acceptance-record'):
         q = sub.add_parser(name); q.add_argument('id')
         if name == 'documents-adopt':
             q.add_argument('--spec', required=True); q.add_argument('--plan', required=True); q.add_argument('--reason', required=True)
@@ -755,6 +755,7 @@ def parser():
             if name == 'authorize': q.add_argument('--quote', required=True)
         elif name == 'block': q.add_argument('--reason', required=True)
         elif name == 'observe-head': q.add_argument('--reason', required=True)
+        elif name == 'close': q.add_argument('--reason', required=True)
         elif name == 'recover-run': q.add_argument('--evidence', required=True); q.add_argument('--outcome', choices=['not-run', 'failed'], required=True)
         elif name == 'acceptance-record': q.add_argument('task'); q.add_argument('--card', required=True)
     sub.add_parser('codex-hook', help='native Codex hook protocol (stdin JSON)')
@@ -1055,7 +1056,7 @@ def dispatch(project, args):
         elif args.supersedes or args.reason or args.source:
             raise WorkflowError('LEARNING_TEXT_REQUIRED')
         return book.query(args.query,args.history), True
-    state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'run', 'review', 'ready'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path)
+    state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'run', 'review', 'ready', 'close'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path)
     if command == 'documents-adopt':
         candidate = {**state, 'documents': {'design': args.spec, 'plan': args.plan}}
         for kind in ('design', 'plan'):
@@ -1096,6 +1097,23 @@ def dispatch(project, args):
         state['status'] = 'plan'
         if not project.document(state,'plan').exists():
             atomic(project.document(state,'plan'),f'# {state["title"]} — 实施计划\n\n规格：[spec]({project.document_link(state,"design",project.document(state,"plan").parent)})\n\n计划尚未编写。\n')
+    elif command == 'close':
+        if state.get('status') != 'ready':
+            raise WorkflowError('CLOSE_REQUIRES_READY close is only valid after ready')
+        if not state.get('work_uuid'):
+            raise WorkflowError('CLOSE_REQUIRES_WORK_ARCHIVE task has no document archive to close')
+        from .documents import Governance
+        book = Governance(project.root)
+        record = book.get(state['work_uuid'])
+        book.stage(record['uuid'], 'closed', args.reason)
+        active = project.meta / 'active.json'
+        if active.exists() and read(active).get('task') == state['id']:
+            active.unlink()
+        state['scope'] = {'mode': 'off', 'path': None, 'quote': args.reason, 'at': now()}
+        state['closed_at'] = now()
+        state['close_reason'] = redact(args.reason)
+        project.write(state, command, args.reason)
+        return {'task': state['id'], 'status': 'closed', 'event': 'close', 'active_released': True}, True
     elif command == 'task-add':
         slug(args.task)
         if args.task == 'all': raise WorkflowError('RESERVED_TASK_ID all is the final regression lane')
