@@ -14,3 +14,10 @@ TODOS.md
 AGENTS.md
 CLAUDE.md
 .superpowers/
+
+# Private audit and verification outputs
+docs/audits/
+docs/implementation-plan.md
+docs/verification-last.txt
+docs/verification.json
+docs/gbrain接入现状.md
