@@ -20,6 +20,10 @@ ALIASES = {'using-superpowers': 'workflow', **{v:k for k,v in PRIMARY.items()},
            'using-git-worktrees':'execute', 'receiving-code-review':'review'}
 BEGIN = '<!-- sp-preserved-body:begin -->'
 END = '<!-- sp-preserved-body:end -->'
+PLATFORM_REFERENCE_NAMES = (
+    'claude-code-tools.md', 'codex-tools.md', 'pi-tools.md',
+    'antigravity-tools.md', 'hermes-tools.md', 'muse-tools.md',
+)
 
 def sha(data): return hashlib.sha256(data).hexdigest()
 
@@ -97,6 +101,13 @@ def integration(name, lifecycle_notes=None):
                    'Headless plan workers return self-reviewed content; the controller owns registration and sealing.\n\n')
     return shared
 
+
+def adapt_workflow_platform_paths(root, raw):
+    """Make preserved platform references resolve from gsp-workflow/SKILL.md."""
+    for name in PLATFORM_REFERENCE_NAMES:
+        raw = raw.replace(f'`references/{name}`', f'`upstream/skills/using-superpowers/references/{name}`')
+    return raw
+
 def build(root, lifecycle_notes=None):
     if lifecycle_notes is None:
         # Standalone preservation builds must use the same maintained notes as
@@ -122,6 +133,7 @@ def build(root, lifecycle_notes=None):
     text=file.read_text(encoding='utf-8').split('\n'+BEGIN)[0].rstrip()
     # Router is hand maintained. Its original SP foundation remains fully available.
     raw=(root/'sources/superpowers/skills/using-superpowers/SKILL.md').read_text(encoding='utf-8').split('---',2)[2].lstrip('\n')
+    raw=adapt_workflow_platform_paths(root, raw)
     file.write_text(text+'\n'+BEGIN+'\n'+raw+'\n'+END+'\n',encoding='utf-8',newline='\n')
     return verify(root)
 
@@ -136,6 +148,7 @@ def verify(root):
         body=text.split(BEGIN+'\n',1)[1].rsplit('\n'+END,1)[0]
         assert body==preserved(root,original), ('BODY_CHANGED',name)
     raw=(root/'sources/superpowers/skills/using-superpowers/SKILL.md').read_text(encoding='utf-8').split('---',2)[2].lstrip('\n')
+    raw=adapt_workflow_platform_paths(root, raw)
     text=(root/'skills/gsp-workflow/SKILL.md').read_text(encoding='utf-8')
     assert text.split(BEGIN+'\n',1)[1].rsplit('\n'+END,1)[0]==raw
     return {'version':baseline['version'],'source_files':len(baseline['files']),

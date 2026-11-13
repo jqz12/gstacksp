@@ -24,6 +24,15 @@ class PreservationTests(unittest.TestCase):
         # Originals are readable resources, never extra discoverable skill entries.
         self.assertEqual(list((ROOT/'skills/gsp-workflow/upstream').rglob('SKILL.md')), [])
 
+    def test_workflow_platform_references_resolve_from_generated_skill(self):
+        text = (ROOT/'skills/gsp-workflow/SKILL.md').read_text(encoding='utf-8')
+        for name in ('claude-code-tools.md', 'codex-tools.md', 'pi-tools.md',
+                     'antigravity-tools.md', 'hermes-tools.md', 'muse-tools.md'):
+            marker = f'`upstream/skills/using-superpowers/references/{name}`'
+            self.assertIn(marker, text)
+            self.assertTrue((ROOT/'skills/gsp-workflow/upstream/skills/using-superpowers/references'/name).is_file())
+        self.assertNotIn('`references/claude-code-tools.md`', text)
+
     def test_generation_is_idempotent_and_drift_is_detected(self):
         import shutil
         import tempfile
