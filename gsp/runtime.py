@@ -327,7 +327,11 @@ class Project:
             stages={'design':'design','plan':'approved','execute':'implementing','checking':'implementing',
                     'review':'implementing','ready':'ready','needs-verification':'implementing','blocked':'implementing'}
             if record['stage'] not in ('closed','delivered','paused','cancelled'):
-                record['stage']=stages.get(state['status'],'implementing')
+                next_stage=stages.get(state['status'],'implementing')
+                if record['stage'] != next_stage:
+                    record.setdefault('history', []).append({'at': now(), 'from': record['stage'], 'to': next_stage,
+                                                             'event': event, 'reason': redact(detail)})
+                    record['stage']=next_stage
             record['documents'].update({k:v for k,v in state.get('documents',{}).items() if (self.root/v).exists()})
             if json.dumps(record,sort_keys=True)!=before_record: book._save(record)
             book.refresh(list(record['documents'].values())+[(doc/name).relative_to(self.root).as_posix() for name in ('review.md','decisions.md','delivery.md')])
@@ -1083,6 +1087,8 @@ def dispatch(project, args):
         state['status'] = 'design'
         invalidate_delivery(doc, '规格与计划正本已重新关联，需要重新批准、封存和验证。')
     elif command == 'approve':
+        if state.get('status') != 'design':
+            raise WorkflowError('APPROVAL_STAGE_INVALID approve is only valid during design; use decision/authorize or resume the current stage')
         design = project.document(state, 'design').read_text(encoding='utf-8')
         if len(design.strip()) < 15 or '状态：草稿；填写目标' in design or 'Draft: discuss goals, constraints' in design:
             raise WorkflowError('DESIGN_EMPTY write the actual design first')
@@ -1307,7 +1313,17 @@ def dispatch(project, args):
             raise WorkflowError('HEAD_CHANGED inspect before continuation')
         from .todos import Backlog
         backlog = Backlog(project.root).summary()
-        return {'state': state, 'read_next': [str(project.document(state, kind)) for kind in ('design', 'plan')] + [str(doc / f) for f in ('decisions.md', 'review.md')] + [backlog['file']], 'backlog': backlog, 'live_host': 'not checked'}, True
+        pending = []
+        if not state.get('design_approval'):
+            pending.append({'kind': 'approval', 'reason': '当前设计没有匹配的用户批准', 'command': f"approve {state['id']} --quote \"用户原话\""})
+        if state.get('scope', {}).get('mode') == 'pending':
+            pending.append({'kind': 'scope', 'reason': '当前任务尚未决定冻结范围', 'command': f"scope {state['id']} --off --quote \"用户原话\""})
+        if state.get('inflight'):
+            pending.append({'kind': 'recovery', 'reason': '上次命令结果未知，先调查并恢复', 'command': f"recover-run {state['id']} --evidence <报告路径> --outcome failed"})
+        next_skill = {'design': 'gsp-brainstorming', 'plan': 'gsp-writing-plans', 'execute': 'gsp-execute',
+                      'checking': 'gsp-verify', 'review': 'gsp-review', 'ready': 'gsp-ship',
+                      'needs-verification': 'gsp-verify', 'blocked': 'gsp-workflow'}.get(state.get('status'), 'gsp-workflow')
+        return {'state': state, 'read_next': [str(project.document(state, kind)) for kind in ('design', 'plan')] + [str(doc / f) for f in ('decisions.md', 'review.md')] + [backlog['file']], 'backlog': backlog, 'next_skill': next_skill, 'pending_decisions': pending, 'live_host': 'not checked'}, True
     elif command == 'status':
         return state, True
     else:
