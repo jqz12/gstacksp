@@ -11,6 +11,7 @@ import uuid
 
 from .runtime import WorkflowError, atomic, digest, git_identity, inside, now, read, redact, sha
 from .project_assets import is_link, scan_assets
+from .routing import route_for
 
 RULE_VERSION=2
 SKIP={'.git','.gsp','.gstack','.claude','.agents','node_modules','.venv','venv','target','dist','build','__pycache__'}
@@ -28,8 +29,9 @@ def git_route(root):
     try:
         probe = run('rev-parse', '--show-toplevel')
         if probe.returncode != 0:
-            return {'status':'not-a-repository','findings':[{'code':'GIT_REPOSITORY_MISSING','severity':'blocking','detail':'Git repository is not available'}],
-                    'next_skill':'gsp-git','blocking':True,'user_decision_required':True,'decision_kind':'repository','handoff':{'reason':'Choose whether to initialize or continue without Git'},'evidence':[]}
+            route = route_for('repository_missing')
+            return {'status':'not-a-repository','route_id':route.route_id,'findings':[{'code':'GIT_REPOSITORY_MISSING','severity':'blocking','detail':'Git repository is not available'}],
+                    'next_skill':route.next_skill,'blocking':route.blocking,'user_decision_required':route.user_decision_required,'decision_kind':route.decision_kind,'handoff':{'reason':'Choose whether to initialize or continue without Git'},'evidence':[]}
         branch = run('branch','--show-current').stdout.strip() or None
         head = run('rev-parse','HEAD').stdout.strip() or None
         porcelain = run('status','--porcelain=v1','-z','--untracked-files=all')
@@ -46,17 +48,17 @@ def git_route(root):
             if active_file.exists(): active=read(active_file).get('task')
         except (OSError,ValueError,TypeError): pass
         status='clean' if not findings else 'needs-decision'
-        if any(f['code']=='GIT_DETACHED_HEAD' for f in findings): next_skill='gsp-git'
-        elif entries: next_skill='gsp-git'
-        else: next_skill='gsp-brainstorming' if not active else 'gsp-workflow'
-        decision = bool(entries or not branch)
-        return {'status':status,'branch':branch,'head':head,'changed_paths':len(entries),'active_task':active,
-                'findings':findings,'next_skill':next_skill,'blocking':any(f['severity']=='blocking' for f in findings),
-                'user_decision_required':decision,'decision_kind':'worktree' if entries else ('branch' if not branch else None),
-                'handoff':{'task':active,'stage':'git-health','next_skill':next_skill,'reason':('attribute existing changes' if entries else 'Git baseline is usable')},'evidence':[]}
+        if any(f['code']=='GIT_DETACHED_HEAD' for f in findings): route = route_for('detached_head')
+        elif entries: route = route_for('dirty_or_untracked')
+        else: route = route_for('clean_and_no_active_task' if not active else 'clean_and_active_task')
+        return {'status':status,'route_id':route.route_id,'branch':branch,'head':head,'changed_paths':len(entries),'active_task':active,
+                'findings':findings,'next_skill':route.next_skill,'blocking':route.blocking,
+                'user_decision_required':route.user_decision_required,'decision_kind':route.decision_kind,
+                'handoff':{'task':active,'stage':'git-health','next_skill':route.next_skill,'reason':('attribute existing changes' if entries else 'Git baseline is usable')},'evidence':[]}
     except (OSError, subprocess.TimeoutExpired, RuntimeError) as exc:
-        return {'status':'unknown','findings':[{'code':'GIT_HEALTH_UNKNOWN','severity':'blocking','detail':type(exc).__name__+': '+str(exc)}],
-                'next_skill':'gsp-git','blocking':True,'user_decision_required':True,'decision_kind':'investigation','handoff':{'reason':'Investigate Git health before continuing'},'evidence':[]}
+        route = route_for('git_probe_unknown')
+        return {'status':'unknown','route_id':route.route_id,'findings':[{'code':'GIT_HEALTH_UNKNOWN','severity':'blocking','detail':type(exc).__name__+': '+str(exc)}],
+                'next_skill':route.next_skill,'blocking':route.blocking,'user_decision_required':route.user_decision_required,'decision_kind':route.decision_kind,'handoff':{'reason':'Investigate Git health before continuing'},'evidence':[]}
 
 
 def markdown_links(text):
