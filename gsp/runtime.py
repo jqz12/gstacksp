@@ -1105,7 +1105,8 @@ def dispatch(project, args):
         record = book.get(state['work_uuid'])
         if state.get('status') != 'ready' and record.get('stage') != 'closed':
             raise WorkflowError('CLOSE_REQUIRES_READY close is only valid after ready or an explicitly closed archive')
-        book.stage(record['uuid'], 'closed', args.reason)
+        if record.get('stage') != 'closed':
+            book.stage(record['uuid'], 'closed', args.reason)
         active = project.meta / 'active.json'
         if active.exists() and read(active).get('task') == state['id']:
             active.unlink()
