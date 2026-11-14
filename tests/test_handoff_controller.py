@@ -60,3 +60,17 @@ class HandoffControllerTests(unittest.TestCase):
         self.assertEqual(state['status'], 'plan')
         self.assertFalse((self.project.meta / 'runs/demo/handoffs.jsonl').exists())
 
+    def test_controller_mode_rejects_direct_stage_commands(self):
+        self.cmd('new', 'modern', '--title', 'Modern')
+        state = read(self.project.meta / 'runs/modern/state.json')
+        self.project.document(state, 'design').write_text('# A valid modern specification with acceptance', encoding='utf-8')
+        self.cmd('approve', 'modern', '--quote', 'approved')
+        self.project.document(state, 'plan').write_text('# Plan\n## Task T1: Modern\nConsumes: input\nProduces: output\nRun: unit\nExpected: pass\n', encoding='utf-8')
+        self.cmd('task-add', 'modern', 'T1', '--title', 'Modern', '--acceptance', 'pass')
+        self.cmd('seal-plan', 'modern')
+        self.cmd('scope', 'modern', '--off', '--quote', 'fixture scope')
+        with self.assertRaises(WorkflowError):
+            self.cmd('task-start', 'modern', 'T1')
+        self.cmd('advance', 'modern', '--to', 'execute')
+        self.cmd('task-start', 'modern', 'T1')
+

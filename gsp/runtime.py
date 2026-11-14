@@ -403,6 +403,7 @@ class Project:
         state = {'schema': 1, 'id': args.id, 'title': args.title, 'root': str(self.root),
                  'project_id': self.identity()['id'], 'created': now(), 'status': 'design',
                  'mode': args.mode, 'mode_quote': args.quote, 'documents': documents, 'design_approval': None, 'plan_seal': None,
+                 'controller_required': not getattr(args, 'legacy_layout', False),
                  'scope': {'mode': 'pending'}, 'tasks': [], 'evidence': [], 'review': None,
                  'authorizations': [], 'git': git_identity(self.root)}
         if record:
@@ -1173,7 +1174,8 @@ def dispatch(project, args):
         elif '计划尚未编写' in project.document(state, 'plan').read_text(encoding='utf-8'):
             raise WorkflowError('PLAN_EMPTY write the actual task plan first')
         state['plan_seal'] = {'sha256': digest(project.document(state, 'plan')), 'tasks_sha256': project.task_definition_hash(state), 'at': now()}
-        state['status'] = 'execute'
+        if not state.get('controller_required'):
+            state['status'] = 'execute'
     elif command == 'scope':
         path = (project.root / args.path).resolve() if args.path else None
         if path and (not path.is_dir() or not inside(project.root, path)):
@@ -1190,6 +1192,8 @@ def dispatch(project, args):
         if state['scope']['mode'] == 'frozen': project.scope_path(state, args.path)
         return {'allowed': True, 'path': args.path, 'scope': state['scope']['mode']}, True
     elif command == 'task-start':
+        if state.get('controller_required') and state.get('status') != 'execute':
+            raise WorkflowError('CONTROLLER_REQUIRED run advance <id> --to execute before task-start')
         task = project.item(state, args.task)
         if task['status'] == 'done': raise WorkflowError('TASK_ALREADY_DONE do not rerun completed tasks blindly')
         if any(project.item(state, d)['status'] != 'done' for d in task['depends']): raise WorkflowError('DEPENDENCIES_PENDING')
@@ -1233,12 +1237,16 @@ def dispatch(project, args):
         with (doc / 'decisions.md').open('a', encoding='utf-8') as stream:
             stream.write(f'\n- {now()} [rework] {task["id"]}: {redact(args.reason)}; affected: {", ".join(sorted(affected))}\n')
     elif command == 'review':
+        if state.get('controller_required') and state.get('status') != 'review':
+            raise WorkflowError('CONTROLLER_REQUIRED run advance <id> --to review before review')
         if args.blocking < 0: raise WorkflowError('INVALID_BLOCKING_COUNT')
         text = (doc / 'review.md').read_text(encoding='utf-8')
         if '尚未审查' in text or len(text.strip()) < 20: raise WorkflowError('REVIEW_MISSING write the actual review first')
         state['review'] = {'reviewer': args.reviewer, 'blocking': args.blocking, 'sha256': digest(doc / 'review.md'), 'fingerprint': fingerprint(project.root), 'contract': contract_hash(project, state, doc), 'at': now()}
         state['status'] = 'review'
     elif command == 'ready':
+        if state.get('controller_required') and state.get('status') != 'ready':
+            raise WorkflowError('CONTROLLER_REQUIRED run advance <id> --to checking then --to ready before ready')
         from .todos import Backlog
         backlog = Backlog(project.root).summary()
         if not backlog['exists']:

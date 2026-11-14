@@ -15,6 +15,8 @@ python <gsp> --project <项目> advance <任务> --to <阶段>
 
 控制器的阶段顺序为 `design → plan → execute → review → checking → ready → ship`。设计批准、计划封存、scope 选择、任务证据、整体审查、最终回归和输入指纹分别由对应阶段验证；外部 commit、push、merge、部署仍需独立授权。
 
+新建任务默认启用 controller mode：`seal-plan` 只封存计划，`task-start`、`review` 和 `ready` 在没有对应 `advance` 记录时拒绝执行。旧的 `--legacy-layout` 任务保留兼容行为，并不代表新任务可以绕过控制器。
+
 ## 阶段总结与任务回复
 
 阶段边界、任务交付、阻塞或交接时，简洁说明：
