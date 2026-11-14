@@ -288,7 +288,7 @@ class Project:
         if execution:
             if state.get('work_uuid'):
                 from .documents import Governance
-                if Governance(self.root).get(state['work_uuid'])['stage'] in ('paused','cancelled','delivered','closed'):
+                if command != 'close' and Governance(self.root).get(state['work_uuid'])['stage'] in ('paused','cancelled','delivered','closed'):
                     raise WorkflowError('WORK_NOT_ACTIVE resume or create related work before execution')
             self.valid_design(state, doc)
             self.valid_plan(state, doc)
