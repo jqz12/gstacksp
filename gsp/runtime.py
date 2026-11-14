@@ -730,6 +730,10 @@ def parser():
     sub.add_parser('init')
     q = sub.add_parser('plan-check', help='read-only bound plan structure check; semantic review is separate')
     q.add_argument('id')
+    for name in ('handoff', 'advance'):
+        q = sub.add_parser(name, help='inspect or advance one controlled workflow stage')
+        q.add_argument('id')
+        q.add_argument('--to', choices=['plan', 'execute', 'review', 'checking', 'ready', 'ship'])
     n = sub.add_parser('new'); n.add_argument('id'); n.add_argument('--title', required=True); n.add_argument('--mode', choices=['interactive', 'unattended'], default='interactive'); n.add_argument('--quote')
     n.add_argument('--legacy-layout',action='store_true',help='compatibility: separated spec/plan layout')
     n.add_argument('--work',help='continue a saved idea by UUID or number')
@@ -1006,6 +1010,15 @@ def dispatch(project, args):
         return handle(project,args),True
     if command == 'init':
         project.initialize(); return {'project': str(project.root)}, True
+    if command in ('handoff', 'advance'):
+        from .handoff import preview, advance
+        state, run, _ = project.state(args.id, execution=False)
+        if command == 'handoff':
+            return preview(project, state, args.to), True
+        result, success = advance(project, state, run, args.to)
+        if success:
+            project.write(state, 'advance', json.dumps({'to': args.to}, ensure_ascii=False))
+        return result, success
     if command == 'new':
         return project.new(args), True
     if command.startswith('todo-'):
@@ -1297,7 +1310,8 @@ def dispatch(project, args):
             # contract and real receipts before accepting an unchanged tree.
             current_fingerprint = fingerprint(project.root)
             for task in state['tasks']:
-                evidence_for(project, state, task['id'], current_fingerprint=current_fingerprint)
+                evidence_for(project, state, task['id'], current_fingerprint=current_fingerprint,
+                             allow_historical=True)
         before = state['git']
         state['git'] = git_identity(project.root)
         state['head_reconciliation'] = {

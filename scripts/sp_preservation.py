@@ -99,6 +99,10 @@ def integration(name, lifecycle_notes=None):
                    'integration, project materials, delivery and maintenance. Expand only the topics triggered '
                    'by this change; no extra mandatory table, document set or skill sequence. '
                    'Headless plan workers return self-reviewed content; the controller owns registration and sealing.\n\n')
+    if name in ('brainstorming', 'freeze', 'writing-plans', 'execute', 'review', 'verify', 'ship'):
+        shared += ('Stage transitions use the unified controller: preview with `<gsp> handoff <id> --to <stage>` '
+                   'and advance with `<gsp> advance <id> --to <stage>`. Read `next_skill` and pending gates; '
+                   'do not treat chat text as a handoff or mutate workflow state around a failed advance.\n\n')
     return shared
 
 

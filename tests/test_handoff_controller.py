@@ -1,0 +1,62 @@
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+from gsp.runtime import Project, dispatch, parser, read, WorkflowError, atomic, digest
+
+
+class HandoffControllerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='gsp-handoff-')
+        self.project = Project(Path(self.tmp.name))
+        self.project.initialize()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def cmd(self, *argv):
+        return dispatch(self.project, parser().parse_args(list(argv)))[0]
+
+    def prepare_plan(self):
+        self.cmd('new', 'demo', '--title', 'Demo', '--legacy-layout')
+        state = read(self.project.meta / 'runs/demo/state.json')
+        self.project.document(state, 'design').write_text('# A valid demo specification with acceptance', encoding='utf-8')
+        self.cmd('approve', 'demo', '--quote', 'approved')
+        self.project.document(state, 'plan').write_text('# Plan\n## Task T1: Demo\nConsumes: input\nProduces: output\nRun: unit\nExpected: pass\n', encoding='utf-8')
+        self.cmd('task-add', 'demo', 'T1', '--title', 'Demo', '--acceptance', 'pass')
+        return read(self.project.meta / 'runs/demo/state.json')
+
+    def test_preview_blocks_execute_until_plan_is_sealed_and_scope_chosen(self):
+        self.prepare_plan()
+        result = self.cmd('handoff', 'demo', '--to', 'execute')
+        self.assertFalse(result['allowed'])
+        self.assertIn(result['blockers'][0]['code'], {'PLAN_NOT_SEALED', 'SCOPE_UNDECIDED'})
+
+    def test_advance_records_handoff_after_valid_plan(self):
+        self.prepare_plan()
+        state = read(self.project.meta / 'runs/demo/state.json')
+        state['plan_seal'] = {'sha256': digest(self.project.document(state, 'plan')),
+                              'tasks_sha256': self.project.task_definition_hash(state)}
+        atomic(self.project.meta / 'runs/demo/state.json', state)
+        self.cmd('scope', 'demo', '--off', '--quote', 'fixture scope')
+        result = self.cmd('advance', 'demo', '--to', 'execute')
+        self.assertTrue(result['allowed'], result)
+        self.assertEqual(result['to_stage'], 'execute')
+        handoffs = self.project.meta / 'runs/demo/handoffs.jsonl'
+        self.assertTrue(handoffs.is_file())
+        record = json.loads(handoffs.read_text(encoding='utf-8').splitlines()[-1])
+        self.assertEqual(record['from_stage'], 'plan')
+        self.assertEqual(record['to_stage'], 'execute')
+
+    def test_invalid_transition_does_not_change_state_or_write_handoff(self):
+        self.prepare_plan()
+        result = self.cmd('handoff', 'demo', '--to', 'ready')
+        self.assertFalse(result['allowed'])
+        failed = self.cmd('advance', 'demo', '--to', 'ready')
+        self.assertFalse(failed['allowed'])
+        state = read(self.project.meta / 'runs/demo/state.json')
+        self.assertEqual(state['status'], 'plan')
+        self.assertFalse((self.project.meta / 'runs/demo/handoffs.jsonl').exists())
+

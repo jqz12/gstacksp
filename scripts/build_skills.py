@@ -153,6 +153,10 @@ LIFECYCLE_NOTES = {
     'health': '自动检测同时扫描项目级和用户级安装，并分别核对清单；全局正常不能掩盖项目损坏。文档治理使用 `<gsp> health --documents-only`；同时检查安装时用 `--documents`。默认报告保存在目标项目 docs/gsp/reports/document-governance/<唯一运行ID>/report.md 与 report.json；用户明确指定集中目录时传 --report-dir，不把开发者本机目录当产品默认。读取报告检查分类、绑定、断链、重复、孤立、未追踪和差异。报告同时包含assets元数据清单、根目录产物候选、Git忽略状态和有界Python字面量输出候选；先读asset_scan的范围、截断和未检查项，其他语言与动态生成路径由执行者核对。程序未检查语义与代码符合性，按需要复核并将依据写到独立复核材料，不能冒称程序已验证。旧项目先盘点和迁移预览，未知分类、未入链或重复副本不等于可删除。只出报告，不自动删文件、迁移或改全局配置。新建资料按统一职责，旧布局是待整理过渡或有依据例外。安装扫描仍不证明真实宿主行为；新环境另做实际技能触发检查。文档规则与命令见 [治理契约](../gsp-workflow/references/document-governance.md)。',
 }
 
+CONTROLLER_HANDOFF = ('阶段转换统一先运行 `<gsp> handoff <id> --to <阶段>` 预览，再运行 '
+                     '`<gsp> advance <id> --to <阶段>` 推进；控制器会检查批准、计划封存、scope、任务证据、审查和最终回归。'
+                     '推进失败不得手工改状态或把聊天说明当作交接证据；读取返回的 next_skill 和 pending gates 后再继续。')
+
 
 def build():
     entries = [{'name': 'gsp-workflow', 'pack': 'core', 'sources': ['SP:using-superpowers','GS:careful','GS:guard'], 'generated': False}]
@@ -161,6 +165,8 @@ def build():
             sources = sources + ['GS:claude-code']
         if name in LIFECYCLE_NOTES:
             body += '\n\n' + LIFECYCLE_NOTES[name] + ' 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。'
+        if name in ('brainstorming', 'freeze', 'writing-plans', 'execute', 'review', 'verify', 'ship', 'workflow'):
+            body += '\n\n' + CONTROLLER_HANDOFF
         if name == 'health':
             body += '\n\n文档问题只读报告后，按 [治理执行规则](../gsp-workflow/references/document-governance-execution.md) 交接给 gsp-document-governance。已有完整整改授权则继续执行；仅检查授权则停在报告并给出整改范围。报告结论必须区分检查完成与治理完成，迁移预览不能代替实际迁移验收。不因检查自动改文件，也不因只读职责丢弃已授权的后续整改。'
             body += '\n\nCodex 全局 hooks 用 `<gsp> hooks-status` 检查归属完整性，用 `<gsp> hooks-report` 汇总当前项目的元数据事件；安装/升级/卸载/恢复分别是 hooks-install/hooks-upgrade/hooks-uninstall/hooks-recover，支持 --dry-run 和 --profile。安装需用户授权，原生信任由用户在 /hooks 审查。静态通过不代表真实触发，Shell 冻结与特殊工具路径仍有覆盖缺口。'
