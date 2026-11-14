@@ -253,7 +253,7 @@ class Project:
             raise WorkflowError('PROJECT_MISMATCH refusing cross-project continuation')
         return state, run, doc
 
-    def state(self, task_id, execution=False, allow_head_change=False, release_scope=False):
+    def state(self, task_id, execution=False, allow_head_change=False, release_scope=False, allow_closed=False):
         if (self.meta/'document-transaction.json').exists() or (self.meta/'document-migration.json').exists():
             raise WorkflowError('DOCUMENT_TRANSACTION_PENDING recover document operations first')
         run, doc = self.paths(task_id)
@@ -288,7 +288,7 @@ class Project:
         if execution:
             if state.get('work_uuid'):
                 from .documents import Governance
-                if command != 'close' and Governance(self.root).get(state['work_uuid'])['stage'] in ('paused','cancelled','delivered','closed'):
+                if not allow_closed and Governance(self.root).get(state['work_uuid'])['stage'] in ('paused','cancelled','delivered','closed'):
                     raise WorkflowError('WORK_NOT_ACTIVE resume or create related work before execution')
             self.valid_design(state, doc)
             self.valid_plan(state, doc)
@@ -1056,7 +1056,7 @@ def dispatch(project, args):
         elif args.supersedes or args.reason or args.source:
             raise WorkflowError('LEARNING_TEXT_REQUIRED')
         return book.query(args.query,args.history), True
-    state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'run', 'review', 'ready', 'close'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path)
+    state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'run', 'review', 'ready', 'close'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path, allow_closed=command == 'close')
     if command == 'documents-adopt':
         candidate = {**state, 'documents': {'design': args.spec, 'plan': args.plan}}
         for kind in ('design', 'plan'):
