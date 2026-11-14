@@ -1098,13 +1098,13 @@ def dispatch(project, args):
         if not project.document(state,'plan').exists():
             atomic(project.document(state,'plan'),f'# {state["title"]} — 实施计划\n\n规格：[spec]({project.document_link(state,"design",project.document(state,"plan").parent)})\n\n计划尚未编写。\n')
     elif command == 'close':
-        if state.get('status') != 'ready':
-            raise WorkflowError('CLOSE_REQUIRES_READY close is only valid after ready')
         if not state.get('work_uuid'):
             raise WorkflowError('CLOSE_REQUIRES_WORK_ARCHIVE task has no document archive to close')
         from .documents import Governance
         book = Governance(project.root)
         record = book.get(state['work_uuid'])
+        if state.get('status') != 'ready' and record.get('stage') != 'closed':
+            raise WorkflowError('CLOSE_REQUIRES_READY close is only valid after ready or an explicitly closed archive')
         book.stage(record['uuid'], 'closed', args.reason)
         active = project.meta / 'active.json'
         if active.exists() and read(active).get('task') == state['id']:
