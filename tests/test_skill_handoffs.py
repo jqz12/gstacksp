@@ -48,3 +48,20 @@ class SkillHandoffGenerationTests(unittest.TestCase):
             with self.subTest(name=item['name']):
                 text = (ROOT/'skills'/item['name']/'SKILL.md').read_text(encoding='utf-8')
                 self.assertIn('output-handoff.md', text.split('<!-- sp-preserved-body:begin -->')[0])
+
+    def test_git_topology_handoff_reaches_all_affected_skills(self):
+        required = (
+            'topology', 'topology-select', 'main/master', 'worktree',
+            'GSP 编号', 'workspace_root', 'control_root', 'Issue/PR',
+        )
+        for name in ('git', 'workflow', 'execute', 'captain', 'ship'):
+            with self.subTest(name=name):
+                text = (ROOT / 'skills' / ('gsp-' + name) / 'SKILL.md').read_text(encoding='utf-8')
+                for phrase in required:
+                    self.assertIn(phrase, text, f'{name} missing {phrase}')
+
+    def test_public_git_topology_docs_name_the_identity_layers(self):
+        for path in (ROOT / 'docs/安装与使用.md', ROOT / 'docs/技能目录.md'):
+            text = path.read_text(encoding='utf-8')
+            self.assertIn('GSP 编号', text)
+            self.assertIn('worktree', text)

@@ -86,7 +86,7 @@ class VerificationInputsTests(unittest.TestCase):
         import argparse
         project=runtime.Project(self.root);state={'id':'test','tasks':[{'id':'T1','status':'running'}]}
         args=argparse.Namespace(task='T1',argv=['not-to-run'],timeout=1,kind='check')
-        with patch.object(runtime,'snapshot',return_value={}),patch.object(project,'write'),patch.object(runtime.time,'monotonic',side_effect=[0,2]),patch.object(runtime.subprocess,'run') as command:
+        with patch.object(runtime,'snapshot',return_value={}),patch.object(project,'write'),patch.object(runtime.time,'monotonic',side_effect=[0,0,2]),patch.object(runtime.subprocess,'run') as command:
             with self.assertRaisesRegex(WorkflowError,'SCAN_TIMEOUT'):runtime.run_check(project,state,self.root/'.gsp/runs/test',args)
         command.assert_not_called();self.assertNotIn('inflight',state)
 

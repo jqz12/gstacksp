@@ -37,7 +37,11 @@
 
 ## 开始、冻结与隔离
 
-Git 生命周期由 health route、workflow 和按需 `gsp-git` 共同承接：health 只读分类，gsp-git 处理分支/归属/提交准备，workflow 接收短 handoff。新分支建议使用 `feature/GSP-<编号>-<slug>` 等类型前缀，提交使用 Conventional Commit 并在正文包含任务编号；AI 协作提交按当前宿主默认署名 trailer 执行（Claude Code 使用其默认 `Co-Authored-By`，Codex 依其配置），项目不另造 trailer；旧分支保留历史语义。commit、push、merge、delete-branch 各自需要精确授权，任务批准不自动授予这些动作。
+Git 生命周期由 health route、workflow 和按需 `gsp-git` 共同承接：health 只读分类，gsp-git 处理分支/归属/提交准备，workflow 接收短 handoff。新任务第一次实现前先运行 `<gsp> topology <id>`，展示当前分支、HEAD、所有 worktree、脏状态和活动任务绑定，再用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 记录一次选择。默认阻止 main/master 和 detached HEAD 直接写入；原地实现必须有明确用户覆盖原话。新分支建议使用 `feature/GSP-<编号>[-Tnn]-<中文主题>` 等类型前缀，提交使用 Conventional Commit 并在正文包含任务编号；AI 协作提交按当前宿主默认署名 trailer 执行（Claude Code 使用其默认 `Co-Authored-By`，Codex 依其配置），项目不另造 trailer；旧分支保留历史语义。状态中的 GSP 编号、T 任务号、branch、commit SHA、Issue/PR、control_root 和 workspace_root 是独立身份；Issue/PR 没有真实对象时留空。commit、push、merge、delete-branch 各自需要精确授权，任务批准不自动授予这些动作。
+
+并行和全栈任务使用 `task-add --role frontend|backend|integration`，通过 `topology-select <id> --task Tnn` 为每个可写任务绑定独立 branch/worktree；控制根只保存一份 `.gsp` 账本，源码命令和 fingerprint 使用绑定的 `workspace_root`。共享可写 worktree、重复 branch、缺少 integration owner、子任务未完成或集成 base 已漂移时阻止 `ready`。资源不足可以顺序复用已释放 workspace，但不能退回未记录的主分支写入。
+
+任务创建时按实际形态声明 `--intent`，大功能或跨模块单任务用 `--size large`。同一单任务换会话只复核现有绑定，不额外制造集成任务。`--base` 指定派生基线；位置变化使用 `topology-select --rebind`，使旧验证失效并保留历史。子任务实际提交核对后使用 `observe-head --task Tnn`；集成 HEAD 必须包含所有子任务已验证的干净提交，当前不自动证明 cherry-pick/squash 的来源。最终 `run --task all`、审查和交付针对唯一集成工作区。多工作区由 Native 执行；headless driver 当前拒绝绑定 worktree，不能在控制根执行后冒称子工作区已验证。真正非 Git 项目保留原工作流，损坏 Git 和探测失败不能降级成该例外。
 
 首次实现前，只问一次是否冻结并给出建议；用户已经说明时直接执行。小修改可原地冻结，大功能/并行改动可用宿主原生 worktree，已有工作区先检测。现有 Git worktree 独立工作目录并共享 Git 数据，不是沙箱。
 

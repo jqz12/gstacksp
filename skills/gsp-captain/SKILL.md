@@ -13,4 +13,4 @@ description: "Use when 确有多个独立任务需要协调代理和分支且宿
 
 路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
 
-先确认可用代理工具及用户授权。按文件/接口划分任务、指定单写者和依赖，各代理交回范围、测试和阻塞；控制器统一记录。代理不能自行合并他人分支或扩大范围。共享目录不并发写状态；需要并行源码时用隔离 worktree。最终集成后再回归和整体审查，资源不足改为顺序执行，不依赖 Capy 专属工具。
+先确认可用代理工具及用户授权。按文件/接口划分任务、指定单写者和依赖，各代理交回范围、测试和阻塞；控制器统一记录。代理不能自行合并他人分支或扩大范围。共享目录不并发写状态；需要并行源码时用隔离 worktree。最终集成后再回归和整体审查，资源不足改为顺序执行，不依赖 Capy 专属工具。 The controller inventories and recommends topology before allocation. Each writable agent receives its own branch/worktree and T task; agents cannot share a writable path or edit the parent ledger directly. A single integration owner validates frontend and backend output in an integration worktree before the parent can become ready. With limited resources, reuse a released workspace serially while preserving the binding. Git topology contract: use topology and topology-select; inspect main/master and every worktree; keep GSP 编号, T task, branch, commit SHA, control_root, workspace_root, and Issue/PR separate.

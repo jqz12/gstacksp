@@ -108,6 +108,7 @@ class Driver:
 
     def validate_workflow(self):
         state, _, doc = self.project.state(self.task)
+        self.check_topology_supported(state)
         self.project.valid_design(state, doc)
         b = self.data['binding']
         if (state['design_approval']['sha256'] != b['design'] or state['scope'] != b['scope'] or state['authorizations'] != b['authorizations']
@@ -117,6 +118,19 @@ class Driver:
             raise WorkflowError('EXECUTION_UNKNOWN project check still has inflight state')
         if state.get('plan_seal'):
             self.project.valid_plan(state, doc)
+        return state
+
+    def check_topology_supported(self, state):
+        if (self.project.workspace_root(state) != self.project.root or
+                any(t.get('topology') for t in state.get('tasks', []))):
+            raise WorkflowError('DRIVER_TOPOLOGY_UNSUPPORTED use Native execution for bound worktrees; headless workers still target the control root')
+
+    def advance_stage(self, state, target):
+        if state.get('controller_required') and state['status'] != target:
+            result, ok = dispatch(self.project, Namespace(command='advance', id=self.task, to=target))
+            if not ok:
+                raise WorkflowError('CONTROLLER_BLOCKED ' + json.dumps(result['blockers'], ensure_ascii=False))
+            state, _, _ = self.project.state(self.task)
         return state
 
     def gate(self, reason, question, kind='dependency'):
@@ -133,6 +147,7 @@ class Driver:
         return {'action': 'blocked', 'reason': reason}
 
     def check(self, state, task):
+        self.check_topology_supported(state)
         remaining = self.data['deadline'] - time.time()
         if remaining <= 0:
             raise WorkflowError('DEADLINE_EXCEEDED')
@@ -195,6 +210,11 @@ class Driver:
                 return self.block('DEADLINE_EXCEEDED')
             phase = self.data['phase']
             task = None
+            if phase == 'execute' or (phase == 'verify' and state['status'] == 'needs-verification'):
+                try:
+                    state = self.advance_stage(state, 'execute')
+                except WorkflowError as exc:
+                    return self.gate('CONTROLLER_BLOCKED', str(exc))
             if phase == 'execute':
                 open_tasks = [t for t in state['tasks'] if t['status'] != 'done']
                 if open_tasks:
@@ -219,8 +239,15 @@ class Driver:
                 else:
                     self.data['phase'] = phase = 'review'
                 state, _, _ = self.project.state(self.task)
+                if passed:
+                    try:
+                        state = self.advance_stage(state, 'review')
+                    except WorkflowError as exc:
+                        return self.gate('CONTROLLER_BLOCKED', str(exc))
             if phase == 'deliver':
                 try:
+                    state = self.advance_stage(state, 'checking')
+                    state = self.advance_stage(state, 'ready')
                     dispatch(self.project, Namespace(command='ready', id=self.task))
                     dispatch(self.project, Namespace(command='save', id=self.task))
                 except WorkflowError as exc:

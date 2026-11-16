@@ -50,6 +50,7 @@ class TodoTests(unittest.TestCase):
         document(self.root, 'work', 'plan').write_text('# Plan\nT1 implement and test configuration behavior.\n', encoding='utf-8')
         self.cli('seal-plan', 'work')
         self.cli('scope', 'work', '--off', '--quote', 'SYNTHETIC TEST fixture choice')
+        self.cli('advance', 'work', '--to', 'execute')
         return doc
 
     def finish_task(self):
@@ -57,6 +58,14 @@ class TodoTests(unittest.TestCase):
         (self.root / 'test_app.py').write_text('import unittest\nclass AppTest(unittest.TestCase):\n def test_result(self): self.assertEqual(2+3,5)\n', encoding='utf-8')
         self.cli('run', 'work', '--task', 'T1', '--', sys.executable, '-m', 'unittest', '-v')
         self.cli('task-done', 'work', 'T1')
+
+    def prepare_delivery(self, doc):
+        self.finish_task()
+        self.cli('run', 'work', '--task', 'all', '--', sys.executable, '-m', 'unittest', '-v')
+        (doc / 'review.md').write_text('# Review\nFixture self-review checked actual task and current follow-ups.\n', encoding='utf-8')
+        self.cli('advance', 'work', '--to', 'review')
+        self.cli('review', 'work', '--reviewer', 'self', '--blocking', '0')
+        self.cli('advance', 'work', '--to', 'checking')
 
     def test_initialize_creates_project_backlog(self):
         self.cli('init')
@@ -92,9 +101,10 @@ class TodoTests(unittest.TestCase):
             '--source', 'fixture/review#1', '--origin', 'work', '--blocking', ok=False))
 
     def test_removed_backlog_cannot_be_treated_as_empty(self):
-        self.cli('init'); self.work(); self.add()
+        self.cli('init'); doc = self.work(); self.add()
+        self.prepare_delivery(doc)
         (self.root / 'TODOS.md').unlink()
-        self.assertIn('BACKLOG_MISSING', self.cli('ready', 'work', ok=False))
+        self.assertIn('BACKLOG_MISSING', self.cli('advance', 'work', '--to', 'ready', ok=False))
 
     def test_no_done_without_completed_task_and_evidence(self):
         self.cli('init'); self.work()
@@ -115,22 +125,20 @@ class TodoTests(unittest.TestCase):
         self.assertNotIn('\n\n\n\n', (self.root / 'TODOS.md').read_text(encoding='utf-8'))
 
     def test_open_blocker_prevents_ready_and_appears_on_resume(self):
-        self.cli('init'); self.work()
+        self.cli('init'); doc = self.work()
         self.cli('todo-add', '--title', 'Blocked configuration', '--what', 'Required behavior missing',
                  '--why', 'Cannot meet design', '--context', 'Fixture failure', '--source', 'work/review',
                  '--priority', 'P0', '--effort', 'S', '--origin', 'work', '--blocking')
         result = self.cli('resume', 'work')
         self.assertEqual(len(result['backlog']['items']), 1)
-        self.finish_task()
-        self.assertIn('BACKLOG_BLOCKING', self.cli('ready', 'work', ok=False))
+        self.prepare_delivery(doc)
+        self.assertIn('BACKLOG_BLOCKING', self.cli('advance', 'work', '--to', 'ready', ok=False))
 
     def test_nonblocking_followups_disclosed_without_blocking_ready(self):
         self.cli('init'); doc = self.work()
         item = self.add(origin='work')['item']
-        self.finish_task()
-        self.cli('run', 'work', '--task', 'all', '--', sys.executable, '-m', 'unittest', '-v')
-        (doc / 'review.md').write_text('# Review\nFixture self-review checked actual task; remaining issue is out of scope.\n', encoding='utf-8')
-        self.cli('review', 'work', '--reviewer', 'self', '--blocking', '0')
+        self.prepare_delivery(doc)
+        self.cli('advance', 'work', '--to', 'ready')
         self.cli('ready', 'work')
         self.assertIn(item['id'], (doc / 'delivery.md').read_text(encoding='utf-8'))
         self.assertIn('TODOS.md', (doc / 'delivery.md').read_text(encoding='utf-8'))

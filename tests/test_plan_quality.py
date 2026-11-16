@@ -122,7 +122,7 @@ class PlanQualityTests(unittest.TestCase):
             result = cli('seal-plan', 'sample', '--check-structure')
             self.assertEqual(result.returncode, 1)
             self.assertIn('PLAN_STRUCTURE_INVALID', result.stderr)
-            self.assertIsNone(json.loads((root/'.gsp/runs/sample/state.json').read_text())['plan_seal'])
+            self.assertIsNone(json.loads((root/'.gsp/runs/sample/state.json').read_text(encoding='utf-8'))['plan_seal'])
             self.assertEqual(cli('seal-plan', 'sample').returncode, 0)  # legacy compatibility
             plan.write_text(complete(), encoding='utf-8')
             before = snapshot()

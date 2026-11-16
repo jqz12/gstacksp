@@ -42,6 +42,7 @@ class DualTrackRuntimeTests(unittest.TestCase):
         plan.write_text("# Plan\nT1: implement and test login.\n", encoding="utf-8")
         self.cli("seal-plan", "login")
         self.cli("scope", "login", "--off", "--quote", "no freeze fixture")
+        self.cli("advance", "login", "--to", "execute")
         state = json.loads(state_file.read_text(encoding="utf-8"))
         state["tasks"][0]["acceptance_cards"] = [{
             "id": "behavior", "kind": "test", "required": True, "status": "NOT_CHECKED",
@@ -60,13 +61,18 @@ class DualTrackRuntimeTests(unittest.TestCase):
         state = json.loads(state_file.read_text(encoding="utf-8"))
         docs = self.project / state["doc_dir"] / "review.md"
         docs.write_text("# Review\nDual track fixture reviewed.\n", encoding="utf-8")
+        self.cli("advance", "login", "--to", "review")
         self.cli("review", "login", "--reviewer", "self", "--blocking", "0")
+        self.cli("advance", "login", "--to", "checking")
+        blocked = self.cli("advance", "login", "--to", "ready", ok=False)
+        self.assertIn("ACCEPTANCE_PENDING", blocked.stdout)
         self.cli("ready", "login", ok=False)
         state = json.loads(state_file.read_text(encoding="utf-8"))
         self.assertEqual(state["tasks"][0]["implementation"]["status"], "implementation_done")
         self.assertEqual(state["tasks"][0]["acceptance_track"]["status"], "acceptance_pending")
         state["tasks"][0]["acceptance_cards"][0].update(status="PASS", observed="accepted", evidence=["fixture-test"])
         state_file.write_text(json.dumps(state), encoding="utf-8")
+        self.cli("advance", "login", "--to", "ready")
         self.cli("ready", "login")
 
 

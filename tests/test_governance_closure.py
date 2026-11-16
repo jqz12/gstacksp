@@ -25,6 +25,7 @@ class GovernanceClosureTests(unittest.TestCase):
         self.project.document(state, 'plan').write_text('# Maintain guide, verify inputs, review and prepare delivery.', encoding='utf-8')
         self.cmd('task-add', 'governance', 'T1', '--title', 'Maintain guide', '--acceptance', 'Guide is current', '--no-tests-reason', 'Document fixture uses explicit checks')
         self.cmd('seal-plan', 'governance')
+        self.cmd('advance', 'governance', '--to', 'execute')
         self.cmd('task-start', 'governance', 'T1')
 
     def cmd(self, *argv):
@@ -32,7 +33,9 @@ class GovernanceClosureTests(unittest.TestCase):
         cut = values.index('--') if '--' in values else len(values)
         args = parser().parse_args(values[:cut])
         if cut < len(values): args.argv = values[cut+1:]
-        return dispatch(self.project, args)[0]
+        result, ok = dispatch(self.project, args)
+        self.assertTrue(ok, result)
+        return result
 
     def check(self, task):
         self.cmd('run', 'governance', '--task', task, '--kind', 'check', '--', sys.executable, '-c', 'print("document fixture checked")')
@@ -42,7 +45,10 @@ class GovernanceClosureTests(unittest.TestCase):
         self.cmd('task-done', 'governance', 'T1')
         self.check('all')
         (self.doc/'review.md').write_text('# Current document fixture review: no blocking issues.', encoding='utf-8')
+        self.cmd('advance', 'governance', '--to', 'review')
         self.cmd('review', 'governance', '--reviewer', 'self', '--blocking', '0')
+        self.cmd('advance', 'governance', '--to', 'checking')
+        self.cmd('advance', 'governance', '--to', 'ready')
         self.cmd('ready', 'governance')
 
     def test_old_delivery_append_and_health_do_not_revalidate_changed_inputs(self):

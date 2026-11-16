@@ -19,8 +19,22 @@ ROLES={'product':'current','reference':'reference','howto':'operation','work':'t
        'archive':'historical','ops':'verification','gsp':'workflow','specs':'legacy-spec','reviews':'legacy-review','designs':'legacy-design','reverse':'research'}
 
 
+def _git_unknown(exc):
+    route = route_for('git_probe_unknown')
+    return {'status':'unknown','route_id':route.route_id,'findings':[{'code':'GIT_HEALTH_UNKNOWN','severity':'blocking','detail':type(exc).__name__+': '+str(exc)}],
+            'next_skill':route.next_skill,'blocking':route.blocking,'user_decision_required':route.user_decision_required,'decision_kind':route.decision_kind,'handoff':{'reason':'Investigate Git health before continuing'},'evidence':[]}
+
+
 def git_route(root):
     """Read-only Git classification and compact next-skill handoff."""
+    from .runtime import Project
+    from .git_topology import bound_task_for_path
+    context_path = Path(root).resolve()
+    try:
+        project = Project(context_path)
+    except (WorkflowError, OSError) as exc:
+        return _git_unknown(exc)
+    root = project.root
     root = Path(root).resolve()
     def run(*args):
         return subprocess.run(['git', *args], cwd=root, capture_output=True,
@@ -29,6 +43,8 @@ def git_route(root):
     try:
         probe = run('rev-parse', '--show-toplevel')
         if probe.returncode != 0:
+            if any((p / '.git').exists() for p in (root, *root.parents)) or 'not a git repository' not in probe.stderr.lower():
+                raise WorkflowError('GIT_PROBE_FAILED ' + probe.stderr.strip())
             route = route_for('repository_missing')
             return {'status':'not-a-repository','route_id':route.route_id,'findings':[{'code':'GIT_REPOSITORY_MISSING','severity':'blocking','detail':'Git repository is not available'}],
                     'next_skill':route.next_skill,'blocking':route.blocking,'user_decision_required':route.user_decision_required,'decision_kind':route.decision_kind,'handoff':{'reason':'Choose whether to initialize or continue without Git'},'evidence':[]}
@@ -47,18 +63,39 @@ def git_route(root):
             active_file=root/'.gsp/active.json'
             if active_file.exists(): active=read(active_file).get('task')
         except (OSError,ValueError,TypeError): pass
+        active = bound_task_for_path(root, context_path) or active
+        topology = None
+        topology_condition = None
+        if active:
+            from .runtime import Project, topology_required, topology_selected
+            project = Project(root)
+            try:
+                state, _, _ = project.active_state(context_path=context_path)
+                if topology_required(state) or topology_selected(state):
+                    topology = project.topology_report(state)
+                    # Keep the live inventory; avoid repeating its saved initial
+                    # snapshot in every health response.
+                    topology['selected'] = {k: v for k, v in topology['selected'].items() if k != 'initial_inventory'}
+                    if topology_required(state) and not topology_selected(state):
+                        topology_condition = 'git_topology_required'
+                        findings.append({'code': 'GIT_TOPOLOGY_REQUIRED', 'severity': 'blocking',
+                                         'detail': 'Choose in-place, branch or worktree before implementation'})
+                    else:
+                        project.validate_topology(state)
+            except (WorkflowError, OSError, ValueError, KeyError, TypeError) as exc:
+                topology_condition = 'git_topology_invalid'
+                findings.append({'code': str(exc).split(' ', 1)[0], 'severity': 'blocking', 'detail': str(exc)})
         status='clean' if not findings else 'needs-decision'
-        if any(f['code']=='GIT_DETACHED_HEAD' for f in findings): route = route_for('detached_head')
+        if topology_condition: route = route_for(topology_condition)
+        elif any(f['code']=='GIT_DETACHED_HEAD' for f in findings): route = route_for('detached_head')
         elif entries: route = route_for('dirty_or_untracked')
         else: route = route_for('clean_and_no_active_task' if not active else 'clean_and_active_task')
         return {'status':status,'route_id':route.route_id,'branch':branch,'head':head,'changed_paths':len(entries),'active_task':active,
-                'findings':findings,'next_skill':route.next_skill,'blocking':route.blocking,
+                'findings':findings,'topology':topology,'next_skill':route.next_skill,'blocking':route.blocking,
                 'user_decision_required':route.user_decision_required,'decision_kind':route.decision_kind,
-                'handoff':{'task':active,'stage':'git-health','next_skill':route.next_skill,'reason':('attribute existing changes' if entries else 'Git baseline is usable')},'evidence':[]}
-    except (OSError, subprocess.TimeoutExpired, RuntimeError) as exc:
-        route = route_for('git_probe_unknown')
-        return {'status':'unknown','route_id':route.route_id,'findings':[{'code':'GIT_HEALTH_UNKNOWN','severity':'blocking','detail':type(exc).__name__+': '+str(exc)}],
-                'next_skill':route.next_skill,'blocking':route.blocking,'user_decision_required':route.user_decision_required,'decision_kind':route.decision_kind,'handoff':{'reason':'Investigate Git health before continuing'},'evidence':[]}
+                'handoff':{'task':active,'stage':'git-health','next_skill':route.next_skill,'reason':(findings[-1]['detail'] if topology_condition else 'attribute existing changes' if entries else 'Git baseline is usable')},'evidence':[]}
+    except (OSError, subprocess.TimeoutExpired, RuntimeError, WorkflowError) as exc:
+        return _git_unknown(exc)
 
 
 def markdown_links(text):

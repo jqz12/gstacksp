@@ -116,6 +116,114 @@ def git_identity(root):
         return {'root': None, 'branch': None, 'head': None}
 
 
+def _git_run(root, *args):
+    """Run one bounded local Git command without invoking a shell."""
+    return subprocess.run(
+        ['git', *args], cwd=Path(root), capture_output=True, text=True,
+        encoding='utf-8', errors='replace', timeout=30,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+    )
+
+
+def topology_required(state):
+    """Whether this state opted into the Git topology gate.
+
+    States created before topology support, legacy-layout runs and projects
+    created outside a Git repository keep their historical execution path.
+    New Git-backed work items get ``enforce=True`` at creation time.
+    """
+    return bool((state.get('git_topology') or {}).get('enforce'))
+
+
+def topology_selected(state):
+    mode = (state.get('git_topology') or {}).get('effective_mode')
+    return mode in {'in-place', 'branch', 'worktree'}
+
+
+def parallel_required(state):
+    tasks = state.get('tasks') or []
+    roles = {t.get('role', 'implementation') for t in tasks}
+    intent = (state.get('git_topology') or {}).get('intent', 'single-task')
+    return (intent in {'parallel-multi-task', 'full-stack'} or
+            (intent == 'cross-session' and len([t for t in tasks if t.get('role') != 'observer']) > 1) or
+            bool({'frontend', 'backend', 'integration'} & roles))
+
+
+def validate_parallel_bindings(state):
+    """Validate task-level writable workspace bindings for a parent run.
+
+    The function is intentionally pure: it reports blockers and never creates
+    branches, changes task state, or merges child work.  Read-only observers
+    may omit a topology; writable parallel roles must claim a unique branch
+    and workspace.
+    """
+    tasks = list(state.get('tasks') or [])
+    roles = {str(task.get('role') or 'implementation') for task in tasks}
+    intent = str((state.get('git_topology') or {}).get('intent') or 'single-task')
+    parallel = parallel_required(state)
+    writable_roles = {'implementation', 'frontend', 'backend', 'integration'}
+    blocking = []
+    integration = [task for task in tasks if task.get('role') == 'integration']
+    if parallel and not integration:
+        blocking.append({'code': 'GIT_INTEGRATION_REQUIRED', 'detail': 'parallel or full-stack work requires one integration task'})
+    if len(integration) > 1:
+        blocking.append({'code': 'GIT_INTEGRATION_OWNER_CONFLICT', 'detail': 'only one integration task may own the parent merge point'})
+
+    workspaces = {}
+    branches = {}
+    for task in tasks:
+        role = str(task.get('role') or 'implementation')
+        if role not in writable_roles:
+            continue
+        topology = task.get('topology') or {}
+        effective = topology.get('effective_mode')
+        if parallel and not effective:
+            blocking.append({'code': 'GIT_TASK_TOPOLOGY_REQUIRED', 'task': task.get('id'),
+                             'detail': 'each writable parallel task needs its own topology binding'})
+            continue
+        if not effective:
+            continue
+        workspace = topology.get('workspace_root')
+        branch = topology.get('branch')
+        if workspace:
+            previous = workspaces.get(str(workspace))
+            if previous and previous != task.get('id'):
+                blocking.append({'code': 'GIT_WORKTREE_CONFLICT', 'task': task.get('id'),
+                                 'detail': f'{workspace} is claimed by {previous} and {task.get("id")}'})
+            else:
+                workspaces[str(workspace)] = task.get('id')
+        if branch:
+            previous = branches.get(str(branch))
+            if previous and previous != task.get('id'):
+                blocking.append({'code': 'GIT_BRANCH_CONFLICT', 'task': task.get('id'),
+                                 'detail': f'{branch} is claimed by {previous} and {task.get("id")}'})
+            else:
+                branches[str(branch)] = task.get('id')
+
+    if parallel and integration:
+        integration_task = integration[0]
+        integration_id = integration_task.get('id')
+        child_ids = {task.get('id') for task in tasks if task.get('id') != integration_id}
+        missing_dependencies = sorted(child_ids - set(integration_task.get('depends') or []))
+        if missing_dependencies:
+            blocking.append({'code': 'GIT_INTEGRATION_DEPENDENCY_MISSING', 'task': integration_id,
+                             'detail': ', '.join(missing_dependencies)})
+        pending = [task.get('id') for task in tasks if task.get('id') != integration_id and task.get('status') != 'done']
+        if pending:
+            blocking.append({'code': 'GIT_CHILD_TASKS_PENDING', 'tasks': pending,
+                             'detail': 'all frontend/backend child tasks must finish before integration'})
+        if integration_task.get('status') != 'done':
+            blocking.append({'code': 'GIT_INTEGRATION_PENDING', 'task': integration_id,
+                             'detail': 'integration task must finish before the parent is ready'})
+    return {
+        'valid': not blocking,
+        'parallel': parallel,
+        'integration_task': integration[0].get('id') if integration else None,
+        'writable_tasks': [task.get('id') for task in tasks if str(task.get('role') or 'implementation') in writable_roles],
+        'blocking': blocking,
+    }
+
+
 def commit_number_warnings(root, previous_head, current_head, task_number):
     """Report missing task numbers without blocking HEAD reconciliation."""
     if not previous_head or not current_head or previous_head == current_head or not task_number:
@@ -182,6 +290,16 @@ def locked(root):
 class Project:
     def __init__(self, root):
         self.root = Path(root).resolve()
+        self.invocation_root = self.root
+        # Linked worktrees share the primary checkout's local ledger and ID
+        # allocator. Never initialize a second .gsp merely because cwd changed.
+        if (self.root / '.git').is_file():
+            common = _git_run(self.root, 'rev-parse', '--git-common-dir')
+            if common.returncode:
+                raise WorkflowError('GIT_PROBE_FAILED cannot resolve worktree control root')
+            primary = (self.root / common.stdout.strip()).resolve().parent
+            if (primary / '.gsp/project.json').is_file():
+                self.root = primary
         self.meta = self.root / '.gsp'
         if not inside(self.root, self.meta) or not inside(self.root, self.root / 'docs/gsp'):
             raise WorkflowError('PROJECT_PATH_ESCAPE workflow storage resolves outside project')
@@ -245,15 +363,396 @@ class Project:
     def document_link(self, state, kind, folder):
         return os.path.relpath(self.document(state, kind), folder).replace('\\', '/')
 
-    def active_state(self):
-        task_id = read(self.meta / 'active.json')['task']
+    def active_state(self, context_path=None):
+        from .git_topology import bound_task_for_path
+        task_id = bound_task_for_path(self.root, context_path) if context_path is not None else None
+        task_id = task_id or read(self.meta / 'active.json')['task']
         run, doc = self.paths(task_id)
         state = read(run / 'state.json')
         if state.get('project_id') != self.identity()['id'] or state.get('root') != str(self.root):
             raise WorkflowError('PROJECT_MISMATCH refusing cross-project continuation')
         return state, run, doc
 
-    def state(self, task_id, execution=False, allow_head_change=False, release_scope=False, allow_closed=False):
+    def workspace_root(self, state, validate=True, task_id=None, allow_head_change=False):
+        """Return the source workspace bound to a task.
+
+        The control root owns ``.gsp`` and task documents.  A worktree-mode
+        task keeps those records there while commands and fingerprints run in
+        the bound source workspace.  Older states simply use the project root.
+        """
+        topology = state.get('git_topology') or {}
+        if task_id:
+            task = self.item(state, task_id)
+            task_topology = task.get('topology') or {}
+            if task_topology.get('workspace_root'):
+                topology = task_topology
+        raw = topology.get('workspace_root') or str(self.root)
+        path = Path(raw).resolve()
+        if not inside(self.root, path):
+            raise WorkflowError('GIT_WORKSPACE_ESCAPE workspace must stay inside the control project')
+        # Legacy/non-Git projects keep the historical project-root execution
+        # path.  A workspace must be a real Git worktree only after the task
+        # has opted into the topology contract or a child topology is bound.
+        topology_enforced = bool(topology.get('enforce') or topology.get('effective_mode') in {'in-place', 'branch', 'worktree'})
+        if validate and topology_enforced:
+            if not path.is_dir():
+                raise WorkflowError('GIT_WORKSPACE_MISSING bound source workspace does not exist')
+            identity = git_identity(path)
+            if not identity.get('root') or Path(identity['root']).resolve() != path:
+                raise WorkflowError('GIT_WORKSPACE_INVALID bound source workspace is not a Git worktree')
+            expected = topology.get('branch')
+            if expected and identity.get('branch') != expected:
+                raise WorkflowError('GIT_WORKSPACE_MISMATCH bound branch differs from the recorded topology')
+            if task_id and not allow_head_change and topology.get('head') and topology['head'] != identity.get('head'):
+                raise WorkflowError('HEAD_CHANGED inspect child commit, then observe-head --task ' + task_id)
+        return path
+
+    def validate_topology(self, state, allow_head_change=False):
+        """Read-only validation shared by health, status and execution."""
+        if not topology_selected(state):
+            return
+        self.validate_claims(state)
+        from .git_topology import probe
+        inventory = probe(self.root, active_tasks=[])
+        if not inventory.get('worktrees'):
+            raise WorkflowError('GIT_PROBE_FAILED cannot verify registered worktrees')
+        registered = {Path(row['path']).resolve(): row for row in inventory['worktrees']}
+        bindings = [(None, state['git_topology'])]
+        bindings += [(t['id'], t['topology']) for t in state.get('tasks', []) if t.get('topology')]
+        for task_id, binding in bindings:
+            path = self.workspace_root(state, task_id=task_id, allow_head_change=allow_head_change)
+            row = registered.get(path)
+            if not row or row.get('prunable'):
+                raise WorkflowError('GIT_WORKSPACE_UNREGISTERED ' + str(path))
+            expected_head = binding.get('head') if task_id else state.get('git', {}).get('head')
+            if not allow_head_change and expected_head and row.get('head') != expected_head:
+                raise WorkflowError('HEAD_CHANGED inspect commit and observe-head' + (' --task ' + task_id if task_id else ''))
+            if binding.get('base_head'):
+                ancestor = _git_run(path, 'merge-base', '--is-ancestor', binding['base_head'], 'HEAD')
+                if ancestor.returncode:
+                    raise WorkflowError('GIT_BASE_MISMATCH bound base is not an ancestor of the workspace HEAD')
+
+    def verification_root(self, state, allow_head_change=False):
+        integrations = [t for t in state.get('tasks', []) if t.get('role') == 'integration']
+        return self.workspace_root(state, task_id=integrations[0]['id'] if len(integrations) == 1 else None,
+                                   allow_head_change=allow_head_change)
+
+    def validate_claims(self, state):
+        if not topology_selected(state):
+            return
+        from .git_topology import _active_summaries
+        claims = [r for r in _active_summaries(self.root, None) if r.get('claiming')]
+        owned = [r for r in claims if r['id'] == state['id'] or r.get('parent') == state['id']]
+        for left in owned:
+            for right in claims:
+                if left['id'] == right['id']:
+                    continue
+                if Path(left['workspace_root']).resolve() == Path(right['workspace_root']).resolve():
+                    raise WorkflowError('GIT_WORKTREE_CONFLICT ' + left['id'] + ' / ' + right['id'])
+                if left.get('branch') and left['branch'] == right.get('branch'):
+                    raise WorkflowError('GIT_BRANCH_CONFLICT ' + left['id'] + ' / ' + right['id'])
+
+    def validate_integration(self, state):
+        integrations = [t for t in state.get('tasks', []) if t.get('role') == 'integration']
+        if not integrations:
+            return
+        if len(integrations) != 1:
+            raise WorkflowError('GIT_INTEGRATION_OWNER_CONFLICT only one integration owner is allowed')
+        integration = integrations[0]
+        target = self.workspace_root(state, task_id=integration['id'])
+        from .git_topology import probe
+        for child in state['tasks']:
+            if child['id'] == integration['id'] or child.get('role') == 'observer':
+                continue
+            if child['id'] not in integration['depends'] or child['status'] != 'done':
+                raise WorkflowError('GIT_INTEGRATION_DEPENDENCY_MISSING ' + child['id'])
+            source = self.workspace_root(state, task_id=child['id'])
+            inventory = probe(source, active_tasks=[])
+            if inventory.get('current', {}).get('source_changed_paths'):
+                raise WorkflowError('GIT_CHILD_UNCOMMITTED ' + child['id'] + ': commit verified output before integration')
+            if inventory.get('status') == 'blocked':
+                raise WorkflowError('GIT_CHILD_INVALID ' + child['id'])
+            evidence_for(self, state, child['id'])
+            child_head = git_identity(source).get('head')
+            included = _git_run(target, 'merge-base', '--is-ancestor', child_head, 'HEAD')
+            if included.returncode:
+                raise WorkflowError('GIT_INTEGRATION_MISSING_CHILD ' + child['id'] + ': integrate the verified child commit before checks')
+
+    def _topology_context(self, state):
+        topology = state.get('git_topology') or {}
+        return {
+            'number': state.get('number'),
+            'title': state.get('title', ''),
+            'intent': topology.get('intent', 'single-task'),
+            'size': topology.get('size', 'small'),
+        }
+
+    def topology_report(self, state):
+        from .git_topology import probe, recommend
+        inventory = probe(self.root)
+        recommendation = recommend(inventory, self._topology_context(state))
+        return {
+            'schema': 1,
+            'task': state['id'],
+            'number': state.get('number'),
+            'control_root': str(self.root),
+            'current': inventory.get('current', {}),
+            'worktrees': inventory.get('worktrees', []),
+            'branches': inventory.get('branches', []),
+            'active_tasks': inventory.get('active_tasks', []),
+            'task_bindings': [
+                {'id': task.get('id'), 'role': task.get('role', 'implementation'),
+                 'status': task.get('status'), 'topology': task.get('topology') or {}}
+                for task in state.get('tasks', [])
+            ],
+            'risks': inventory.get('risks', []),
+            'inventory_status': inventory.get('status'),
+            'recommendation': recommendation,
+            'selected': state.get('git_topology') or {},
+        }
+
+    def _state_topology(self, state):
+        """Create a compatibility topology object for an old state in memory."""
+        from .git_topology import probe, recommend
+        existing = state.get('git_topology')
+        if isinstance(existing, dict):
+            return existing
+        inventory = probe(self.root)
+        recommendation = recommend(inventory, self._topology_context(state))
+        return {
+            'schema': 1,
+            'status': 'legacy',
+            'enforce': False,
+            'intent': 'single-task',
+            'recommended_mode': recommendation.get('mode'),
+            'requested_mode': None,
+            'effective_mode': None,
+            'control_root': str(self.root),
+            'workspace_root': str(self.root),
+            'branch': (state.get('git') or {}).get('branch'),
+            'base_branch': (state.get('git') or {}).get('branch'),
+            'base_head': (state.get('git') or {}).get('head'),
+            'initial_inventory': inventory,
+            'decision_quote': None,
+            'decision_source': None,
+        }
+
+    def select_topology(self, state, args):
+        if state.get('inflight'):
+            raise WorkflowError('EXECUTION_UNKNOWN inspect and recover the interrupted operation first')
+        task_id = getattr(args, 'task_id', None)
+        if task_id:
+            import types
+            task = self.item(state, task_id)
+            if str(task.get('role') or 'implementation') not in {'implementation', 'frontend', 'backend', 'integration'}:
+                raise WorkflowError('GIT_TASK_READ_ONLY_TOPOLOGY read-only observers cannot claim a writable workspace')
+            child = dict(state)
+            child['id'] = f'{state["id"]}:{task_id}'
+            child['title'] = task.get('title') or task_id
+            child['git_topology'] = task.get('topology') or {'intent': (state.get('git_topology') or {}).get('intent', 'single-task')}
+            if args.mode != 'worktree':
+                raise WorkflowError('GIT_TASK_WORKTREE_REQUIRED writable children need independent worktrees')
+            from .git_topology import branch_name
+            if not re.fullmatch(r'T\d+', task_id):
+                raise WorkflowError('GIT_PLAN_TASK_INVALID child branches require a Tnn task identity')
+            task_suffix = f'T{int(task_id[1:]):02d}'
+            if args.branch and not re.match(r'^[^/]+/' + re.escape(state['number'] + '-' + task_suffix) + '-', args.branch):
+                raise WorkflowError('GIT_BRANCH_TASK_MISMATCH child branch must contain its own GSP and Tnn identity')
+            child_args = types.SimpleNamespace(mode=args.mode, quote=args.quote,
+                branch=args.branch or branch_name(state['number'], task_id, child['title']),
+                path=args.path, task_id=None, base=getattr(args, 'base', None),
+                rebind=getattr(args, 'rebind', False), owner_state=state)
+            result = self.select_topology(child, child_args)
+            task['topology'] = child['git_topology']
+            task['topology']['task'] = task_id
+            task['topology']['parent_work'] = state.get('number')
+            if args.mode == 'branch':
+                state['git'] = git_identity(self.root)
+            return {'task': state['id'], 'plan_task': task_id, 'number': state.get('number'),
+                    'topology': task['topology']}
+        from .git_topology import branch_name, probe, validate_branch_name
+        if not args.quote or not args.quote.strip():
+            raise WorkflowError('GIT_TOPOLOGY_QUOTE_REQUIRED record the actual user choice')
+        topology = dict(self._state_topology(state))
+        owner_state = getattr(args, 'owner_state', state)
+        rebind = getattr(args, 'rebind', False)
+        requested_base = getattr(args, 'base', None)
+        resolved_base = None
+        if requested_base:
+            resolved = _git_run(self.root, 'rev-parse', '--verify', str(requested_base) + '^{commit}')
+            if resolved.returncode:
+                raise WorkflowError('GIT_BASE_INVALID select a real commit or branch')
+            resolved_base = resolved.stdout.strip()
+        if topology_selected(state) and not rebind:
+            same = args.mode == topology.get('effective_mode') and (not args.branch or args.branch == topology.get('branch'))
+            same = same and (not args.path or (self.root / args.path).resolve() == Path(topology['workspace_root']).resolve())
+            same = same and (not requested_base or resolved_base == topology.get('base_head'))
+            if not same:
+                raise WorkflowError('GIT_REBIND_REQUIRED explicit --rebind with a reason is required')
+            self.workspace_root(state)
+            return {'task': state['id'], 'number': state.get('number'), 'git_topology': topology, 'reused': True}
+        number = state.get('number')
+        if not number and state.get('work_uuid'):
+            try:
+                from .documents import Governance
+                number = Governance(self.root).get(state['work_uuid']).get('number')
+                state['number'] = number
+            except (WorkflowError, OSError):
+                number = None
+        if not number:
+            raise WorkflowError('GIT_TASK_NUMBER_REQUIRED topology selection needs a GSP work-item number')
+        inventory = probe(self.root)
+        if inventory.get('status') == 'not-a-repository':
+            raise WorkflowError('GIT_NOT_REPOSITORY topology selection requires a Git repository')
+        fatal = [r for r in inventory.get('risks', []) if r['code'] in {'GIT_PROBE_FAILED', 'GIT_UNAVAILABLE', 'GIT_HEAD_UNBORN'}]
+        if fatal:
+            raise WorkflowError(fatal[0]['code'] + ' ' + fatal[0]['detail'])
+        topology['enforce'] = True
+        current = inventory.get('current') or {}
+        requested = args.mode
+        branch = args.branch
+        if requested in ('branch', 'worktree'):
+            branch = branch or branch_name(number, None, state.get('title', '任务'))
+            validate_branch_name(branch)
+            if not re.match(r'^[^/]+/' + re.escape(number) + r'-', branch):
+                raise WorkflowError('GIT_BRANCH_NUMBER_MISMATCH branch must contain the task GSP number')
+        claims = [row for row in inventory.get('active_tasks', []) if row.get('claiming') and row.get('id') != state['id']]
+        target = (self.root / args.path).resolve() if args.path else (self.root / '.gsp/worktrees' / (branch or '')).resolve()
+        if requested != 'worktree':
+            target = self.root
+        for claim in claims:
+            claimed = Path(claim['workspace_root']).resolve()
+            # The primary root's .gsp worktrees are isolated source checkouts,
+            # not descendants of its tracked input set.
+            if target == claimed:
+                raise WorkflowError('GIT_WORKTREE_CONFLICT workspace claimed by ' + str(claim['id']))
+            if branch and branch == claim.get('branch'):
+                raise WorkflowError('GIT_BRANCH_CONFLICT branch claimed by ' + str(claim['id']))
+        base = resolved_base or current.get('head')
+        base_branch = current.get('branch')
+        if requested_base:
+            symbolic = _git_run(self.root, 'rev-parse', '--symbolic-full-name', str(requested_base))
+            ref = symbolic.stdout.strip() if symbolic.returncode == 0 else ''
+            base_branch = next((ref[len(prefix):] for prefix in ('refs/heads/', 'refs/remotes/')
+                                if ref.startswith(prefix)), None)
+        if requested == 'in-place':
+            if not current.get('branch'):
+                raise WorkflowError('GIT_DETACHED_HEAD in-place implementation requires a named branch')
+            if current.get('branch') in ('main', 'master'):
+                # The explicit quote is the required risk override; do not
+                # silently turn it into a branch or worktree choice.
+                pass
+            topology.update({
+                'status': 'selected', 'requested_mode': requested, 'effective_mode': requested,
+                'control_root': str(self.root), 'workspace_root': str(self.root),
+                'base_branch': current.get('branch'), 'base_head': current.get('head'),
+                'branch': current.get('branch'), 'decision_quote': args.quote,
+                'decision_source': 'caller-attributed-user', 'initial_inventory': inventory,
+                'selected_at': now(),
+            })
+        elif requested == 'branch':
+            if current.get('source_changed_paths') or [p for p in (current.get('changed_paths') or []) if p not in (current.get('workflow_changed_paths') or [])]:
+                raise WorkflowError('GIT_DIRTY branch creation refuses to carry unreviewed working-tree changes')
+            show = _git_run(self.root, 'show-ref', '--verify', '--quiet', f'refs/heads/{branch}')
+            if show.returncode == 0:
+                active = [row for row in inventory.get('active_tasks', []) if row.get('claiming') and row.get('branch') == branch and row.get('id') != state['id']]
+                if active:
+                    raise WorkflowError('GIT_BRANCH_CONFLICT branch is already bound to another active task')
+                if current.get('branch') != branch:
+                    self._record_topology_inflight(owner_state, state['id'], requested, branch, self.root, base, args.quote)
+                    switched = _git_run(self.root, 'switch', branch)
+                    if switched.returncode != 0:
+                        self._topology_failed(owner_state, 'GIT_BRANCH_SWITCH_FAILED', switched.stderr or 'git switch failed')
+            else:
+                self._record_topology_inflight(owner_state, state['id'], requested, branch, self.root, base, args.quote)
+                created = _git_run(self.root, 'switch', '-c', branch, base)
+                if created.returncode != 0:
+                    self._topology_failed(owner_state, 'GIT_BRANCH_CREATE_FAILED', created.stderr)
+            identity = git_identity(self.root)
+            topology.update({
+                'status': 'selected', 'requested_mode': requested, 'effective_mode': requested,
+                'control_root': str(self.root), 'workspace_root': str(self.root),
+                'base_branch': current.get('branch'), 'base_head': current.get('head'),
+                'branch': identity.get('branch'), 'base_workspace': str(self.root),
+                'decision_quote': args.quote, 'decision_source': 'caller-attributed-user',
+                'initial_inventory': inventory, 'selected_at': now(),
+            })
+            state['git'] = identity
+        elif requested == 'worktree':
+            requested_path = Path(args.path) if args.path else None
+            worktree = (requested_path if requested_path and requested_path.is_absolute() else self.root / requested_path) if requested_path else (self.root / '.gsp' / 'worktrees' / branch)
+            worktree = worktree.resolve()
+            if not inside(self.root, worktree) or worktree == self.root:
+                raise WorkflowError('GIT_WORKTREE_PATH_INVALID choose a path inside the control root')
+            if worktree.exists() and (not worktree.is_dir() or any(worktree.iterdir())) and not rebind:
+                raise WorkflowError('GIT_WORKTREE_PATH_BUSY target path already contains files')
+            if not inside(self.root / '.gsp/worktrees', worktree):
+                ignored = _git_run(self.root, 'check-ignore', '--quiet', str(worktree))
+                if ignored.returncode:
+                    raise WorkflowError('GIT_WORKTREE_NOT_IGNORED explicitly ignore the target before creating it')
+            show = _git_run(self.root, 'show-ref', '--verify', '--quiet', f'refs/heads/{branch}')
+            if show.returncode == 0:
+                active = [row for row in inventory.get('active_tasks', []) if row.get('claiming') and row.get('branch') == branch and row.get('id') != state['id']]
+                if active:
+                    raise WorkflowError('GIT_BRANCH_CONFLICT branch is already bound to another active task')
+                if not rebind:
+                    raise WorkflowError('GIT_BRANCH_EXISTS choose a new unbound branch name or explicitly rebind')
+            worktree.parent.mkdir(parents=True, exist_ok=True)
+            if rebind and (worktree / '.git').is_file():
+                identity = git_identity(worktree)
+                if identity.get('branch') != branch or not any(Path(w['path']) == worktree for w in inventory['worktrees']):
+                    raise WorkflowError('GIT_WORKSPACE_MISMATCH cannot adopt unrelated worktree')
+            else:
+                self._record_topology_inflight(owner_state, state['id'], requested, branch, worktree, base, args.quote)
+                argv = ('worktree', 'add', str(worktree), branch) if show.returncode == 0 else ('worktree', 'add', '-b', branch, str(worktree), base)
+                created = _git_run(self.root, *argv)
+                if created.returncode != 0:
+                    self._topology_failed(owner_state, 'GIT_WORKTREE_CREATE_FAILED', created.stderr)
+            identity = git_identity(worktree)
+            topology.update({
+                'status': 'selected', 'requested_mode': requested, 'effective_mode': requested,
+                'control_root': str(self.root), 'workspace_root': str(worktree),
+                'base_branch': current.get('branch'), 'base_head': current.get('head'),
+                'branch': identity.get('branch') or branch, 'base_workspace': str(self.root),
+                'decision_quote': args.quote, 'decision_source': 'caller-attributed-user',
+                'initial_inventory': inventory, 'selected_at': now(),
+            })
+            state['git'] = identity
+        else:
+            raise WorkflowError('GIT_TOPOLOGY_MODE_INVALID choose in-place, branch or worktree')
+        if requested in ('branch', 'worktree'):
+            topology['base_head'] = base
+            topology['base_branch'] = base_branch
+            topology['head'] = identity.get('head')
+        else:
+            topology['head'] = current.get('head')
+        topology['created_by'] = os.environ.get('GSP_HOST', 'unknown')
+        topology['created_at'] = now()
+        owner_state.pop('inflight', None)
+        if rebind:
+            owner_state['verification_epoch'] = owner_state.get('verification_epoch', 0) + 1
+            owner_state['review'] = None
+            for task in owner_state.get('tasks', []):
+                if task['status'] == 'done':
+                    task.setdefault('history', []).append({'status': 'done', 'evidence': task.get('evidence'), 'reason': 'topology rebind', 'at': now()})
+                    task['status'] = 'needs-verification'
+            owner_state['status'] = 'execute'
+        state['git_topology'] = topology
+        state.setdefault('external_links', [])
+        return {'task': state['id'], 'number': state.get('number'), 'git_topology': topology}
+
+    def _record_topology_inflight(self, state, binding, mode, branch, workspace, base, quote):
+        state['inflight'] = {'id': uuid.uuid4().hex, 'kind': 'topology', 'task': binding,
+            'mode': mode, 'branch': branch, 'workspace_root': str(workspace), 'base_head': base,
+            'quote': quote, 'at': now(), 'previous_status': state['status']}
+        self.write(state, 'topology-start', json.dumps(state['inflight'], ensure_ascii=False))
+
+    def _topology_failed(self, state, code, detail):
+        state['topology_failure'] = {'operation': state.pop('inflight'), 'code': code, 'detail': redact(detail), 'at': now()}
+        self.write(state, 'topology-failed', code + ' ' + redact(detail))
+        raise WorkflowError(code + ' ' + detail.strip())
+
+    def state(self, task_id, execution=False, allow_head_change=False, release_scope=False, allow_closed=False, recovery=False):
         if (self.meta/'document-transaction.json').exists() or (self.meta/'document-migration.json').exists():
             raise WorkflowError('DOCUMENT_TRANSACTION_PENDING recover document operations first')
         run, doc = self.paths(task_id)
@@ -261,31 +760,34 @@ class Project:
         ident = self.identity()
         if state.get('project_id') != ident['id'] or state.get('root') != str(self.root):
             raise WorkflowError('PROJECT_MISMATCH refusing cross-project continuation')
-        current = git_identity(self.root)
+        # Git identity follows the task's bound source workspace.  In
+        # worktree mode the control root remains on its own branch while the
+        # task is executed in the child worktree.
+        if not (release_scope or recovery) and topology_selected(state):
+            self.validate_topology(state, allow_head_change=allow_head_change)
+        current = git_identity(self.workspace_root(state, validate=False))
         before = state.get('git', {})
         first_repository = (allow_head_change and not any(before.get(k) for k in ('root','branch','head'))
                             and current.get('root') == str(self.root))
-        if not first_repository and (current.get('root') != before.get('root') or (not release_scope and current.get('branch') != before.get('branch'))):
+        if not recovery and not first_repository and (current.get('root') != before.get('root') or (not release_scope and current.get('branch') != before.get('branch'))):
             raise WorkflowError('BRANCH_MISMATCH reconcile before continuing')
-        if not (allow_head_change or release_scope) and current.get('head') != before.get('head'):
+        if not (allow_head_change or release_scope or recovery) and current.get('head') != before.get('head'):
             raise WorkflowError('HEAD_CHANGED inspect actual changes, then observe-head with evidence and reason')
-        stale = state.get('delivery_fingerprint') != fingerprint(self.root) if state['status'] == 'ready' else False
-        if state['status'] == 'ready':
+        stale = False
+        if state['status'] == 'ready' and not recovery:
             try:
+                stale = state.get('delivery_fingerprint') != fingerprint(self.verification_root(state, allow_head_change=allow_head_change))
                 self.valid_design(state, doc)
                 self.valid_plan(state, doc)
-                for rel in state.get('evidence',[])[-1:]:
-                    verify_command_inputs(self.root,read(self.root/rel))
-                review = state.get('review') or {}
-                stale |= (any(t['status'] != 'done' for t in state['tasks']) or
-                          review.get('sha256') != digest(doc / 'review.md') or
-                          review.get('contract') != contract_hash(self, state, doc) or bool(review.get('blocking')))
+                validate_delivery(self, state, doc)
             except (WorkflowError, OSError):
                 stale = True
         if stale:
             state['status'] = 'needs-verification'
             self.write(state,'delivery-invalidated','项目文件、设计、计划或审查已变化，需要重新验证、审查并 ready。')
         if execution:
+            if topology_required(state) and not topology_selected(state):
+                raise WorkflowError('GIT_TOPOLOGY_REQUIRED choose and record in-place, branch or worktree before implementation')
             if state.get('work_uuid'):
                 from .documents import Governance
                 if not allow_closed and Governance(self.root).get(state['work_uuid'])['stage'] in ('paused','cancelled','delivered','closed'):
@@ -307,7 +809,14 @@ class Project:
 
     @staticmethod
     def task_definition_hash(state):
-        fields = [{k: t[k] for k in ('id', 'title', 'acceptance', 'depends')} for t in state['tasks']]
+        fields = []
+        for task in state['tasks']:
+            field = {k: task[k] for k in ('id', 'title', 'acceptance', 'depends')}
+            if 'role' in task:
+                field['role'] = task.get('role')
+            if 'parent_task' in task:
+                field['parent_task'] = task.get('parent_task')
+            fields.append(field)
         return sha(json.dumps(fields, ensure_ascii=False, sort_keys=True).encode())
 
     def write(self, state, event, detail=''):
@@ -367,7 +876,7 @@ class Project:
             orphan=(active_id==args.id and bool(getattr(args,'work',None)) and not (self.meta/'runs'/args.id/'state.json').exists())
             if not orphan:
                 other, _, _ = self.active_state()
-                if other['scope']['mode'] == 'frozen':
+                if other['scope']['mode'] == 'frozen' and not topology_selected(other):
                     raise WorkflowError('OTHER_TASK_FROZEN explicitly release or continue the existing task before creating another')
         run, doc = self.paths(args.id)
         resume_empty=bool(getattr(args,'work',None)) and run.exists() and not any(run.iterdir())
@@ -400,12 +909,47 @@ class Project:
                 raise WorkflowError('DOCUMENT_EXISTS refusing to overwrite ' + str(file))
         run.mkdir(parents=True,exist_ok=resume_empty)
         doc.mkdir(parents=True,exist_ok=bool(record))
-        state = {'schema': 1, 'id': args.id, 'title': args.title, 'root': str(self.root),
+        from .git_topology import probe, recommend
+        git_inventory = probe(self.root)
+        git_context = {
+            'number': record.get('number') if record else None,
+            'title': args.title,
+            'intent': getattr(args, 'intent', 'single-task'),
+            'size': getattr(args, 'size', 'small'),
+        }
+        git_recommendation = recommend(git_inventory, git_context)
+        # Git-backed modern work items opt into the hard topology gate.  A
+        # project that has never been initialized as a Git repository keeps
+        # the historical compatibility path until it explicitly selects a
+        # topology after Git is initialized.
+        topology_enforce = bool(record and git_inventory.get('status') != 'not-a-repository')
+        git_topology = {
+            'schema': 1,
+            'status': 'pending' if topology_enforce else 'legacy-unavailable',
+            'enforce': topology_enforce,
+            'intent': git_context['intent'],
+            'size': git_context['size'],
+            'recommended_mode': git_recommendation.get('mode'),
+            'recommended_reasons': git_recommendation.get('reasons', []),
+            'requested_mode': None,
+            'effective_mode': None,
+            'control_root': str(self.root),
+            'workspace_root': str(self.root),
+            'base_branch': git_inventory.get('current', {}).get('branch'),
+            'base_head': git_inventory.get('current', {}).get('head'),
+            'branch': git_inventory.get('current', {}).get('branch'),
+            'initial_inventory': git_inventory,
+            'decision_quote': None,
+            'decision_source': None,
+        }
+        state = {'schema': 1, 'id': args.id, 'number': record.get('number') if record else None,
+                 'title': args.title, 'root': str(self.root),
                  'project_id': self.identity()['id'], 'created': now(), 'status': 'design',
                  'mode': args.mode, 'mode_quote': args.quote, 'documents': documents, 'design_approval': None, 'plan_seal': None,
                  'controller_required': not getattr(args, 'legacy_layout', False),
                  'scope': {'mode': 'pending'}, 'tasks': [], 'evidence': [], 'review': None,
-                 'authorizations': [], 'git': git_identity(self.root)}
+                 'authorizations': [], 'external_links': [], 'git': git_identity(self.root),
+                 'git_topology': git_topology}
         if record:
             state.update({'doc_dir':record['folder'],'work_uuid':record['uuid']})
         templates = {
@@ -430,8 +974,9 @@ class Project:
         return {'task': args.id, 'documents': str(doc), 'state': str(run / 'state.json'), 'document_paths': documents}
 
     def scope_path(self, state, path):
-        root = Path(state['scope']['path']).resolve()
-        target = (self.root / path).resolve()
+        root = Path(state['scope']['path']).resolve() if state['scope'].get('path') else self.root
+        candidate = Path(path)
+        target = (candidate if candidate.is_absolute() else self.workspace_root(state, validate=False) / candidate).resolve()
         _, docs = self.paths(state['id'])
         if target in {self.document(state, kind).resolve() for kind in ('design', 'plan')}:
             return target
@@ -441,6 +986,18 @@ class Project:
             return target
         if target == self.root / '.gsp/backlog/records.json':
             return target  # Workflow provenance; still maintained through validated CLI operations.
+        if topology_required(state):
+            if not topology_selected(state):
+                raise WorkflowError('GIT_TOPOLOGY_REQUIRED choose a workspace before source edits')
+            allowed = [self.workspace_root(state)]
+            if parallel_required(state):
+                allowed = [self.workspace_root(state, task_id=t['id']) for t in state['tasks'] if t['status'] == 'running' and t.get('topology')]
+            if not any(inside(base, target) for base in allowed):
+                raise WorkflowError('GIT_WORKSPACE_PATH edit must use the selected source workspace')
+            from .git_topology import bound_task_for_path
+            owner = bound_task_for_path(self.root, target)
+            if owner and owner != state['id']:
+                raise WorkflowError('GIT_WORKSPACE_CLAIMED path belongs to task ' + owner)
         if not inside(root, target):
             raise WorkflowError(f'FROZEN_PATH {target} is outside {root}')
         return target
@@ -490,6 +1047,8 @@ def verify_command_inputs(root, receipt):
 
 
 def run_check(project, state, run, args):
+    if topology_required(state) and not topology_selected(state):
+        raise WorkflowError('GIT_TOPOLOGY_REQUIRED choose and record in-place, branch or worktree before running checks')
     if state.get('inflight'):
         raise WorkflowError('EXECUTION_UNKNOWN reconcile the previous command before rerunning')
     if args.task == 'all':
@@ -497,6 +1056,10 @@ def run_check(project, state, run, args):
             raise WorkflowError('TASKS_INCOMPLETE final regression requires all tasks done')
     elif project.item(state, args.task)['status'] != 'running':
         raise WorkflowError('TASK_NOT_RUNNING start the task first')
+    source_root = (project.verification_root(state) if args.task == 'all' else
+                   project.workspace_root(state, task_id=args.task))
+    if args.task == 'all' or project.item(state, args.task).get('role') == 'integration':
+        project.validate_integration(state)
     argv = list(args.argv)
     if argv and argv[0] == '--':
         argv.pop(0)
@@ -514,7 +1077,12 @@ def run_check(project, state, run, args):
     folder.mkdir(parents=True, exist_ok=False)
     state['inflight'] = {'id': evidence_id, 'task': args.task, 'phase':'pre-scan', 'at': now(), 'argv': [redact(a) for a in argv]}
     if args.task == 'all':
-        state['status'] = 'checking'
+        if not state.get('controller_required'):
+            state['status'] = 'checking'
+        else:
+            if state['status'] == 'ready':
+                state['status'] = 'execute'
+            state['review'] = None
         invalidate_delivery(project.paths(state['id'])[1], '新的最终回归尚未完成，需要验证后重新 ready。')
     project.write(state, 'run-start', evidence_id)
     launch_error = None
@@ -523,8 +1091,8 @@ def run_check(project, state, run, args):
         atomic(folder/'scan-progress.json', {'phase':phase, **row})
         print(f'GSP_SCAN {phase}: files={row["files"]} bytes={row["bytes"]} elapsed={row["elapsed_s"]}s',file=sys.stderr,flush=True)
     try:
-        before = snapshot(project.root, deadline=time.monotonic() + scan_timeout, progress=progress)
-        command_inputs=command_input_hashes(project.root,argv)
+        before = snapshot(source_root, deadline=time.monotonic() + scan_timeout, progress=progress)
+        command_inputs=command_input_hashes(source_root,argv)
         remaining=deadline-time.monotonic()
         if remaining<=0:raise WorkflowError('SCAN_TIMEOUT budget expired before command launch')
     except WorkflowError as exc:
@@ -545,7 +1113,7 @@ def run_check(project, state, run, args):
             project.write(state,'scan-failed',evidence_id)
             raise WorkflowError('SCAN_TIMEOUT budget expired before command launch')
         result = (runner(argv, remaining) if runner else
-                  subprocess.run(argv, cwd=project.root, capture_output=True, text=True,
+                  subprocess.run(argv, cwd=source_root, capture_output=True, text=True,
                                  encoding='utf-8', errors='replace', timeout=remaining, creationflags=windows_flags))
         stdout, stderr, code = result.stdout, result.stderr, result.returncode
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -556,7 +1124,7 @@ def run_check(project, state, run, args):
     state['inflight']['phase']=phase
     project.write(state,'post-scan',evidence_id)
     try:
-        after = snapshot(project.root, deadline=time.monotonic() + scan_timeout, progress=progress)
+        after = snapshot(source_root, deadline=time.monotonic() + scan_timeout, progress=progress)
     except WorkflowError as exc:
         atomic(folder/'scan-error.json',{'phase':phase,'error':str(exc),'command_started':True,'exit':code,'at':now()})
         # Preserve inflight: a real command ran but its side effects are unverified.
@@ -567,7 +1135,7 @@ def run_check(project, state, run, args):
     if state['scope']['mode'] == 'frozen':
         for file in changes:
             try:
-                project.scope_path(state, file)
+                project.scope_path(state, source_root / file)
             except WorkflowError:
                 violations.append(file)
     from .test_results import cargo_summary
@@ -588,7 +1156,7 @@ def run_check(project, state, run, args):
         status = 'failed-output'
     if violations:
         status = 'scope-violation'
-    command_inputs_changed=command_input_hashes(project.root,argv)!=command_inputs
+    command_inputs_changed=command_input_hashes(source_root,argv)!=command_inputs
     if (before != after or command_inputs_changed) and status == 'pass':
         status = 'inputs-changed'
     atomic(folder / 'stdout.txt', redact(stdout))
@@ -598,6 +1166,7 @@ def run_check(project, state, run, args):
                'duration_s': round(time.monotonic() - start, 3), 'status': status, 'tests_ran': count, 'test_summary':summary,
                'fingerprint': sha(json.dumps(after, sort_keys=True).encode()), 'changed_paths': changes, 'scope_violations': violations, 'command_inputs':command_inputs,
                'contract': contract_hash(project, state, project.paths(state['id'])[1]),
+               'workspace_root': str(source_root), 'git': git_identity(source_root),
                'verification_epoch': state.get('verification_epoch', 0),
                'logs': {name: digest(folder / name) for name in ('stdout.txt', 'stderr.txt')}}
     atomic(folder / 'receipt.json', receipt)
@@ -620,8 +1189,11 @@ def evidence_for(project, state, task_id, current_fingerprint=None, current_cont
     if not rows:
         raise WorkflowError('EVIDENCE_MISSING ' + task_id)
     latest = rows[-1]
-    verify_command_inputs(project.root,latest)
-    expected_fingerprint = current_fingerprint or fingerprint(project.root)
+    source_root = project.verification_root(state) if task_id == 'all' else project.workspace_root(state, task_id=task_id)
+    if latest.get('workspace_root') and Path(latest['workspace_root']).resolve() != source_root:
+        raise WorkflowError('EVIDENCE_WORKSPACE_CHANGED ' + task_id)
+    verify_command_inputs(source_root,latest)
+    expected_fingerprint = current_fingerprint or fingerprint(source_root)
     if latest['status'] != 'pass' or (not allow_historical and latest['fingerprint'] != expected_fingerprint):
         raise WorkflowError('EVIDENCE_STALE_OR_FAILED ' + task_id)
     if latest.get('contract') != (current_contract or contract_hash(project, state, project.paths(state['id'])[1])):
@@ -633,9 +1205,50 @@ def evidence_for(project, state, task_id, current_fingerprint=None, current_cont
     for name, expected in latest['logs'].items():
         if digest(folder.parent / name) != expected:
             raise WorkflowError('EVIDENCE_TAMPERED ' + name)
-    if latest['kind'] == 'check' and not project.item(state, task_id).get('no_tests_reason'):
+    no_tests = all(t.get('no_tests_reason') for t in state['tasks']) if task_id == 'all' else project.item(state, task_id).get('no_tests_reason')
+    if latest['kind'] == 'check' and not no_tests:
         raise WorkflowError('TESTS_REQUIRED supply an explicit task-specific no-tests reason for non-test changes')
     return latest
+
+
+def validate_delivery(project, state, doc):
+    """One validation path for the controller and the delivery command."""
+    parallel = validate_parallel_bindings(state)
+    if not parallel['valid']:
+        raise WorkflowError(parallel['blocking'][0]['code'] + ' ' + str(parallel['blocking']))
+    project.validate_integration(state)
+    from .todos import Backlog
+    backlog = Backlog(project.root).summary()
+    if not backlog['exists']:
+        raise WorkflowError('BACKLOG_MISSING restore the project backlog')
+    blockers = [r['id'] for r in backlog['items'] if r['status'] == 'open' and r['blocking'] == 'yes' and r['origin'] == state['id']]
+    blockers += [r['id'] for r in backlog['orphaned_records'] if not r['completed'] and r['blocking'] == 'yes' and r['origin'] == state['id']]
+    if blockers:
+        raise WorkflowError('BACKLOG_BLOCKING unresolved required work: ' + ', '.join(blockers))
+    if state.get('inflight'):
+        raise WorkflowError('EXECUTION_UNKNOWN')
+    if not state['tasks'] or any(t['status'] != 'done' for t in state['tasks']):
+        raise WorkflowError('TASKS_INCOMPLETE')
+    from .acceptance import acceptance_track_status
+    for task in state['tasks']:
+        if 'acceptance_cards' in task:
+            status = acceptance_track_status(task['acceptance_cards'])
+            task.setdefault('acceptance_track', {})['status'] = status
+            if status != 'acceptance_verified':
+                raise WorkflowError('ACCEPTANCE_PENDING ' + task['id'])
+    fp = fingerprint(project.verification_root(state))
+    contract = contract_hash(project, state, doc)
+    try:
+        evidence_for(project, state, 'all', current_fingerprint=fp, current_contract=contract)
+    except WorkflowError as exc:
+        raise WorkflowError('FINAL_REGRESSION_REQUIRED ' + str(exc)) from exc
+    checks = [evidence_for(project, state, task['id'], current_contract=contract,
+                           allow_historical=not bool(task.get('topology'))) for task in state['tasks']]
+    review = state.get('review') or {}
+    if (not review or review.get('blocking') or review.get('fingerprint') != fp or
+            review.get('sha256') != digest(doc / 'review.md') or review.get('contract') != contract):
+        raise WorkflowError('REVIEW_MISSING_STALE_OR_BLOCKING')
+    return fp, checks, backlog
 
 
 def health(root, host):
@@ -704,11 +1317,11 @@ def hook(root):
         if located is None:
             return {}
         project = Project(located)
-        if not (project.meta / 'active.json').exists():
+        from .git_topology import bound_task_for_path
+        if not (project.meta / 'active.json').exists() and not bound_task_for_path(project.root, cwd):
             return {}
-        active = read(project.meta / 'active.json')
-        state, _, _ = project.active_state()
-        if state['scope']['mode'] != 'frozen':
+        state, _, _ = project.active_state(context_path=cwd)
+        if state['scope']['mode'] != 'frozen' and not topology_required(state):
             return {}
         tool = payload.get('tool_name', '')
         if tool not in ('Edit', 'Write', 'NotebookEdit'):
@@ -736,9 +1349,11 @@ def parser():
         q.add_argument('id')
         q.add_argument('--to', choices=['plan', 'execute', 'review', 'checking', 'ready', 'ship'])
     n = sub.add_parser('new'); n.add_argument('id'); n.add_argument('--title', required=True); n.add_argument('--mode', choices=['interactive', 'unattended'], default='interactive'); n.add_argument('--quote')
+    n.add_argument('--intent', choices=['single-task', 'serial-multi-task', 'parallel-multi-task', 'cross-session', 'full-stack'], default='single-task', help='Git topology recommendation context')
+    n.add_argument('--size', choices=['small', 'large'], default='small', help='use large for cross-module or substantial single tasks')
     n.add_argument('--legacy-layout',action='store_true',help='compatibility: separated spec/plan layout')
     n.add_argument('--work',help='continue a saved idea by UUID or number')
-    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'run', 'scope', 'check-path', 'review', 'ready', 'close', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'observe-head', 'recover-run', 'documents-adopt', 'acceptance-enable', 'acceptance-record'):
+    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'run', 'scope', 'check-path', 'review', 'ready', 'close', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'observe-head', 'recover-run', 'documents-adopt', 'acceptance-enable', 'acceptance-record', 'topology', 'topology-select', 'external-link'):
         q = sub.add_parser(name); q.add_argument('id')
         if name == 'documents-adopt':
             q.add_argument('--spec', required=True); q.add_argument('--plan', required=True); q.add_argument('--reason', required=True)
@@ -746,6 +1361,8 @@ def parser():
         elif name == 'seal-plan': q.add_argument('--check-structure', action='store_true', help='reject structural gaps before sealing; does not prove semantic quality')
         elif name == 'task-add':
             q.add_argument('task'); q.add_argument('--title', required=True); q.add_argument('--acceptance', required=True); q.add_argument('--depends', default=''); q.add_argument('--no-tests-reason')
+            q.add_argument('--role', choices=['implementation', 'frontend', 'backend', 'integration'], default='implementation')
+            q.add_argument('--agent'); q.add_argument('--session'); q.add_argument('--parent-task')
         elif name in ('task-start', 'task-done'): q.add_argument('task')
         elif name == 'task-reopen': q.add_argument('task'); q.add_argument('--reason', required=True)
         elif name == 'run':
@@ -759,10 +1376,23 @@ def parser():
             q.add_argument('action', choices=['commit', 'push', 'create-pr', 'merge', 'delete-branch', 'publish', 'spend', 'send']); q.add_argument('--scope', required=True)
             if name == 'authorize': q.add_argument('--quote', required=True)
         elif name == 'block': q.add_argument('--reason', required=True)
-        elif name == 'observe-head': q.add_argument('--reason', required=True)
+        elif name == 'observe-head':
+            q.add_argument('--reason', required=True)
+            q.add_argument('--task', dest='task_id', help='observe a child branch commit after inspection')
         elif name == 'close': q.add_argument('--reason', required=True)
         elif name == 'recover-run': q.add_argument('--evidence', required=True); q.add_argument('--outcome', choices=['not-run', 'failed'], required=True)
         elif name == 'acceptance-record': q.add_argument('task'); q.add_argument('--card', required=True)
+        elif name == 'topology-select':
+            q.add_argument('--mode', choices=['in-place', 'branch', 'worktree'], required=True)
+            q.add_argument('--quote', required=True)
+            q.add_argument('--branch')
+            q.add_argument('--path')
+            q.add_argument('--base', help='explicit starting branch or commit (for dependent branches)')
+            q.add_argument('--rebind', action='store_true', help='explicitly rebind after investigation; invalidates old verification')
+            q.add_argument('--task', dest='task_id', help='bind this topology to a plan task instead of the parent run')
+        elif name == 'external-link':
+            q.add_argument('--kind', choices=['issue', 'pr'], required=True)
+            q.add_argument('--value', required=True)
     sub.add_parser('codex-hook', help='native Codex hook protocol (stdin JSON)')
     sub.add_parser('hooks-report', help='bounded offline Codex hook audit summary for --project')
     for name in ('hooks-install','hooks-upgrade','hooks-uninstall','hooks-recover','hooks-status'):
@@ -950,7 +1580,7 @@ def main(argv=None):
             # Health is the workflow entry point. Attach the compact Git
             # handoff so telemetry records the route for the next skill.
             from .document_health import git_route
-            result['route'] = git_route(project.root)
+            result['route'] = git_route(project.invocation_root)
             if args.documents or args.documents_only:
                 from .document_health import audit
                 report=audit(project.root,args.report_dir)
@@ -995,6 +1625,15 @@ def main(argv=None):
         with locked(project.root):
             result, success = dispatch(project, args)
         _emit_telemetry(project, args, result, success)
+        if not success:
+            # Keep the structured preview on stdout, while giving shell and
+            # human callers the same actionable error channel as exceptions.
+            blockers = result.get('blockers') if isinstance(result, dict) else None
+            first = blockers[0] if blockers else {}
+            code = first.get('code') if isinstance(first, dict) else None
+            detail = first.get('detail') if isinstance(first, dict) else None
+            message = ' '.join(str(part) for part in (code, detail) if part)
+            print('GSP_ERROR: ' + (message or 'workflow command was blocked'), file=sys.stderr)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if success else 1
     except (WorkflowError, OSError, ValueError, sqlite3.Error, subprocess.TimeoutExpired) as exc:
@@ -1070,7 +1709,23 @@ def dispatch(project, args):
         elif args.supersedes or args.reason or args.source:
             raise WorkflowError('LEARNING_TEXT_REQUIRED')
         return book.query(args.query,args.history), True
-    state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'run', 'review', 'ready', 'close'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path, allow_closed=command == 'close')
+    state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'run', 'review', 'ready', 'close'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path, allow_closed=command == 'close', recovery=command == 'recover-run' or (command == 'topology-select' and getattr(args, 'rebind', False)))
+    if command == 'topology':
+        return project.topology_report(state), True
+    if command == 'topology-select':
+        result = project.select_topology(state, args)
+        project.write(state, command, args.quote)
+        return result, True
+    if command == 'external-link':
+        value = str(args.value or '').strip()
+        if not re.fullmatch(r'#[0-9]+|[0-9]+', value):
+            raise WorkflowError('EXTERNAL_LINK_INVALID use a concrete numeric Issue or PR ID such as #123')
+        links = state.setdefault('external_links', [])
+        link = {'kind': args.kind, 'value': value}
+        if link not in links:
+            links.append(link)
+        project.write(state, command, json.dumps(link, ensure_ascii=False))
+        return {'task': state['id'], 'external_links': links}, True
     if command == 'documents-adopt':
         candidate = {**state, 'documents': {'design': args.spec, 'plan': args.plan}}
         for kind in ('design', 'plan'):
@@ -1132,14 +1787,24 @@ def dispatch(project, args):
     elif command == 'task-add':
         slug(args.task)
         if args.task == 'all': raise WorkflowError('RESERVED_TASK_ID all is the final regression lane')
-        if any(t['id'] == args.task for t in state['tasks']):
+        def same_task_id(existing):
+            return (existing == args.task or
+                    (re.fullmatch(r'T\d+', existing) and re.fullmatch(r'T\d+', args.task)
+                     and int(existing[1:]) == int(args.task[1:])))
+        if any(same_task_id(t['id']) for t in state['tasks']):
             raise WorkflowError('TASK_EXISTS ' + args.task)
         depends = [d for d in args.depends.split(',') if d]
         existing = {t['id'] for t in state['tasks']}
         if any(d not in existing for d in depends):
             raise WorkflowError('DEPENDENCY_INVALID dependencies must name prior existing tasks')
+        parent_task = getattr(args, 'parent_task', None)
+        if parent_task and parent_task not in existing:
+            raise WorkflowError('PARENT_TASK_INVALID parent task must name an existing task')
         state['tasks'].append({'id': args.task, 'title': args.title, 'acceptance': args.acceptance, 'depends': depends,
-                               'status': 'pending', 'no_tests_reason': args.no_tests_reason})
+                               'status': 'pending', 'no_tests_reason': args.no_tests_reason,
+                               'role': getattr(args, 'role', 'implementation'),
+                               'agent': getattr(args, 'agent', None), 'session': getattr(args, 'session', None),
+                               'parent_task': parent_task, 'topology': {}})
         state['plan_seal'] = None
         state['status'] = 'plan'
     elif command == 'acceptance-enable':
@@ -1177,24 +1842,35 @@ def dispatch(project, args):
         if not state.get('controller_required'):
             state['status'] = 'execute'
     elif command == 'scope':
-        path = (project.root / args.path).resolve() if args.path else None
-        if path and (not path.is_dir() or not inside(project.root, path)):
+        scope_base = project.workspace_root(state, validate=False)
+        path = (scope_base / args.path).resolve() if args.path else None
+        if path and (not path.is_dir() or not inside(scope_base, path)):
             raise WorkflowError('INVALID_SCOPE choose an existing directory inside this project')
         active = project.meta / 'active.json'
         if active.exists() and read(active)['task'] != state['id']:
             other, _, _ = project.active_state()
-            if other['scope']['mode'] == 'frozen':
+            isolated = (topology_selected(other) and topology_selected(state) and
+                        project.workspace_root(other) != project.workspace_root(state))
+            if other['scope']['mode'] == 'frozen' and not isolated:
                 raise WorkflowError('OTHER_TASK_FROZEN resolve the other task before replacing its active boundary')
         state['scope'] = {'mode': 'frozen' if path else 'off', 'path': str(path) if path else None, 'quote': args.quote, 'at': now()}
         atomic(active, {'task': state['id']})
     elif command == 'check-path':
         if state['scope']['mode'] == 'pending': raise WorkflowError('SCOPE_PENDING')
-        if state['scope']['mode'] == 'frozen': project.scope_path(state, args.path)
+        project.scope_path(state, args.path)
         return {'allowed': True, 'path': args.path, 'scope': state['scope']['mode']}, True
     elif command == 'task-start':
+        if topology_required(state) and not topology_selected(state):
+            raise WorkflowError('GIT_TOPOLOGY_REQUIRED choose and record in-place, branch or worktree before implementation')
         if state.get('controller_required') and state.get('status') != 'execute':
             raise WorkflowError('CONTROLLER_REQUIRED run advance <id> --to execute before task-start')
         task = project.item(state, args.task)
+        role = str(task.get('role') or 'implementation')
+        intent = str((state.get('git_topology') or {}).get('intent') or 'single-task')
+        if parallel_required(state) and role in {'implementation', 'frontend', 'backend', 'integration'} and not topology_selected({'git_topology': task.get('topology') or {}}):
+            raise WorkflowError('GIT_TASK_TOPOLOGY_REQUIRED bind this writable task to its own branch or worktree before starting')
+        if task.get('topology', {}).get('effective_mode'):
+            project.workspace_root(state, task_id=args.task)
         if task['status'] == 'done': raise WorkflowError('TASK_ALREADY_DONE do not rerun completed tasks blindly')
         if any(project.item(state, d)['status'] != 'done' for d in task['depends']): raise WorkflowError('DEPENDENCIES_PENDING')
         task['status'] = 'running'
@@ -1242,41 +1918,13 @@ def dispatch(project, args):
         if args.blocking < 0: raise WorkflowError('INVALID_BLOCKING_COUNT')
         text = (doc / 'review.md').read_text(encoding='utf-8')
         if '尚未审查' in text or len(text.strip()) < 20: raise WorkflowError('REVIEW_MISSING write the actual review first')
-        state['review'] = {'reviewer': args.reviewer, 'blocking': args.blocking, 'sha256': digest(doc / 'review.md'), 'fingerprint': fingerprint(project.root), 'contract': contract_hash(project, state, doc), 'at': now()}
+        state['review'] = {'reviewer': args.reviewer, 'blocking': args.blocking, 'sha256': digest(doc / 'review.md'), 'fingerprint': fingerprint(project.verification_root(state)), 'contract': contract_hash(project, state, doc), 'at': now()}
         state['status'] = 'review'
     elif command == 'ready':
         if state.get('controller_required') and state.get('status') != 'ready':
             raise WorkflowError('CONTROLLER_REQUIRED run advance <id> --to checking then --to ready before ready')
-        from .todos import Backlog
-        backlog = Backlog(project.root).summary()
-        if not backlog['exists']:
-            raise WorkflowError('BACKLOG_MISSING restore the project backlog or explicitly initialize it after investigation')
-        blockers = [r['id'] for r in backlog['items'] if r['status'] == 'open' and r['blocking'] == 'yes' and r['origin'] == state['id']]
-        blockers += [r['id'] for r in backlog['orphaned_records'] if not r['completed'] and r['blocking'] == 'yes' and r['origin'] == state['id']]
-        if blockers:
-            raise WorkflowError('BACKLOG_BLOCKING unresolved required work: ' + ', '.join(blockers))
-        if state.get('inflight'): raise WorkflowError('EXECUTION_UNKNOWN')
-        if not state['tasks'] or any(t['status'] != 'done' for t in state['tasks']): raise WorkflowError('TASKS_INCOMPLETE')
-        from .acceptance import acceptance_track_status
-        for task in state['tasks']:
-            if 'acceptance_cards' in task:
-                status = acceptance_track_status(task['acceptance_cards'])
-                task.setdefault('acceptance_track', {})['status'] = status
-                if status != 'acceptance_verified':
-                    raise WorkflowError('ACCEPTANCE_PENDING ' + task['id'])
-        fp=fingerprint(project.root);contract=contract_hash(project,state,doc)
-        final = [r for r in (read(project.root / p) for p in state['evidence']) if r['task'] == 'all']
-        if not final or final[-1]['status'] != 'pass' or final[-1]['fingerprint'] != fp or final[-1].get('contract') != contract or final[-1].get('verification_epoch', 0) != state.get('verification_epoch', 0):
-            raise WorkflowError('FINAL_REGRESSION_REQUIRED run the final whole-project checks with --task all')
-        # The final `all` regression is the current whole-project fingerprint.
-        # Task-specific receipts may legitimately predate later task changes;
-        # retain their provenance while validating status, contract, logs and
-        # recovery epoch without requiring every task to rerun after each peer.
-        checks=[evidence_for(project,state,task['id'],current_fingerprint=fp,current_contract=contract,
-                             allow_historical=True) for task in state['tasks']]
+        fp, checks, backlog = validate_delivery(project, state, doc)
         review = state['review']
-        if not review or review['blocking'] or review['fingerprint'] != fp or review['sha256'] != digest(doc / 'review.md') or review.get('contract') != contract:
-            raise WorkflowError('REVIEW_MISSING_STALE_OR_BLOCKING')
         state['status'] = 'ready'
         state['delivery_fingerprint'] = fp
         text = f'# {state["title"]} — 交付准备\n\nREADY：本地交付检查通过。外部发布动作由用户授权另行执行。\n\n'
@@ -1312,16 +1960,38 @@ def dispatch(project, args):
     elif command == 'block':
         state['status'] = 'blocked'; state['blocked_reason'] = args.reason
     elif command == 'observe-head':
+        task_id = getattr(args, 'task_id', None)
+        if task_id:
+            task = project.item(state, task_id)
+            binding = task.get('topology') or {}
+            if not binding.get('workspace_root'):
+                raise WorkflowError('GIT_TASK_TOPOLOGY_REQUIRED child is not bound')
+            workspace = project.workspace_root(state, validate=False, task_id=task_id)
+            actual = git_identity(workspace)
+            if actual.get('branch') != binding.get('branch') or actual.get('root') != str(workspace):
+                raise WorkflowError('GIT_WORKSPACE_MISMATCH inspect child workspace identity')
+            base_check = _git_run(workspace, 'merge-base', '--is-ancestor', binding['base_head'], actual['head'])
+            if base_check.returncode:
+                raise WorkflowError('GIT_BASE_CHANGED child no longer descends from recorded base')
+            binding.setdefault('head_history', []).append({'previous': binding.get('head'), 'head': actual['head'], 'reason': args.reason, 'at': now()})
+            binding['head'] = actual['head']
+            state['review'] = None
+            if state['status'] == 'ready':
+                state['status'] = 'needs-verification'
+            project.write(state, command, args.reason)
+            return {'task': state['id'], 'plan_task': task_id, 'head': actual['head']}, True
         preserve = state['status'] == 'ready' and not state.get('inflight')
         if preserve:
             # HEAD is provenance, not an input. Explicitly recheck the sealed
             # contract and real receipts before accepting an unchanged tree.
-            current_fingerprint = fingerprint(project.root)
+            current_fingerprint = fingerprint(project.workspace_root(state))
             for task in state['tasks']:
                 evidence_for(project, state, task['id'], current_fingerprint=current_fingerprint,
                              allow_historical=True)
         before = state['git']
-        state['git'] = git_identity(project.root)
+        state['git'] = git_identity(project.workspace_root(state))
+        if state.get('git_topology'):
+            state['git_topology']['head'] = state['git']['head']
         state['head_reconciliation'] = {
             'previous': before, 'current': state['git'], 'reason': args.reason, 'at': now(),
             'commit_warnings': commit_number_warnings(project.root, before.get('head'), state['git'].get('head'), state.get('number')),
@@ -1351,18 +2021,21 @@ def dispatch(project, args):
         state['review'] = None
         invalidate_delivery(doc, '未知或失败执行已调查，旧证据不能用于新的交付。')
     elif command == 'save':
-        checkpoint = {'schema': 1, 'at': now(), 'project_id': state['project_id'], 'root': str(project.root), 'git': git_identity(project.root),
-                      'fingerprint': fingerprint(project.root), 'design': digest(project.document(state, 'design')), 'plan': digest(project.document(state, 'plan')) if project.document(state,'plan').exists() else None}
+        checkpoint = {'schema': 1, 'at': now(), 'project_id': state['project_id'], 'root': str(project.root), 'git': git_identity(project.workspace_root(state)),
+                      'fingerprint': fingerprint(project.workspace_root(state)), 'design': digest(project.document(state, 'design')), 'plan': digest(project.document(state, 'plan')) if project.document(state,'plan').exists() else None}
         atomic(run / 'checkpoint.json', checkpoint)
     elif command == 'resume':
         if state.get('inflight'): raise WorkflowError('EXECUTION_UNKNOWN inspect the recorded argv and evidence folder; do not redispatch blindly')
+        for task in state.get('tasks', []):
+            if task.get('topology'):
+                project.workspace_root(state, task_id=task['id'])
         check = read(run / 'checkpoint.json') if (run / 'checkpoint.json').exists() else None
         if check:
-            if check['git'] != git_identity(project.root) or check['fingerprint'] != fingerprint(project.root):
+            if check['git'] != git_identity(project.workspace_root(state)) or check['fingerprint'] != fingerprint(project.workspace_root(state)):
                 raise WorkflowError('RESTORE_DIVERGED inspect changed files, branch or HEAD; saved state is not permission to overwrite')
             if check['design'] != digest(project.document(state, 'design')) or check['plan'] != (digest(project.document(state, 'plan')) if project.document(state,'plan').exists() else None):
                 raise WorkflowError('RESTORE_PLAN_CHANGED')
-        elif state['git'].get('head') != git_identity(project.root).get('head'):
+        elif state['git'].get('head') != git_identity(project.workspace_root(state)).get('head'):
             raise WorkflowError('HEAD_CHANGED inspect before continuation')
         from .todos import Backlog
         backlog = Backlog(project.root).summary()
@@ -1371,6 +2044,8 @@ def dispatch(project, args):
             pending.append({'kind': 'approval', 'reason': '当前设计没有匹配的用户批准', 'command': f"approve {state['id']} --quote \"用户原话\""})
         if state.get('scope', {}).get('mode') == 'pending':
             pending.append({'kind': 'scope', 'reason': '当前任务尚未决定冻结范围', 'command': f"scope {state['id']} --off --quote \"用户原话\""})
+        if topology_required(state) and not topology_selected(state):
+            pending.append({'kind': 'git_topology', 'reason': '当前任务尚未选择原地、分支或 worktree', 'command': f"topology {state['id']} && topology-select {state['id']} --mode <in-place|branch|worktree> --quote \"用户原话\""})
         if state.get('inflight'):
             pending.append({'kind': 'recovery', 'reason': '上次命令结果未知，先调查并恢复', 'command': f"recover-run {state['id']} --evidence <报告路径> --outcome failed"})
         next_skill = {'design': 'gsp-brainstorming', 'plan': 'gsp-writing-plans', 'execute': 'gsp-execute',

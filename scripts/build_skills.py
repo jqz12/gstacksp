@@ -16,7 +16,7 @@ from gsp import __version__
 DEFINITIONS = [
 ('git','core',['GSP:git-lifecycle','SP:using-git-worktrees','SP:finishing-a-development-branch'],
  'Git health route 指向 Git 专业处理，或用户要求检查分支、归属、提交和分支收尾时',
- '读取 Git health 的短 handoff，不加载完整报告。检查仓库、分支、HEAD、工作区归属和任务绑定；输出下一动作。新任务建议 feature/GSP-<编号>-<slug>、fix/...、docs/...、test/...、refactor/...、chore/...、research/...。提交使用 Conventional Commit，正文包含 GSP 编号；用 `<gsp> authorize <id> commit --scope <范围> --quote "用户原话"` 登记提交授权。提交、推送、合并、删除分支必须分别取得精确授权；不自动 git add .、reset、clean 或拆分未知修改。完成提交后核对 diff、测试和 HEAD，再用 observe-head 登记。保留完整 SP worktree 原文 [using-git-worktrees](../gsp-workflow/upstream/skills/using-git-worktrees/ORIGINAL.md) 与 finishing branch 方法 [gsp-ship](../gsp-ship/SKILL.md)，真实远程 Git 和宿主触发未验证时标记 NOT_CHECKED。'),
+ '读取 Git health 的短 handoff，不加载完整报告。检查仓库、分支、HEAD、工作区归属和任务绑定；输出下一动作。新任务建议 feature/GSP-<编号>-<slug>、fix/...、docs/...、test/...、refactor/...、chore/...、research/...。提交使用 Conventional Commit，正文包含 GSP 编号；用 `<gsp> authorize <id> commit --scope <范围> --quote "用户原话"` 登记提交授权。提交、推送、合并、删除分支必须分别取得精确授权；不自动 git add .、reset、clean 或拆分未知修改。完成提交后核对 diff、测试和 HEAD，再用 observe-head 登记。保留完整 SP worktree 原文 [using-git-worktrees](../gsp-workflow/upstream/skills/using-git-worktrees/ORIGINAL.md) 与 finishing branch 方法 [gsp-ship](../gsp-ship/SKILL.md)，真实远程 Git 和宿主触发未验证时标记 NOT_CHECKED。 New tasks run <gsp> topology <id> first to show the current branch, HEAD, every worktree, dirty paths, and active bindings; then record one choice with <gsp> topology-select <id> --mode in-place|branch|worktree --quote "{user quote}". Block direct implementation on main/master or detached HEAD by default. Use feature/GSP-<number>[-Tnn]-<Chinese topic>; every GSP number must bind to a real branch or an explicit in-place override. GSP number, T task, branch, commit SHA, Issue, and PR are separate identities; leave Issue/PR empty when no real object exists. Git topology contract: use topology and topology-select; inspect main/master and every worktree; keep GSP 编号, T task, branch, commit SHA, control_root, workspace_root, and Issue/PR separate.'),
 ('document-governance','optional',['GSP:document-governance'],
  '新项目需要建立文档入口、老项目需要完整接入或整理，或本次改动需要维护相关文档正本时',
  '先读 [文档治理执行规则](../gsp-workflow/references/document-governance-execution.md) 和 [共同治理契约](../gsp-workflow/references/document-governance.md)。核对用户原始目标，明确新项目、老项目完整治理或日常局部维护；区分仅检查与已授权整改，不把完整治理缩小为报告或迁移预览。修改前按执行规则选择独立任务、嵌套维护或只读路径；独立整改必须实际resume并建立当前任务验收，不能只沿用旧文件夹。复用现有 GSP 设计、计划、执行和验证，不另设重复批准。完整治理先用 health 获取发现，再逐项阅读、确认正本及归属，按授权受控处理，最后复查；日常仅核对受影响资料，必要时才全量 health。记录盘点、预览、迁移、验收的实际阶段；报告通过不等于治理完成。交付必须对应原始目标，并披露未完成、例外及证据。本技能是执行指导，不是 CLI 自动强制门禁。完整治理同时盘点根目录资料、非Markdown证据和本地工作产物，核对生成工具及输出位置、唯一正本、共享范围和保留规则；详情按共同治理契约的项目资料与工作产物章节执行。'),
@@ -49,7 +49,7 @@ DEFINITIONS = [
  '这不是普通软件计划审查。建立 `docs/gsp/evals/<名称>/plan.md`：研究问题、样本、指标、实验组和无技能对照、盲评/反例、停止条件、成本和用户费用授权范围。先零费用验证输入/计分/输出通路，再在真实已授权额度内做小样本试运行。记录模型/参数、样本哈希、实际命令、结果和已知费用；未知费用明确 unknown。不自动调用模型 API。付费扩大实验前核对授权和预算，不靠网页声明。输出 result.md，说明样本局限而不把一次得分推广成普遍结论。'),
 ('execute','core',['SP:executing-plans','SP:subagent-driven-development','SP:dispatching-parallel-agents','SP:using-git-worktrees'],
  '已确认设计与计划需要连续实施、测试和完成任务时',
- '先 resume/status 核对设计、计划、工作区、冻结和依赖。已有隔离先检测；用户选择原地冻结则尊重，不强建 worktree。默认当前代理逐任务执行；只有宿主能力、授权和任务独立性满足时才分派代理，不默认生成多代理舰队。每任务 task-start，读明确验收，按 test-driven-development 实现，run 真实检查并 task-done。子代理模式每任务一次规格与质量审查；单代理无需额外逐任务审查者。普通决定记录 decision 后继续，不问继续。修复连续失败达到配置 max_fix_rounds 时 block，记录证据与恢复下一步。完成后跑最终 all 回归、整体 review、verify、ship；不重做完成任务。'),
+ '先 resume/status 核对设计、计划、工作区、冻结和依赖。已有隔离先检测；用户选择原地冻结则尊重，不强建 worktree。默认当前代理逐任务执行；只有宿主能力、授权和任务独立性满足时才分派代理，不默认生成多代理舰队。每任务 task-start，读明确验收，按 test-driven-development 实现，run 真实检查并 task-done。子代理模式每任务一次规格与质量审查；单代理无需额外逐任务审查者。普通决定记录 decision 后继续，不问继续。修复连续失败达到配置 max_fix_rounds 时 block，记录证据与恢复下一步。完成后跑最终 all 回归、整体 review、verify、ship；不重做完成任务。 Before the first write, follow the selected workspace_root. In multi-session or multi-agent work, each writable task gets one branch and one worktree while the control root keeps one .gsp ledger. Register frontend, backend, and integration roles; validate children first and let the integration task converge and regress before ready. Shared writable paths or a missing integration task block ready. Git topology contract: use topology and topology-select; inspect main/master and every worktree; keep GSP 编号, T task, branch, commit SHA, control_root, workspace_root, and Issue/PR separate.'),
 ('test-driven-development','core',['SP:test-driven-development'],
  '实现或修复可自动验证的行为，需要可靠回归测试时',
  '从本任务 acceptance 选一个真实可观察行为。先写最小测试，运行并确认失败原因确为缺失行为；语法错误或命令未启动不算红灯。实现最小改动，使测试变绿，再做必要重构并重跑。测试验证行为，避免只验证 mock 被调用或为迎合实现降低断言。文档、生成物或无适用自动测试的变更，按用户指示和任务性质记录替代检查与理由，不为了流程制造无价值测试。用 run 留下真实测试数与日志。'),
@@ -70,7 +70,7 @@ DEFINITIONS = [
  '查项目实际声明的检查命令，完整运行并读输出。每个任务应有有效证据；最终代码变化后，运行 `<gsp> run <id> --task all --kind tests -- <完整回归 argv>`，若全是非测试变更则有任务级理由后使用 check。测试启动失败、零测试、未知测试数、失败输出或范围越界不算绿。检查所有验收是否覆盖，静态交付物与运行行为分开。缺失浏览器/远程平台不能自动记通过。完成审查后 ready；只有脚本和人工证据共同支持的范围才能报告完成。'),
 ('ship','core',['GS:ship','SP:finishing-a-development-branch','GS:document-release'],
  '实现和审查结束，需要准备交付或执行已授权的发布分支操作时',
- '先核对最终 all 回归、整体审查和当前任务证据，再运行 `<gsp> ready <id>`。ready 保留 active.json 和冻结范围以保护并行任务；确认交付完成后用 `<gsp> close <id> --reason "关闭依据"` 关闭任务档案并释放该任务的 active/scope。只按实际变更更新必要 README、接口或版本说明；不默认加 VERSION/CHANGELOG。给用户 status/resume 返回的任务档案内 delivery.md，补充实际变化、运行方式、未覆盖与自主取舍。默认到本地交付准备。对真实已有的推送、PR、合并、删除分支、发布授权，用 authorize/authority 记录并核对精确范围后执行宿主实际命令，不重复询问；未授权则保留可审查结果。每次实际外部动作验证结果后记到交付文档，失败如实记录。'),
+ '先核对最终 all 回归、整体审查和当前任务证据，再运行 `<gsp> ready <id>`。ready 保留 active.json 和冻结范围以保护并行任务；确认交付完成后用 `<gsp> close <id> --reason "关闭依据"` 关闭任务档案并释放该任务的 active/scope。只按实际变更更新必要 README、接口或版本说明；不默认加 VERSION/CHANGELOG。给用户 status/resume 返回的任务档案内 delivery.md，补充实际变化、运行方式、未覆盖与自主取舍。默认到本地交付准备。对真实已有的推送、PR、合并、删除分支、发布授权，用 authorize/authority 记录并核对精确范围后执行宿主实际命令，不重复询问；未授权则保留可审查结果。每次实际外部动作验证结果后记到交付文档，失败如实记录。 Before delivery, recheck topology, control_root/workspace_root, the current branch, and HEAD; record a commit SHA only after a real commit. Full-stack children normally prepare one integration branch and one integration PR. Record Issue/PR only when an actual object exists; never invent external IDs. Git topology contract: use topology and topology-select; inspect main/master and every worktree; keep GSP 编号, T task, branch, commit SHA, control_root, workspace_root, and Issue/PR separate.'),
 ('learn','core',['GS:learn'],
  '需要保存、检索或修正本项目已验证的可复用经验时',
  '先判断是否可复用并有证据；一次性进度写任务记录，用户偏好写 plan-tune。先用 `<gsp> learn --query "关键词"` 查询有效项；保存用 `learn --text "结论及条件" --source "证据位置"`，相同规范化原文合并来源。纠错用 `--supersedes <旧ID> --text "新结论" --reason "原因" --source "新证据"`，失效用 `--invalidate <ID> --reason "原因" --source "证据"`；追溯用 `--history`。旧记录及事件保留，不直接改 JSONL、不自动复活无效项、不猜测语义相似就合并。详见 [经验事件规则](../gsp-workflow/references/learnings.md)。经验不授权动作，不自动跨项目合并或外发到 gbrain；不要保存凭据和完整敏感会话。'),
@@ -91,7 +91,7 @@ DEFINITIONS = [
 ('plan-devex-review','optional',['GS:plan-devex-review'], 'CLI、SDK、API 或技能计划需要检查使用者上手和错误处理体验时',
  '从已确认用户和目标找出首次有用结果路径，检查安装、配置、示例、命令/参数、错误和恢复、文档是否可理解。GstackSP 可检查冻结如何开/关、失败后怎么办。只补实际缺口，不强制人物画像、竞品评分和八轮流程。结论写 decisions.md 并修正相关计划，运行体验留给 devex-review；无开发者界面则跳过。'),
 ('captain','optional',['GS:captain'], '确有多个独立任务需要协调代理和分支且宿主允许时',
- '先确认可用代理工具及用户授权。按文件/接口划分任务、指定单写者和依赖，各代理交回范围、测试和阻塞；控制器统一记录。代理不能自行合并他人分支或扩大范围。共享目录不并发写状态；需要并行源码时用隔离 worktree。最终集成后再回归和整体审查，资源不足改为顺序执行，不依赖 Capy 专属工具。'),
+ '先确认可用代理工具及用户授权。按文件/接口划分任务、指定单写者和依赖，各代理交回范围、测试和阻塞；控制器统一记录。代理不能自行合并他人分支或扩大范围。共享目录不并发写状态；需要并行源码时用隔离 worktree。最终集成后再回归和整体审查，资源不足改为顺序执行，不依赖 Capy 专属工具。 The controller inventories and recommends topology before allocation. Each writable agent receives its own branch/worktree and T task; agents cannot share a writable path or edit the parent ledger directly. A single integration owner validates frontend and backend output in an integration worktree before the parent can become ready. With limited resources, reuse a released workspace serially while preserving the binding. Git topology contract: use topology and topology-select; inspect main/master and every worktree; keep GSP 编号, T task, branch, commit SHA, control_root, workspace_root, and Issue/PR separate.'),
 ('open-gstack-browser','optional',['GS:open-gstack-browser'], '需要启动或连接当前宿主可用的浏览器测试会话时',
  '先检查宿主浏览器工具与项目配置，优先连接已提供的测试浏览器。没有时使用项目已有 Playwright/浏览器启动脚本，不假定存在 Aside 或 GS 二进制。记录目标 URL、会话用途与能力限制；不要关闭用户真实工作窗口或擅自安装扩展。若无可用后端，报告不可用并转可行的项目测试。'),
 ('setup-browser-cookies','optional',['GS:setup-browser-cookies'], '用户明确要求为测试浏览器配置已有登录态时',
@@ -141,17 +141,27 @@ LIFECYCLE_NOTES = {
     'brainstorming': '开始先读项目根 TODOS.md 和既有决定，避免重复提出已延期或已完成工作；非目标不自动变成待办。',
     'writing-plans': '计划还需保留全局约束、既有实现与复用、关键失败路径及对应测试（Review Focus）；验收→任务→验证应能逐项追溯。按需将测试矩阵内嵌 plan.md，不机械增设独立文件。先读人看的项目待办原文和 todo-list；纳入事项引用 ID，并用 todo-link <待办ID> --run <需求ID> --task <任务ID> 记录关联，关联不代表完成。批准延期的真实问题按共同规则登记，不能只留在计划正文。',
     'autoplan': '逐项区分本次必做、已接受延期、明确不做；必做事项不能仅因写入待办而解除阻塞。延期需来源、理由和影响，使用共同待办规则落入根 TODOS.md。',
-    'execute': '会话内执行仍遵守修复纪律。用户明确需要脱离会话连续执行时，读取 [驱动器](../gsp-workflow/references/driver.md)，配置真实检查并使用 drive-init/drive-start；不要同时由会话和驱动器修改项目。Codex 驱动器持久消费 max_fix_rounds，按每个任务和最终审查修复链计数，初次实施不算修复；失败命令数不等于修复轮次。Claude 暂无 headless 适配器。未解决问题按共同待办规则保存并带入最终审查。',
+    'execute': '会话内执行仍遵守修复纪律。用户明确需要脱离会话连续执行时，读取 [驱动器](../gsp-workflow/references/driver.md)，配置真实检查并使用 drive-init/drive-start；不要同时由会话和驱动器修改项目。Codex 驱动器持久消费 max_fix_rounds，按每个任务和最终审查修复链计数，初次实施不算修复；失败命令数不等于修复轮次。Claude 暂无 headless 适配器。未解决问题按共同待办规则保存并带入最终审查。首次写入前先运行 `<gsp> topology <id>`，向用户展示当前分支、HEAD、全部 worktree、脏状态和已有任务绑定，再用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 记录选择；默认阻止 main/master 或 detached HEAD 直接实现。每个 GSP 编号、T 任务、branch、commit SHA、control_root、workspace_root 和 Issue/PR 独立记录，前后端并行任务各用独立 worktree，由 integration 任务汇合后再 ready。',
     'systematic-debugging': '区分本次回归与既有失败，记录复现、当前基线和影响；既有失败不自动忽略，真实必需修复仍为 blocker。不能因登记待办就宣布通过。',
     'qa': '先给基线发现再修复；每次在 .gsp/runs/<id>/qa/<唯一运行ID>/ 保存报告、基线及截图，目录存在则换新 ID，禁止覆盖旧材料。报告关联设计/计划中的测试矩阵。未解决项按待办规则登记，已回退修复与未验证修复不得标成 verified。',
     'review': '每个实际问题须明确立即修复、按依据延期或经核实不成立；延期项登记根 TODOS.md，最终审查必须读取，不得只说以后处理。本次必需项用 --blocking --origin <本需求ID>，ready 会检查它。',
     'verify': '交付前读取 todo-list 和人读待办原文；人工历史内容也要核对，不能只看机器计数。核实关联任务与问题验收，再用 todo-done 带实际版本关闭；没有版本时如实留空，不捏造。完成证据和历史在 .gsp/backlog/records.json，正文只显示完成版本/日期。人工移到 Completed 或改动已完成正文不算验证通过；先核对关闭再跑最终 all 回归，待办与执行记录变化都会使旧证据过期。',
-    'ship': '按共同待办规则核对新增、延期、已完成与未完成项；只凭有效任务证据关闭，不凭标题/提交信息猜完成。保留原内容和历史；交付必须链接根待办并披露未完成项。待办写入失败明确报告，绝不声称已保存；阻塞问题仍阻塞。',
+    'ship': '按共同待办规则核对新增、延期、已完成与未完成项；只凭有效任务证据关闭，不凭标题/提交信息猜完成。保留原内容和历史；交付必须链接根待办并披露未完成项。待办写入失败明确报告，绝不声称已保存；阻塞问题仍阻塞。交付前重新运行 `<gsp> topology <id>`，核对 GSP 编号、T 任务、当前 branch、commit SHA、control_root、workspace_root 和实际 Issue/PR；没有真实 Issue/PR 不登记编号。若拓扑尚未选择，先用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 补齐记录；默认不允许在 main/master 或 detached HEAD 上直接实现。并行前后端必须由唯一 integration owner 在集成 worktree 验证后才能 ready；未授权的 commit、push、merge 或删除分支保持未执行。',
     'context-save': '保存前核对根 TODOS.md，未解决问题必须有来源和下一步。任务进度、长期待办和已验证经验分别保存；不把尚未解决事项当作经验结论。',
     'context-restore': 'resume 返回根待办路径及当前事项；读取原文和人工历史内容，不只读机器计数。先核实关联问题状态，不重做已完成任务，也不丢失延期事项。',
     'learn': '经验回答什么已被证实，待办回答什么尚未完成；未解决问题先登记根待办，不用经验条目替代后续工作。',
     'health': '自动检测同时扫描项目级和用户级安装，并分别核对清单；全局正常不能掩盖项目损坏。文档治理使用 `<gsp> health --documents-only`；同时检查安装时用 `--documents`。默认报告保存在目标项目 docs/gsp/reports/document-governance/<唯一运行ID>/report.md 与 report.json；用户明确指定集中目录时传 --report-dir，不把开发者本机目录当产品默认。读取报告检查分类、绑定、断链、重复、孤立、未追踪和差异。报告同时包含assets元数据清单、根目录产物候选、Git忽略状态和有界Python字面量输出候选；先读asset_scan的范围、截断和未检查项，其他语言与动态生成路径由执行者核对。程序未检查语义与代码符合性，按需要复核并将依据写到独立复核材料，不能冒称程序已验证。旧项目先盘点和迁移预览，未知分类、未入链或重复副本不等于可删除。只出报告，不自动删文件、迁移或改全局配置。新建资料按统一职责，旧布局是待整理过渡或有依据例外。安装扫描仍不证明真实宿主行为；新环境另做实际技能触发检查。文档规则与命令见 [治理契约](../gsp-workflow/references/document-governance.md)。',
 }
+
+LIFECYCLE_NOTES['git'] = ('新任务按需求声明 `--intent`；大功能或跨模块单任务使用 `new --size large`，推荐独立 worktree。'
+                         '同一任务换会话先复核和复用绑定；仅一个可写任务不额外要求 integration。'
+                         '`--base` 明确派生提交，改变绑定须显式 `topology-select --rebind` 并重新验证；'
+                         'Git 创建或切换中断后先调查，再 recover-run，不自动清理。')
+LIFECYCLE_NOTES['execute'] += (' Native 会话支持绑定 worktree；当前 headless driver 不支持独立/子工作区，'
+                              '会返回 DRIVER_TOPOLOGY_UNSUPPORTED。子任务提交获授权并核对后使用 observe-head --task Tnn；'
+                              '集成树必须包含各子任务已验证提交，最终 run --task all 在集成工作区执行。')
+LIFECYCLE_NOTES['health'] += (' 同时只读复核活动任务及子任务的 Git 拓扑；未选择时路由 git.topology.required，'
+                             '目录缺失、分支/HEAD/基线漂移或重复占用时路由 git.topology.invalid，不修改任务状态。')
 
 CONTROLLER_HANDOFF = ('阶段转换统一先运行 `<gsp> handoff <id> --to <阶段>` 预览，再运行 '
                      '`<gsp> advance <id> --to <阶段>` 推进；控制器会检查批准、计划封存、scope、任务证据、审查和最终回归。'

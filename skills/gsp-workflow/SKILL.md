@@ -14,11 +14,14 @@ description: Use when starting a development task in a project using GstackSP, o
 1. 看宿主真实工具列表；存在 `.gsp/active.json` 时运行 `<gsp> resume <id>`，按输出核对项目、规格、计划和决策。发现分歧先调查，不盲续、不覆盖。
 2. 新需求读 `gsp-brainstorming`。明确的小改可用短设计；已充分批准的方案继续执行，无需重新批准相同内容。建立任务用 `<gsp> init`、`<gsp> new <id> --title "标题"`。
 3. 在首次写实现前落实工作位置和冻结选择。未指定冻结时问一次并给推荐；明确的小修改可原地冻结。无人值守须有用户实际授权，按推荐记录，不假造用户答复。
+   Git 拓扑是首次实现前的必经交接：先运行 `<gsp> topology <id>`，向用户展示当前分支、HEAD、全部 worktree、脏状态和已有任务绑定，再用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 记录一次选择。默认阻止 main/master 或 detached HEAD 直接写入；只有明确原地覆盖才可继续。状态中的 GSP 编号、T 任务号、branch、commit SHA、Issue/PR、control_root 和 workspace_root 各自独立，不能互相替代。
 4. 设计确认后依次使用 `gsp-writing-plans`、`gsp-execute`；计划评审 `gsp-autoplan` 按复杂度使用。测试、调试、审查在执行中调用。UI 按需调用 `gsp-browse`、`gsp-qa` 及已安装视觉扩展。
    阶段交接核对[实际产物与接口文档](references/artifact-fidelity.md)，读取完整阶段正文，不能以本入口摘要代替方法；计划自查后使用 `plan-check` 和 `seal-plan --check-structure`。
 5. 所有任务完成后只做一次整体 `gsp-review`，由 `gsp-verify` 确认证据，`gsp-ship` 准备交付。有精确外部操作授权则执行对应动作，不重复问。保存恢复用 `gsp-context-save`。
 
 每个阶段按需读取项目根 `TODOS.md`，延期问题必须有归宿，必做问题不能靠延期解除阻塞。维护规则见 [待办生命周期](references/backlog.md)。
+
+并行或全栈任务使用 `task-add --role frontend|backend|integration` 和 `topology-select --task Tnn`；每个可写任务一任务一 branch/worktree，控制根只保留一份账本。前后端各自验证后由唯一 integration owner 在集成 worktree 汇合；缺集成任务、共享写目录或旧 base 时阻止 ready。Issue/PR 只有真实对象才登记。
 
 用户明确要求后台无人值守时读 [持久驱动器](references/driver.md)：当前提供 Codex headless 适配器，设计确认和冻结选择后配置检查命令并启动；普通 unattended 标志本身不会创建后台进程。
 

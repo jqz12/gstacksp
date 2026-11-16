@@ -158,8 +158,10 @@ def handle(payload):
         if identity.get('root',str(root))!=str(root): raise WorkflowError('HOOK_PROJECT_MOVED')
         state=None;task=None
         active=safe_file(root,root/'.gsp/active.json')
-        if active.exists():
-            task=load(active).get('task');slug(task)
+        from .git_topology import bound_task_for_path
+        task = bound_task_for_path(root, Path(payload['cwd']))
+        if task or active.exists():
+            task=task or load(active).get('task');slug(task)
             state=load(safe_file(root,root/'.gsp/runs'/task/'state.json'))
             if state.get('id')!=task: raise WorkflowError('HOOK_TASK_MISMATCH')
         result={};outcome='observed';coverage='metadata-only'
@@ -170,7 +172,8 @@ def handle(payload):
                 context+='Bound documents: '+json.dumps({k:str(Project(root).document(state,k).relative_to(root)) for k in ('design','plan')},ensure_ascii=True)
             else: context+='No active task. Discuss design before implementation.'
             result={'hookSpecificOutput':{'hookEventName':event,'additionalContext':context[:1800]}}
-        if writing and state and state.get('scope',{}).get('mode')=='frozen':
+        if writing and state and (state.get('scope',{}).get('mode')=='frozen' or
+                                  (state.get('git_topology') or {}).get('enforce')):
             try:
                 data=payload.get('tool_input')
                 if not isinstance(data,dict): raise WorkflowError('HOOK_EDIT_INPUT_INVALID')

@@ -7,6 +7,7 @@
 | 文档 | 用途 |
 |---|---|
 | [计划结构检查接口](reference/plan-quality.md) | 计划结构检查与验收边界 |
+| [分支、worktree 与并行任务](reference/git-topology.md) | 选择矩阵、中文编号、父子任务、集成与恢复 |
 | [根 README](../README.md) | 安装范围、基本用法和项目说明 |
 
 ## 源码入口

@@ -16,7 +16,12 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / 'scripts' / 'gsp.py'
 
 
-class WorkflowTests(unittest.TestCase):
+class LegacyWorkflowTests(unittest.TestCase):
+    """Persisted tasks from before the controller/topology schema still work.
+
+    Current task creation and stage order are covered separately by
+    test_end_to_end, test_handoff_controller and test_topology_lifecycle.
+    """
     def test_ignored_test_script_change_invalidates_ready_on_status(self):
         folder=self.task()
         script=self.project/'.gsp/local-tests.py'
@@ -102,6 +107,11 @@ class WorkflowTests(unittest.TestCase):
     def task(self):
         self.cli('init')
         self.cli('new', 'login', '--title', 'Login')
+        state_file = self.project / '.gsp/runs/login/state.json'
+        legacy = json.loads(state_file.read_text(encoding='utf-8'))
+        legacy.pop('controller_required', None)
+        legacy.pop('git_topology', None)
+        state_file.write_text(json.dumps(legacy), encoding='utf-8')
         folder = docfolder(self.project,'login')
         document(self.project, 'login', 'design').write_text('# Design\nLogin returns a session.\n', encoding='utf-8')
         self.cli('approve', 'login', '--quote', 'I approve this design')
@@ -251,12 +261,15 @@ class WorkflowTests(unittest.TestCase):
         self.cli('review', 'login', '--reviewer', 'self', '--blocking', '0')
         self.cli('ready', 'login')
         document(self.project, 'login', 'design').write_text('# New design\nNow requires expiration too.\n', encoding='utf-8')
+        self.assertIn('APPROVAL_STAGE_INVALID', self.cli('approve', 'login', '--quote', 'Premature approval', ok=False).stderr)
+        current = json.loads((self.project / '.gsp/runs/login/state.json').read_text(encoding='utf-8'))
+        self.cli('documents-adopt', 'login', '--spec', current['documents']['design'], '--plan', current['documents']['plan'],
+                 '--reason', 'SYNTHETIC explicitly reopen the revised document contract')
         self.cli('approve', 'login', '--quote', 'Approve expiration')
         self.cli('seal-plan', 'login')
-        (folder / 'review.md').write_text('# Review\nChecked revised design without blockers.\n', encoding='utf-8')
-        self.cli('review', 'login', '--reviewer', 'self', '--blocking', '0')
-        r = self.cli('ready', 'login', ok=False)
-        self.assertIn('FINAL_REGRESSION_REQUIRED', r.stderr)
+        self.cli('task-start', 'login', 'T1')
+        self.assertIn('EVIDENCE_CONTRACT_CHANGED', self.cli('task-done', 'login', 'T1', ok=False).stderr)
+        self.assertIn('TASKS_INCOMPLETE', self.cli('ready', 'login', ok=False).stderr)
 
     def test_install_preserves_user_edited_instruction_block(self):
         self.cli('install', '--host', 'codex')
@@ -343,6 +356,10 @@ class WorkflowTests(unittest.TestCase):
         (folder / 'review.md').write_text('# Review\nChecked all changes without blockers.\n', encoding='utf-8')
         self.cli('review', 'login', '--reviewer', 'self', '--blocking', '0')
         self.cli('ready', 'login')
+        current = json.loads((self.project / '.gsp/runs/login/state.json').read_text(encoding='utf-8'))
+        self.assertIn('WORK_CLOSURE_CONDITION_REQUIRED', self.cli('close', 'login', '--reason', 'Missing fixture condition', ok=False).stderr)
+        self.cli('work-stage', current['work_uuid'], 'closed', '--reason', 'SYNTHETIC accepted delivery',
+                 '--closure-condition', 'Fixture evidence and delivery reviewed')
         self.cli('close', 'login', '--reason', 'Fixture delivery accepted and task boundary can be released')
         self.assertFalse((self.project / '.gsp/active.json').exists())
         state=json.loads((self.project / '.gsp/runs/login/state.json').read_text(encoding='utf-8'))

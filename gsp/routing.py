@@ -34,6 +34,8 @@ ROUTES = (
     Route("git.detached", "gsp-health", "detached_head", "gsp-git", "gsp-workflow", True, True, "branch", "git-health", "gsp-workflow"),
     Route("git.no-repository", "gsp-health", "repository_missing", "gsp-git", "gsp-workflow", True, True, "repository", "git-health", "gsp-workflow"),
     Route("git.unknown", "gsp-health", "git_probe_unknown", "gsp-git", "gsp-workflow", True, True, "investigation", "git-health", "gsp-workflow"),
+    Route("git.topology.required", "gsp-health", "git_topology_required", "gsp-git", "gsp-workflow", True, True, "worktree", "git-topology", "gsp-workflow"),
+    Route("git.topology.invalid", "gsp-health", "git_topology_invalid", "gsp-git", "gsp-workflow", True, True, "investigation", "git-topology", "gsp-workflow"),
     Route("execute.test-failure", "gsp-execute", "test_failure", "gsp-systematic-debugging", "gsp-execute", True, False, None, "test-receipt", "gsp-workflow"),
     Route("quality.failure", "gsp-code-quality", "required_check_failed", "gsp-execute", "gsp-code-quality", True, False, None, "quality-report", "gsp-workflow"),
     Route("quality.not-checked", "gsp-code-quality", "quality_stack_missing_or_tool_unavailable", "gsp-workflow", "gsp-code-quality", True, True, "quality-stack", "quality-report", "gsp-workflow"),

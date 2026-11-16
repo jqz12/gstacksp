@@ -13,7 +13,7 @@ Use the [output and handoff contract](../gsp-workflow/references/output-handoff.
 
 ### GSP stage integration
 
-按共同待办规则核对新增、延期、已完成与未完成项；只凭有效任务证据关闭，不凭标题/提交信息猜完成。保留原内容和历史；交付必须链接根待办并披露未完成项。待办写入失败明确报告，绝不声称已保存；阻塞问题仍阻塞。
+按共同待办规则核对新增、延期、已完成与未完成项；只凭有效任务证据关闭，不凭标题/提交信息猜完成。保留原内容和历史；交付必须链接根待办并披露未完成项。待办写入失败明确报告，绝不声称已保存；阻塞问题仍阻塞。交付前重新运行 `<gsp> topology <id>`，核对 GSP 编号、T 任务、当前 branch、commit SHA、control_root、workspace_root 和实际 Issue/PR；没有真实 Issue/PR 不登记编号。若拓扑尚未选择，先用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 补齐记录；默认不允许在 main/master 或 detached HEAD 上直接实现。并行前后端必须由唯一 integration owner 在集成 worktree 验证后才能 ready；未授权的 commit、push、merge 或删除分支保持未执行。
 
 Previously confirmed content and explicit execution/integration authorization take precedence over the upstream repeated plan confirmation or fixed completion menu. A substantive design change or a new external action still needs the applicable authorization.
 

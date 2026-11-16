@@ -14,6 +14,7 @@ class HumanTodoTests(unittest.TestCase):
     add = test_todos.TodoTests.add
     work = test_todos.TodoTests.work
     finish_task = test_todos.TodoTests.finish_task
+    prepare_delivery = test_todos.TodoTests.prepare_delivery
 
     def records(self):
         return json.loads((self.root/'.gsp/backlog/records.json').read_text(encoding='utf-8'))
@@ -171,13 +172,14 @@ class HumanTodoTests(unittest.TestCase):
         self.assertEqual(self.cli('todo-list')['items'][0]['component'],'Configuration')
 
     def test_deleting_a_required_entry_does_not_bypass_ready(self):
-        self.cli('init'); self.work()
+        self.cli('init'); doc = self.work()
         self.cli('todo-add','--title','Required','--what','Required issue','--why','Acceptance gap',
                  '--context','Reproduce this gap','--source','review/required','--origin','work','--blocking')
+        self.prepare_delivery(doc)
         file=self.root/'TODOS.md'; text=file.read_text(encoding='utf-8')
         import re
         file.write_text(re.sub(r'<!-- gsp-todo:.*?<!-- /gsp-todo:.*?-->','',text,flags=re.S),encoding='utf-8')
-        self.assertIn('BACKLOG_BLOCKING',self.cli('ready','work',ok=False))
+        self.assertIn('BACKLOG_BLOCKING',self.cli('advance','work','--to','ready',ok=False))
 
     def test_pasting_legacy_fields_into_new_body_cannot_forge_completion(self):
         self.cli('init'); self.add()

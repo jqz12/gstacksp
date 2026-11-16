@@ -13,7 +13,7 @@ Use the [output and handoff contract](../gsp-workflow/references/output-handoff.
 
 ### GSP stage integration
 
-会话内执行仍遵守修复纪律。用户明确需要脱离会话连续执行时，读取 [驱动器](../gsp-workflow/references/driver.md)，配置真实检查并使用 drive-init/drive-start；不要同时由会话和驱动器修改项目。Codex 驱动器持久消费 max_fix_rounds，按每个任务和最终审查修复链计数，初次实施不算修复；失败命令数不等于修复轮次。Claude 暂无 headless 适配器。未解决问题按共同待办规则保存并带入最终审查。
+会话内执行仍遵守修复纪律。用户明确需要脱离会话连续执行时，读取 [驱动器](../gsp-workflow/references/driver.md)，配置真实检查并使用 drive-init/drive-start；不要同时由会话和驱动器修改项目。Codex 驱动器持久消费 max_fix_rounds，按每个任务和最终审查修复链计数，初次实施不算修复；失败命令数不等于修复轮次。Claude 暂无 headless 适配器。未解决问题按共同待办规则保存并带入最终审查。首次写入前先运行 `<gsp> topology <id>`，向用户展示当前分支、HEAD、全部 worktree、脏状态和已有任务绑定，再用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 记录选择；默认阻止 main/master 或 detached HEAD 直接实现。每个 GSP 编号、T 任务、branch、commit SHA、control_root、workspace_root 和 Issue/PR 独立记录，前后端并行任务各用独立 worktree，由 integration 任务汇合后再 ready。 Native 会话支持绑定 worktree；当前 headless driver 不支持独立/子工作区，会返回 DRIVER_TOPOLOGY_UNSUPPORTED。子任务提交获授权并核对后使用 observe-head --task Tnn；集成树必须包含各子任务已验证提交，最终 run --task all 在集成工作区执行。
 
 Read these complete originals and their dependencies before using the corresponding mode:
 

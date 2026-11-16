@@ -41,6 +41,8 @@ python E:\GstackSP\scripts\gsp.py --project E:\MyProject install --host both --o
 
 告诉 AI：“用 GstackSP 做这个需求，先讨论设计；确认后按推荐连续推进，准备交付。”
 
+Git 项目的新任务先盘点分支和 worktree，再记录一次工作位置选择；同一任务恢复时复用有效绑定。多会话、并行 agent 与前后端协作见[分支与 worktree 规则](docs/reference/git-topology.md)。
+
 冻结没说明时问一次；已开启无人值守并授权推荐选择时记录后继续。小修改可以原地冻结，大功能可用隔离工作区。你已授权的推送、合并、删除分支等动作按精确范围执行，不重复问；默认只准备交付。
 
 目标项目的任务记录和 `.gsp/` 状态由目标项目本地维护；公开仓库只提供运行时代码、技能和用户文档。计划结构检查与语义边界见[接口说明](docs/reference/plan-quality.md)。

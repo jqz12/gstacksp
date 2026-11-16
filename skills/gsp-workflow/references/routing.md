@@ -15,6 +15,7 @@
   ├─ Git 脏或未跟踪 → gsp-git（worktree 决策）→ gsp-workflow
   ├─ Git detached → gsp-git（阻塞的 branch 决策）→ gsp-workflow
   ├─ Git 无仓库或未知 → gsp-git（阻塞调查）→ gsp-workflow
+  ├─ Git 现场已知但任务没有拓扑选择 → gsp-git（topology / topology-select）→ gsp-workflow
   └─ Git 干净且有活动任务 → gsp-workflow 按任务状态继续
         ├─ 设计未确认 → gsp-brainstorming
         ├─ 设计已确认、计划未封存 → gsp-writing-plans
@@ -34,6 +35,7 @@
 - `gsp-health` 只读检查，按需运行；AI 优先消费其短 `route`/`handoff`，不把完整报告塞进上下文。
 - Git 路由的运行时字段直接来自 `gsp/routing.py`：脏工作区是 `git.dirty`，detached HEAD 是 `git.detached`，两者不能合并成同一条路由。
 - `gsp-git` 处理工作区归属、分支、提交准备和 observe-head；完成后回到 `gsp-workflow`。
+- 新任务在第一次实现前必须完成一次 topology 盘点和选择：当前分支、HEAD、所有 worktree、脏状态、活动绑定和推荐模式先展示，再记录 in-place、branch 或 worktree。`main/master`、detached HEAD、重复 branch/worktree 或共享可写目录是阻塞条件；前后端子任务通过 `topology-select --task Tnn` 绑定独立工作区，最后由 integration owner 汇合。
 - `gsp-document-governance` 只在有治理授权时接收文档发现；只读检查停在报告并记录一次决策。
 - `gsp-systematic-debugging` 只在真实测试/命令失败时进入；修复后回到原执行阶段。
 - `gsp-review` 发现阻塞项时回到执行；通过后进入 `gsp-verify`。
@@ -43,5 +45,7 @@
 - `gsp-ship` 准备交付，不自动启动另一个需求；推送、合并、发布和删除分支需要各自精确授权。
 
 ## 观测语义
+
+`git.topology.required` 表示 Git 新任务尚未完成工作位置选择；`git.topology.invalid` 表示活动任务或子任务的目录、分支、HEAD、基线、注册或占用不匹配。两者都转给 `gsp-git`，health 只读返回风险，不替用户选择或修改绑定。
 
 `declared` 表示回复中声明使用；`observed` 表示有 CLI、hook 或宿主事件；`inferred` 表示根据状态推断；`unknown` 表示没有足够证据。技能文件存在、技能列表可见和技能真正执行是三种不同事实。
