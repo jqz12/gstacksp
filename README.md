@@ -41,7 +41,7 @@ python E:\GstackSP\scripts\gsp.py --project E:\MyProject install --host both --o
 
 告诉 AI：“用 GstackSP 做这个需求，先讨论设计；确认后按推荐连续推进，准备交付。”
 
-Git 项目的新任务先盘点分支和 worktree，再记录一次工作位置选择；同一任务恢复时复用有效绑定。多会话、并行 agent 与前后端协作见[分支与 worktree 规则](docs/reference/git-topology.md)。
+Git 项目的新任务先盘点分支和 worktree，再记录一次工作位置选择；同一任务恢复时复用有效绑定。多会话、并行 agent 与前后端协作见[分支与 worktree 规则](docs/reference/git-topology.md)。如果需要主会话协调多个独立聊天，使用明确的 `cross-session` 意图；它的总体计划、会话交接、写入租约和文档命名见[跨会话开发模式](docs/reference/cross-session-development.md)。
 
 冻结没说明时问一次；已开启无人值守并授权推荐选择时记录后继续。小修改可以原地冻结，大功能可用隔离工作区。你已授权的推送、合并、删除分支等动作按精确范围执行，不重复问；默认只准备交付。
 

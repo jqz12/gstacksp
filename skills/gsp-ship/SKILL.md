@@ -15,6 +15,14 @@ Use the [output and handoff contract](../gsp-workflow/references/output-handoff.
 
 按共同待办规则核对新增、延期、已完成与未完成项；只凭有效任务证据关闭，不凭标题/提交信息猜完成。保留原内容和历史；交付必须链接根待办并披露未完成项。待办写入失败明确报告，绝不声称已保存；阻塞问题仍阻塞。交付前重新运行 `<gsp> topology <id>`，核对 GSP 编号、T 任务、当前 branch、commit SHA、control_root、workspace_root 和实际 Issue/PR；没有真实 Issue/PR 不登记编号。若拓扑尚未选择，先用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 补齐记录；默认不允许在 main/master 或 detached HEAD 上直接实现。并行前后端必须由唯一 integration owner 在集成 worktree 验证后才能 ready；未授权的 commit、push、merge 或删除分支保持未执行。
 
+## 跨会话开发（仅 `intent=cross-session`）
+
+单会话仍是默认路径；没有 `cross-session` 意图的任务不创建 session registry、brief/report 目录，也不增加额外门禁。启用跨会话后，一个 GSP 工作项仍只有一份 `spec.md`、`plan.md`、`decisions.md`、`review.md` 和 `delivery.md`，这就是唯一总体计划及其配套记录。总体详细执行计划由当前 controller 主会话维护：它负责目标、非目标、任务图、依赖、公共接口、worktree、允许/禁止路径、测试和集成验收。子会话读取总体计划和自己的 brief，自主决定局部阅读顺序、实现步骤与局部测试顺序；它不能复制 `plan-v2.md`、改写总体计划或替代 controller 做跨任务裁决。
+
+使用 `<gsp> session-register` 分配稳定的 `S01`、`S02` 会话身份；`T01`、`T02` 仍是计划任务身份，不能用会话编号代替。控制器用 `<gsp> session-brief` 派发局部输入，worker 用 `<gsp> session-report` 回传 `DONE`、`BLOCKED` 或 `CHANGE_REQUEST`；换主会话只用 `<gsp> session-handoff` 接管同一 registry 和同一总体计划。报告替换前会把旧版本放入任务 `sessions/history/`，不会覆盖证据。
+
+跨会话的安全边界是三层：controller 租约保证同一任务只有一个主会话；worktree write lease 保证同一源码目录同一时刻只有一个可写会话；`--path` 声明和已接线的 direct-edit hook 在 Edit/Write/apply_patch 前检查会话身份、写租约与路径归属。未注册会话、未声明路径、路径冲突或旧 controller 交接后继续编辑都必须拒绝，分别返回 `SESSION_WRITE_LEASE_REQUIRED`、`SESSION_PATH_NOT_CLAIMED` 或 `SESSION_PATH_CONFLICT`。Shell、外部编辑器、未接线宿主和其他未覆盖工具只能记录为 `NOT_CHECKED`，不能宣称拥有文件系统级沙箱。
+
 Previously confirmed content and explicit execution/integration authorization take precedence over the upstream repeated plan confirmation or fixed completion menu. A substantive design change or a new external action still needs the applicable authorization.
 
 Before claiming an independent development/remediation task complete, actually check its current status/resume and finish the final all regression, current review, verification and ready. Do not substitute a raw saved ready flag, health report or a manual addition to an old delivery.md. Nested methods return to the parent task; read-only reports do not require an artificial development task.

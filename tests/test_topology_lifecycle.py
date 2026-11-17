@@ -276,11 +276,15 @@ class TopologyLifecycleTests(unittest.TestCase):
         other = read(self.root / '.gsp/runs/other/state.json')
         workspace = Path(other['git_topology']['workspace_root'])
         self.cmd('scope', 'other', '--path', '.', '--quote', 'SYNTHETIC second freeze')
+        self.cmd('session-register', 'other', '--role', 'controller', '--host', 'codex',
+                 '--thread', 'other-main', '--worktree', str(workspace),
+                 '--write-mode', 'write', '--path', '.')
         self.assertEqual(self.state()['scope'], original)
         for cwd, expected in ((self.root, 'work'), (workspace, 'other')):
             result = handle({'cwd': str(cwd), 'hook_event_name': 'SessionStart', 'session_id': expected})
             self.assertIn('Active task ' + expected + ',', result['hookSpecificOutput']['additionalContext'])
             result = handle({'cwd': str(cwd), 'hook_event_name': 'PreToolUse', 'session_id': expected,
+                             'gsp_session_id': 'S01' if expected == 'other' else None,
                              'tool_name': 'Edit', 'tool_input': {'file_path': str(cwd / 'source.txt')}})
             self.assertNotEqual(result.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
             self.assertEqual(git_route(cwd)['active_task'], expected)

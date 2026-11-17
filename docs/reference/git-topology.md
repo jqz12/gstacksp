@@ -21,6 +21,8 @@
 
 当前 intent 支持 `single-task`、`serial-multi-task`、`parallel-multi-task`、`cross-session`、`full-stack`。AI 必须结合范围声明 intent 和 `--size small|large` 并说明理由；大单任务也会推荐 worktree。`cross-session` 只有一个可写任务时不要求额外集成任务；真正并行或全栈才需要子工作区图。
 
+`cross-session` 还需要任务级 session registry。主会话/controller 维护唯一的 `plan.md` 和公共裁决；子会话/worker 读取 brief、在自己的 worktree 中实现并回传 report。`Snn` 是会话身份，`Tnn` 是计划任务身份。controller lease、同一 worktree 的 write lease 和 `claimed_paths` 共同阻止第二个会话在同一 room 中覆盖已提交文件；已接线的 direct-edit hook 会在 Edit/Write/apply_patch 前拒绝未登记或未声明的路径。完整文档见[主会话协调的跨会话开发模式](cross-session-development.md)。
+
 ## 编号和中文命名
 
 | 标识 | 作用 |

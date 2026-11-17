@@ -14,3 +14,11 @@ description: "Use when 确有多个独立任务需要协调代理和分支且宿
 路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
 
 先确认可用代理工具及用户授权。按文件/接口划分任务、指定单写者和依赖，各代理交回范围、测试和阻塞；控制器统一记录。代理不能自行合并他人分支或扩大范围。共享目录不并发写状态；需要并行源码时用隔离 worktree。最终集成后再回归和整体审查，资源不足改为顺序执行，不依赖 Capy 专属工具。 The controller inventories and recommends topology before allocation. Each writable agent receives its own branch/worktree and T task; agents cannot share a writable path or edit the parent ledger directly. A single integration owner validates frontend and backend output in an integration worktree before the parent can become ready. With limited resources, reuse a released workspace serially while preserving the binding. Git topology contract: use topology and topology-select; inspect main/master and every worktree; keep GSP 编号, T task, branch, commit SHA, control_root, workspace_root, and Issue/PR separate.
+
+## 跨会话开发（仅 `intent=cross-session`）
+
+单会话仍是默认路径；没有 `cross-session` 意图的任务不创建 session registry、brief/report 目录，也不增加额外门禁。启用跨会话后，一个 GSP 工作项仍只有一份 `spec.md`、`plan.md`、`decisions.md`、`review.md` 和 `delivery.md`，这就是唯一总体计划及其配套记录。总体详细执行计划由当前 controller 主会话维护：它负责目标、非目标、任务图、依赖、公共接口、worktree、允许/禁止路径、测试和集成验收。子会话读取总体计划和自己的 brief，自主决定局部阅读顺序、实现步骤与局部测试顺序；它不能复制 `plan-v2.md`、改写总体计划或替代 controller 做跨任务裁决。
+
+使用 `<gsp> session-register` 分配稳定的 `S01`、`S02` 会话身份；`T01`、`T02` 仍是计划任务身份，不能用会话编号代替。控制器用 `<gsp> session-brief` 派发局部输入，worker 用 `<gsp> session-report` 回传 `DONE`、`BLOCKED` 或 `CHANGE_REQUEST`；换主会话只用 `<gsp> session-handoff` 接管同一 registry 和同一总体计划。报告替换前会把旧版本放入任务 `sessions/history/`，不会覆盖证据。
+
+跨会话的安全边界是三层：controller 租约保证同一任务只有一个主会话；worktree write lease 保证同一源码目录同一时刻只有一个可写会话；`--path` 声明和已接线的 direct-edit hook 在 Edit/Write/apply_patch 前检查会话身份、写租约与路径归属。未注册会话、未声明路径、路径冲突或旧 controller 交接后继续编辑都必须拒绝，分别返回 `SESSION_WRITE_LEASE_REQUIRED`、`SESSION_PATH_NOT_CLAIMED` 或 `SESSION_PATH_CONFLICT`。Shell、外部编辑器、未接线宿主和其他未覆盖工具只能记录为 `NOT_CHECKED`，不能宣称拥有文件系统级沙箱。

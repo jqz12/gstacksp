@@ -1330,7 +1330,12 @@ def hook(root):
         path = data.get('file_path') or data.get('notebook_path')
         if not isinstance(path, str) or not path:
             raise WorkflowError('FROZEN_PATH missing edit path')
-        project.scope_path(state, str((cwd / path).resolve()))
+        absolute = str((cwd / path).resolve())
+        project.scope_path(state, absolute)
+        if (state.get('git_topology') or {}).get('intent') == 'cross-session':
+            from .sessions import authorize_edit
+            token = payload.get('gsp_session_id') or os.environ.get('GSP_SESSION_ID') or payload.get('session_id')
+            authorize_edit(project, state, token, [absolute])
         return {}
     except (WorkflowError, ValueError, TypeError, KeyError, OSError) as exc:
         return {'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
@@ -1393,6 +1398,56 @@ def parser():
         elif name == 'external-link':
             q.add_argument('--kind', choices=['issue', 'pr'], required=True)
             q.add_argument('--value', required=True)
+    q = sub.add_parser('session-register', help='register a task-scoped main or child session')
+    q.add_argument('id')
+    q.add_argument('--session')
+    q.add_argument('--role', choices=['controller', 'worker', 'integration', 'observer'], required=True)
+    q.add_argument('--host', default='unknown')
+    q.add_argument('--thread')
+    q.add_argument('--task')
+    q.add_argument('--branch')
+    q.add_argument('--worktree')
+    q.add_argument('--write-mode', choices=['write', 'read-only'], default='write')
+    q.add_argument('--path', action='append', default=[])
+    q.add_argument('--takeover', action='store_true')
+    q.add_argument('--reason', default='')
+    q = sub.add_parser('session-status', help='show the task session registry')
+    q.add_argument('id')
+    q = sub.add_parser('session-claim', help='claim additional writable paths for a session')
+    q.add_argument('id')
+    q.add_argument('--session', required=True)
+    q.add_argument('--path', action='append', required=True)
+    q.add_argument('--replace', action='store_true')
+    q = sub.add_parser('session-brief', help='write a stable child-task brief')
+    q.add_argument('id')
+    q.add_argument('task')
+    q.add_argument('--session', required=True)
+    q.add_argument('--owner')
+    q.add_argument('--title', required=True)
+    q.add_argument('--objective', required=True)
+    q.add_argument('--path', action='append', default=[])
+    q.add_argument('--interface', action='append', default=[])
+    q.add_argument('--test', action='append', default=[])
+    q.add_argument('--depends', default='')
+    q.add_argument('--forbid', default='')
+    q.add_argument('--replace', action='store_true')
+    q = sub.add_parser('session-report', help='write the latest child-task report')
+    q.add_argument('id')
+    q.add_argument('task')
+    q.add_argument('--session', required=True)
+    q.add_argument('--status', choices=['DONE', 'BLOCKED', 'CHANGE_REQUEST'], required=True)
+    q.add_argument('--summary', required=True)
+    q.add_argument('--files', action='append', default=[])
+    q.add_argument('--tests', action='append', default=[])
+    q.add_argument('--interfaces', action='append', default=[])
+    q.add_argument('--evidence', action='append', default=[])
+    q.add_argument('--need-from-main', default='')
+    q.add_argument('--ruling', default='')
+    q = sub.add_parser('session-handoff', help='transfer the controller lease')
+    q.add_argument('id')
+    q.add_argument('--from', dest='from_session', required=True)
+    q.add_argument('--to', dest='to_session', required=True)
+    q.add_argument('--reason', required=True)
     sub.add_parser('codex-hook', help='native Codex hook protocol (stdin JSON)')
     sub.add_parser('hooks-report', help='bounded offline Codex hook audit summary for --project')
     for name in ('hooks-install','hooks-upgrade','hooks-uninstall','hooks-recover','hooks-status'):
@@ -1715,6 +1770,27 @@ def dispatch(project, args):
     if command == 'topology-select':
         result = project.select_topology(state, args)
         project.write(state, command, args.quote)
+        return result, True
+    if command.startswith('session-'):
+        if (state.get('git_topology') or {}).get('intent') != 'cross-session':
+            raise WorkflowError('SESSION_MODE_REQUIRED use --intent cross-session')
+        from .sessions import (register_session, session_status, claim_session,
+                               write_brief, write_report, handoff_controller)
+        if command == 'session-register':
+            result = register_session(project, state, args)
+        elif command == 'session-status':
+            return session_status(project, state), True
+        elif command == 'session-claim':
+            result = claim_session(project, state, args.session, args.path, args.replace)
+        elif command == 'session-brief':
+            result = write_brief(project, state, args)
+        elif command == 'session-report':
+            result = write_report(project, state, args)
+        elif command == 'session-handoff':
+            result = handoff_controller(project, state, args)
+        else:
+            raise WorkflowError('SESSION_COMMAND_UNKNOWN')
+        project.write(state, command, json.dumps(result, ensure_ascii=False))
         return result, True
     if command == 'external-link':
         value = str(args.value or '').strip()

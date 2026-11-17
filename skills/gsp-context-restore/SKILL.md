@@ -15,4 +15,12 @@ description: "Use when 恢复中断任务、压缩后的上下文或将同一项
 
 从 `.gsp/active.json` 找任务，运行 `<gsp> resume <id>`。按输出读取实际绑定的 spec/design、plan、decisions、review 和当前状态，不猜旧路径。核对已完成任务及证据，不重派。恢复拒绝时列出实际目录、Git 状态和文件差异，判断是正常变更还是错误项目；不得为了继续而修改 UUID 或删除检查点。需要迁移时先完整核实并记录迁移决定。输出当前阶段、下一任务和仍有效的授权。
 
-resume 返回根待办路径及当前事项；读取原文和人工历史内容，不只读机器计数。先核实关联问题状态，不重做已完成任务，也不丢失延期事项。 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。
+resume 返回根待办路径及当前事项；读取原文和人工历史内容，不只读机器计数。先核实关联问题状态，不重做已完成任务，也不丢失延期事项。
+
+## 跨会话开发（仅 `intent=cross-session`）
+
+单会话仍是默认路径；没有 `cross-session` 意图的任务不创建 session registry、brief/report 目录，也不增加额外门禁。启用跨会话后，一个 GSP 工作项仍只有一份 `spec.md`、`plan.md`、`decisions.md`、`review.md` 和 `delivery.md`，这就是唯一总体计划及其配套记录。总体详细执行计划由当前 controller 主会话维护：它负责目标、非目标、任务图、依赖、公共接口、worktree、允许/禁止路径、测试和集成验收。子会话读取总体计划和自己的 brief，自主决定局部阅读顺序、实现步骤与局部测试顺序；它不能复制 `plan-v2.md`、改写总体计划或替代 controller 做跨任务裁决。
+
+使用 `<gsp> session-register` 分配稳定的 `S01`、`S02` 会话身份；`T01`、`T02` 仍是计划任务身份，不能用会话编号代替。控制器用 `<gsp> session-brief` 派发局部输入，worker 用 `<gsp> session-report` 回传 `DONE`、`BLOCKED` 或 `CHANGE_REQUEST`；换主会话只用 `<gsp> session-handoff` 接管同一 registry 和同一总体计划。报告替换前会把旧版本放入任务 `sessions/history/`，不会覆盖证据。
+
+跨会话的安全边界是三层：controller 租约保证同一任务只有一个主会话；worktree write lease 保证同一源码目录同一时刻只有一个可写会话；`--path` 声明和已接线的 direct-edit hook 在 Edit/Write/apply_patch 前检查会话身份、写租约与路径归属。未注册会话、未声明路径、路径冲突或旧 controller 交接后继续编辑都必须拒绝，分别返回 `SESSION_WRITE_LEASE_REQUIRED`、`SESSION_PATH_NOT_CLAIMED` 或 `SESSION_PATH_CONFLICT`。Shell、外部编辑器、未接线宿主和其他未覆盖工具只能记录为 `NOT_CHECKED`，不能宣称拥有文件系统级沙箱。 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。

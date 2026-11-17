@@ -173,19 +173,35 @@ def handle(payload):
             else: context+='No active task. Discuss design before implementation.'
             result={'hookSpecificOutput':{'hookEventName':event,'additionalContext':context[:1800]}}
         if writing and state and (state.get('scope',{}).get('mode')=='frozen' or
-                                  (state.get('git_topology') or {}).get('enforce')):
+                                  (state.get('git_topology') or {}).get('enforce') or
+                                  (state.get('git_topology') or {}).get('intent') == 'cross-session'):
             try:
                 data=payload.get('tool_input')
                 if not isinstance(data,dict): raise WorkflowError('HOOK_EDIT_INPUT_INVALID')
                 paths=patch_paths(data.get('command')) if tool=='apply_patch' else [data.get('file_path') or data.get('notebook_path')]
+                absolute_paths=[]
+                project=Project(root)
                 for path in paths:
                     if not isinstance(path,str) or not path: raise WorkflowError('HOOK_EDIT_PATH_REQUIRED')
-                    # Project's existing scope implementation handles workflow exceptions.
-                    Project(root).scope_path(state,str((Path(payload['cwd'])/path).resolve()))
-                outcome='allowed';coverage='direct-edit-paths'
-            except (WorkflowError,ValueError,TypeError,OSError):
+                    absolute=str((Path(payload['cwd'])/path).resolve())
+                    project.scope_path(state, absolute)
+                    absolute_paths.append(absolute)
+                if (state.get('git_topology') or {}).get('intent') == 'cross-session':
+                    from .sessions import authorize_edit
+                    token=(payload.get('gsp_session_id') or os.environ.get('GSP_SESSION_ID')
+                           or payload.get('session_id'))
+                    authorize_edit(project, state, token, absolute_paths)
+                    coverage='session-direct-edit-paths'
+                else:
+                    coverage='direct-edit-paths'
+                outcome='allowed'
+            except (WorkflowError,ValueError,TypeError,OSError) as exc:
                 outcome='denied';coverage='direct-edit-paths'
-                result=deny('GSP frozen edit refused: outside scope or unparseable edit. Inspect gsp scope/check-path; no scope was changed.')
+                reason=str(exc)
+                if reason.startswith(('SESSION_', 'CONTROLLER_', 'WORKSPACE_')):
+                    result=deny('GSP session edit refused: '+reason)
+                else:
+                    result=deny('GSP frozen edit refused: outside scope or unparseable edit. Inspect gsp scope/check-path; no scope was changed.')
         elif tool in ('Bash','exec_command','write_stdin'):
             coverage='shell-not-enforced'
         try:

@@ -86,3 +86,15 @@ Claude 的 PreToolUse hook 只在插件/hook 真正启用时拦截 Edit/Write/No
 所有技能遵循 [交付与衔接](output-handoff.md)。阶段总结列出实际成果、实际执行/仅参考的技能及用途、验证限制、下一动作与执行者。当前目标内已有授权的步骤继续推进；需要真实用户选择/操作时给明确入口和原因。完整治理交付实际目录及差异，不能只给完成声明。技术ready不代替业务验收。
 
 旧任务的年目录、docs/superpowers/specs/plans和docs/gsp/tasks继续按status/resume的实际绑定读取；原位保留不代表旧布局仍是新任务默认。
+
+## 跨会话开发扩展（可选）
+
+`intent=cross-session` 是在现有 GSP 生命周期上的可选控制面，不改变单会话默认路径。没有该意图的任务不要求创建 `sessions/`、注册 `Snn` 或声明源码路径，既有 `new`、`approve`、`seal-plan`、`task-start`、`run`、`review`、`ready` 和恢复语义保持不变。
+
+启用后，文档仍按 GSP 工作项归属，而不是按聊天线程归属。一个工作项只保留一份 `spec.md`、`plan.md`、`decisions.md`、`review.md` 和 `delivery.md`；换主会话只新增 `S01`、`S02` 会话记录，并通过显式 handoff 交接，不创建 `plan-v2.md` 或第二套总体文档。`Snn` 是会话身份，`Tnn` 是总体计划任务身份，thread、branch、worktree、Commit SHA、Issue/PR 仍分别记录。
+
+职责必须分层：主会话/controller 写总体详细计划、任务图、依赖、公共接口、worktree 和最终验收；子会话/worker 读取总体计划和固定 brief，自主完成局部阅读、实现与局部测试，使用 report 回传 `DONE`、`BLOCKED` 或 `CHANGE_REQUEST`。子会话不能改写总体计划、父状态或其他任务的文件；公共接口、范围、依赖、基线、安全和外部动作冲突升级给 controller。
+
+跨会话写入需要三层门禁：controller lease、同一 worktree 的单一 write lease、相对于 worktree 的 `claimed_paths` 声明。`session-register`、`session-claim` 和已接线的 Codex/Claude direct-edit hook 必须在 Edit/Write/apply_patch 前复核会话身份、租约和路径；未注册会话、旧 controller、未声明路径、租约冲突和重叠声明直接拒绝。该机制不是文件系统沙箱：Shell、外部编辑器、MCP/宿主未接线工具只能报告 `NOT_CHECKED`，不能把事后 Git 指纹检查说成编辑前保护。
+
+跨会话机器正本位于 `.gsp/runs/<task>/sessions/index.json`，人读 brief/report/index 位于任务档案 `sessions/`，旧 report 移入 `sessions/history/`。稳定目录主题由 GSP 编号和 ASCII 主题组成；中文标题无法生成主题时回退到稳定 run id，未来不同任务不会都落到相同的 `-work` 目录。历史任务的既有目录和绑定不迁移。

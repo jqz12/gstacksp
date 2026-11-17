@@ -5,6 +5,8 @@ from pathlib import Path
 import json
 import subprocess
 from process_helpers import run, popen
+from gsp.codex_hooks import handle as codex_hook
+from gsp.runtime import Project, WorkflowError, dispatch, parser, read
 import sys
 import tempfile
 import unittest
@@ -80,6 +82,38 @@ class EndToEndTests(unittest.TestCase):
             call('learn', '--text', 'Fixture normalization trims surrounding whitespace', '--source', 'hello/T1 test_app.py')
             rows = json.loads(call('learn', '--query', 'normalization').stdout)
             self.assertEqual(len(rows), 1)
+
+    def test_same_room_second_session_is_denied_before_overwrite(self):
+        with tempfile.TemporaryDirectory(prefix='gsp-cross-overwrite-') as temp:
+            root = Path(temp) / 'project'
+            root.mkdir()
+            project = Project(root)
+            project.initialize()
+            dispatch(project, parser().parse_args(['new', 'cross', '--title', '同 room 覆盖防护', '--intent', 'cross-session']))
+            dispatch(project, parser().parse_args(['task-add', 'cross', 'T01', '--title', 'unit', '--acceptance', 'unit contract']))
+            dispatch(project, parser().parse_args([
+                'session-register', 'cross', '--role', 'controller', '--host', 'codex',
+                '--thread', 'first-main', '--write-mode', 'write', '--path', 'services']))
+            existing = root / 'services' / 'quant-control.service'
+            existing.parent.mkdir(parents=True)
+            existing.write_text('first session version\n', encoding='utf-8')
+            allowed = codex_hook({
+                'hook_event_name': 'PreToolUse', 'tool_name': 'Write', 'cwd': str(root),
+                'session_id': 'first-main', 'tool_input': {'file_path': str(existing)},
+            })
+            self.assertEqual(allowed, {})
+            with self.assertRaisesRegex(WorkflowError, 'WORKSPACE_WRITE_LEASE_HELD'):
+                dispatch(project, parser().parse_args([
+                    'session-register', 'cross', '--role', 'worker', '--host', 'claude',
+                    '--thread', 'second-main', '--task', 'T01', '--write-mode', 'write',
+                    '--path', 'services/quant-control.service']))
+            denied = codex_hook({
+                'hook_event_name': 'PreToolUse', 'tool_name': 'Write', 'cwd': str(root),
+                'session_id': 'second-main', 'tool_input': {'file_path': str(existing)},
+            })
+            self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
+            self.assertIn('SESSION_', denied['hookSpecificOutput']['permissionDecisionReason'])
+            self.assertEqual(existing.read_text(encoding='utf-8'), 'first session version\n')
 
     def test_summary_parser_unknown_and_zero(self):
         sys.path.insert(0, str(ROOT))

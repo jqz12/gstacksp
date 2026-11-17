@@ -37,6 +37,14 @@ health --documents-only 只读检查目标，默认写目标 docs/gsp/reports/do
 
 当前验证默认排除 docs/work、docs/superpowers 和 docs/gsp 的工作流档案；本任务 spec/plan/审查另有哈希绑定。product/reference/howto、源码与 TODO 仍进输入指纹。如果历史档案本身是测试或发布目标，不能套用默认排除宣称覆盖，需使用显式文件检查并在报告说明边界。
 
+## 跨会话任务的文档归属
+
+`cross-session` 任务仍以 GSP 工作项作为唯一文档归属。主会话和后续接管的主会话共用同一任务目录与同一份 `spec.md`、`plan.md`、`decisions.md`、`review.md`、`delivery.md`；聊天线程、宿主或会话编号都不能生成第二份总体计划。主会话负责写总体执行计划，子会话只写其 `Tnn-brief.md` 和 `Tnn-report.md`，并在报告中列出局部文件、测试、证据和需要主会话裁决的事项。
+
+跨会话资料放在同一任务目录的 `sessions/`：`index.md`、`Snn-<role>-<host>.md`、`Tnn-brief.md`、`Tnn-report.md` 以及 `history/`。重复报告必须先把旧正本归档到 `history/`，不能用第二个主会话覆盖前一个会话的交接证据。新的目标、新验收或交付后缺陷建立新的 GSP 工作项和新目录；同一目标换主会话只新增 Snn 记录并通过 handoff。
+
+文件写入边界也属于文档治理：可写会话先登记 worktree 和相对路径，路径相等、父子或目录前缀重叠时阻止第二个写者。direct-edit hook 能覆盖的工具才可报告编辑前拒绝；Shell、外部编辑器和未接线宿主仍标为 `NOT_CHECKED`。单会话任务不创建 `sessions/`，旧任务目录按原绑定继续恢复。
+
 ## 项目资料与工作产物
 
 完整治理先声明资料目录、文件类型和排除理由。根目录配置、产品说明、研究结论、精选证据、原始采集、失败日志与构建缓存分别登记。按用途和消费关系分类，Markdown以外的TXT/JSON/CSV/图片/PDF等也需要归属。Cargo.toml/Cargo.lock及宿主需要的入口按工具约定保留根目录位置。

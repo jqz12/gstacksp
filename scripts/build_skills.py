@@ -163,6 +163,23 @@ LIFECYCLE_NOTES['execute'] += (' Native 会话支持绑定 worktree；当前 hea
 LIFECYCLE_NOTES['health'] += (' 同时只读复核活动任务及子任务的 Git 拓扑；未选择时路由 git.topology.required，'
                              '目录缺失、分支/HEAD/基线漂移或重复占用时路由 git.topology.invalid，不修改任务状态。')
 
+# Cross-session development is an opt-in extension. Keep this guidance in the
+# generator so a rebuild cannot silently remove the controller/worker contract.
+CROSS_SESSION_GUIDANCE = '''
+
+## 跨会话开发（仅 `intent=cross-session`）
+
+单会话仍是默认路径；没有 `cross-session` 意图的任务不创建 session registry、brief/report 目录，也不增加额外门禁。启用跨会话后，一个 GSP 工作项仍只有一份 `spec.md`、`plan.md`、`decisions.md`、`review.md` 和 `delivery.md`，这就是唯一总体计划及其配套记录。总体详细执行计划由当前 controller 主会话维护：它负责目标、非目标、任务图、依赖、公共接口、worktree、允许/禁止路径、测试和集成验收。子会话读取总体计划和自己的 brief，自主决定局部阅读顺序、实现步骤与局部测试顺序；它不能复制 `plan-v2.md`、改写总体计划或替代 controller 做跨任务裁决。
+
+使用 `<gsp> session-register` 分配稳定的 `S01`、`S02` 会话身份；`T01`、`T02` 仍是计划任务身份，不能用会话编号代替。控制器用 `<gsp> session-brief` 派发局部输入，worker 用 `<gsp> session-report` 回传 `DONE`、`BLOCKED` 或 `CHANGE_REQUEST`；换主会话只用 `<gsp> session-handoff` 接管同一 registry 和同一总体计划。报告替换前会把旧版本放入任务 `sessions/history/`，不会覆盖证据。
+
+跨会话的安全边界是三层：controller 租约保证同一任务只有一个主会话；worktree write lease 保证同一源码目录同一时刻只有一个可写会话；`--path` 声明和已接线的 direct-edit hook 在 Edit/Write/apply_patch 前检查会话身份、写租约与路径归属。未注册会话、未声明路径、路径冲突或旧 controller 交接后继续编辑都必须拒绝，分别返回 `SESSION_WRITE_LEASE_REQUIRED`、`SESSION_PATH_NOT_CLAIMED` 或 `SESSION_PATH_CONFLICT`。Shell、外部编辑器、未接线宿主和其他未覆盖工具只能记录为 `NOT_CHECKED`，不能宣称拥有文件系统级沙箱。
+'''
+
+for _name in ('writing-plans', 'execute', 'review', 'verify', 'ship', 'context-restore'):
+    # Primary SP-derived skills are rebuilt by sp_preservation from lifecycle notes.
+    LIFECYCLE_NOTES[_name] += '\n\n' + CROSS_SESSION_GUIDANCE.strip()
+
 CONTROLLER_HANDOFF = ('阶段转换统一先运行 `<gsp> handoff <id> --to <阶段>` 预览，再运行 '
                      '`<gsp> advance <id> --to <阶段>` 推进；控制器会检查批准、计划封存、scope、任务证据、审查和最终回归。'
                      '推进失败不得手工改状态或把聊天说明当作交接证据；读取返回的 next_skill 和 pending gates 后再继续。')
@@ -175,6 +192,8 @@ def build():
             sources = sources + ['GS:claude-code']
         if name in LIFECYCLE_NOTES:
             body += '\n\n' + LIFECYCLE_NOTES[name] + ' 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。'
+        if name == 'captain':
+            body += CROSS_SESSION_GUIDANCE
         if name in ('brainstorming', 'freeze', 'writing-plans', 'execute', 'review', 'verify', 'ship', 'workflow'):
             body += '\n\n' + CONTROLLER_HANDOFF
         if name == 'health':

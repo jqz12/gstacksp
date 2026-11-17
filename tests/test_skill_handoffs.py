@@ -65,3 +65,20 @@ class SkillHandoffGenerationTests(unittest.TestCase):
             text = path.read_text(encoding='utf-8')
             self.assertIn('GSP 编号', text)
             self.assertIn('worktree', text)
+
+    def test_cross_session_contract_reaches_generated_sources_and_skills(self):
+        source = (ROOT / 'scripts/build_skills.py').read_text(encoding='utf-8')
+        self.assertIn('CROSS_SESSION_GUIDANCE', source)
+        self.assertIn('主会话维护', source)
+        self.assertIn('SESSION_PATH_NOT_CLAIMED', (ROOT / 'skills/gsp-execute/SKILL.md').read_text(encoding='utf-8'))
+        self.assertIn('唯一总体计划', (ROOT / 'skills/gsp-writing-plans/SKILL.md').read_text(encoding='utf-8'))
+        self.assertIn('sessions/history', (ROOT / 'skills/gsp-context-restore/SKILL.md').read_text(encoding='utf-8'))
+
+    def test_cross_session_public_document_is_indexed(self):
+        index = (ROOT / 'docs/README.md').read_text(encoding='utf-8')
+        root_readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+        reference = ROOT / 'docs/reference/cross-session-development.md'
+        self.assertTrue(reference.is_file())
+        self.assertIn('reference/cross-session-development.md', index)
+        self.assertIn('docs/reference/cross-session-development.md', root_readme)
+        self.assertIn('主会话维护', reference.read_text(encoding='utf-8'))

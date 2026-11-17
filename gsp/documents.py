@@ -173,7 +173,10 @@ class Governance:
                 maximum=db.execute("SELECT MAX(CAST(substr(number,5) AS INTEGER)) FROM entries WHERE kind='work'").fetchone()[0]
                 number=max(number,(maximum or 0)+1)
         token='GSP-'+str(number).zfill(6); wid=uuid.uuid4().hex
-        suffix=re.sub('[^a-z0-9]+','-',title.lower()).strip('-')[:36] or 'work'
+        suffix=re.sub('[^a-z0-9]+','-',title.lower()).strip('-')[:36]
+        if not suffix and run_id:
+            suffix=re.sub('[^a-z0-9]+','-',str(run_id).lower()).strip('-')[:36]
+        suffix=suffix or 'work'
         created = datetime.now()
         folder=folder or f'docs/work/{created.year}/{created.month:02d}/{token}-{suffix}'
         if self.path(folder).exists(): raise WorkflowError('DOCUMENT_FOLDER_EXISTS')
