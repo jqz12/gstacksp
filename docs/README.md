@@ -8,7 +8,7 @@
 |---|---|
 | [计划结构检查接口](reference/plan-quality.md) | 计划结构检查与验收边界 |
 | [分支、worktree 与并行任务](reference/git-topology.md) | 选择矩阵、中文编号、父子任务、集成与恢复 |
-| [主会话协调的跨会话开发模式](reference/cross-session-development.md) | `cross-session` 的 controller/worker、总体计划、批量派发、进度摘要、outbox、清理和文档命名 |
+| [主会话协调的跨会话开发模式](reference/cross-session-development.md) | `cross-session` 的 controller/worker、总体计划、批量派发、自动 managed worktree、接受后清理、进度摘要、outbox 和文档命名 |
 | [根 README](../README.md) | 安装范围、基本用法和项目说明 |
 
 ## 源码入口

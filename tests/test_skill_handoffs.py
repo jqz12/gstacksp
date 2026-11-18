@@ -82,3 +82,15 @@ class SkillHandoffGenerationTests(unittest.TestCase):
         self.assertIn('reference/cross-session-development.md', index)
         self.assertIn('docs/reference/cross-session-development.md', root_readme)
         self.assertIn('主会话维护', reference.read_text(encoding='utf-8'))
+
+    def test_cross_session_worktree_lifecycle_guidance_is_consistent(self):
+        source = (ROOT / 'scripts/build_skills.py').read_text(encoding='utf-8')
+        workflow = (ROOT / 'skills/gsp-execute/SKILL.md').read_text(encoding='utf-8')
+        contract = (ROOT / 'skills/gsp-workflow/references/contract.md').read_text(encoding='utf-8')
+        reference = (ROOT / 'docs/reference/cross-session-development.md').read_text(encoding='utf-8')
+        for text in (source, workflow, contract, reference):
+            with self.subTest(document='cross-session lifecycle guidance'):
+                self.assertIn('session-accept', text)
+                self.assertIn('cleanup-pending', text)
+                self.assertIn('managed worktree', text)
+        self.assertIn('session-clean --retry', reference)

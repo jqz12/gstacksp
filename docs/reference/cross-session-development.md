@@ -37,9 +37,13 @@ GSP 把“一个主会话管理多个独立开发会话”作为 `cross-session`
   --task T01 --task T02 `
   --target T01=codex --target T02=manual `
   --path T01=src/data --path T02=src/api `
-  --worktree T01=<独立 worktree 1> --worktree T02=<独立 worktree 2> `
+  --worktree-mode auto `
   --max-parallel 2
 ```
+
+没有显式指定 worktree 时，`--worktree-mode auto` 是正式 worker 的默认路径。GSP 在受控的 `.gsp/worktrees/sessions/<GSP>/` 下创建独立 managed worktree 和分支，并把真实 path、branch、base、lease 和所有权写入 dispatch。派发失败或批量中途失败时会回滚本次已创建的 managed worktree，避免留下不可追踪资源。
+
+如果宿主已经准备好目录，传入 `--worktree <path>` 或 `--worktree-mode bind`。这类目录只做 bound，GSP 取得写租约并记录绑定关系，任务接受后只释放租约，不自动删除目录、分支或宿主文件。显式绑定的目录仍需满足路径和 worktree 预检。
 
 每个批次都会产生唯一的 `Dnnn`、预分配的 `Snn` 提示、独立的 brief、可复制 prompt、平台和派发方式。Codex 目标返回 `adapter-ready`，当前主会话随后调用宿主原生的线程创建、worktree 绑定、消息发送和有界等待入口。控制面记录线程返回的身份后，子会话再按同一 `Snn` 注册。GSP Python CLI 不假装拥有 MCP 客户端，也不会在没有宿主回调时伪造线程已创建。
 
@@ -49,14 +53,14 @@ GSP 把“一个主会话管理多个独立开发会话”作为 `cross-session`
 
 ## 主会话发布和等待时的固定摘要
 
-主会话在每次发布前和进入等待时运行 `session-progress <run>`，并把以下摘要原样展示给用户。总体进度按 `accepted_tasks / planned_tasks` 计算，`DONE` 报告、接受和清理分别统计。
+主会话在每次发布前和进入等待时运行 `session-progress <run>`，并把以下摘要原样展示给用户。总体进度按 `accepted_tasks / planned_tasks` 计算，`DONE` 报告、接受和 worktree 清理分别统计。`managed_worktrees`、`bound_worktrees` 和 `cleanup_pending_worktrees` 用来区分 GSP 拥有的目录、宿主绑定目录和待重试现场。
 
 ```text
-GSP-000020 主任务状态
+GSP-<编号> 主任务状态
 当前主会话：S01 controller
 当前阶段：dispatch / wait / integrate
 总体进度：2 / 8 个计划任务已接受（25.0%）
-子会话统计：已发布 4 次，独立任务 3 个，DONE 2 个，已接受 2 个，已清理 worktree 1 个，运行中 1 个，阻塞 0 个，待人工转发 1 个
+子会话统计：已发布 4 次，独立任务 3 个，DONE 2 个，已接受 2 个，已清理 worktree 1 个，managed 1 个，bound 1 个，cleanup-pending 0 个，运行中 1 个，阻塞 0 个，待人工转发 1 个
 下一批：T03、T04，等待 T02 的 CHANGE_REQUEST 裁决
 
 | 阶段 | 任务 | 数量 | 状态 | 下一动作 |
@@ -68,7 +72,7 @@ GSP-000020 主任务状态
 | 验证 | T06、T07、T08 | 3 | planned | 集成完成后执行 |
 ```
 
-机器 JSON 至少包含 `dispatches_total`、`distinct_tasks`、`reports_done`、`accepted_tasks`、`cleaned_worktrees`、`running_sessions`、`blocked_tasks`、`change_requests`、`manual_required`、`next_tasks` 和 `phases`。控制器可以在发布命令输出后立即追加这份摘要，也可以在宿主等待器被唤醒后重新输出。
+机器 JSON 至少包含 `dispatches_total`、`distinct_tasks`、`reports_done`、`accepted_tasks`、`cleaned_worktrees`、`managed_worktrees`、`bound_worktrees`、`cleanup_pending_worktrees`、`running_sessions`、`blocked_tasks`、`change_requests`、`manual_required`、`next_tasks` 和 `phases`。控制器可以在发布命令输出后立即追加这份摘要，也可以在宿主等待器被唤醒后重新输出。
 
 ## 完成发现、等待和清理
 
@@ -76,13 +80,19 @@ GSP-000020 主任务状态
 
 Codex 任务由宿主使用有界的 `wait_threads` 等待一批线程。任一线程完成或需要主会话裁决时等待器唤醒，主会话读取 report 并处理事件。主会话关闭期间不要求持续轮询，未消费事件会留在 outbox，下一次 resume 或 watcher 先消费积压事件。没有宿主事件适配器的平台只能记录 `manual-required`，不能宣称实时通知。
 
-主会话必须先检查 report、测试和集成结果，再把任务标为 `accepted` 或 `integrated`。只有接受后才运行以下清理入口。
+主会话必须先检查 report、测试和集成结果，再运行 `session-accept` 明确接受任务。接受入口会写入 accepted 事件、释放 worker lease，并按 worktree 所有权触发清理。
 
 ```powershell
-<gsp> session-clean <run> --task T01 --result archived --reason "主会话已接受 report 和测试"
+<gsp> session-accept <run> T01 --session S02 --reason "主会话已接受 report 和测试"
 ```
 
-`archived`、`released` 和 `removed` 只记录实际清理结果。清理失败保留 `cleanup-pending`，不会计入 `cleaned_worktrees`，也不会删除未确认的工作内容。
+清理规则由 worktree 所有权决定。
+
+- 干净的 managed worktree 自动运行 `git worktree remove` 和 `git worktree prune`，进度中的 `cleaned_worktrees` 增加一次。
+- bound worktree 只释放租约，目录和分支保留给宿主。
+- 脏目录、锁定目录、Git 非零退出或未知结果进入 `cleanup-pending`。目录、分支和报告保留，不计入 `cleaned_worktrees`。
+
+`session-clean --retry` 只用于重试 `cleanup-pending` 或恢复已接受但尚未完成的清理。重复接受、释放和重试保持幂等，正常路径不需要用户手动调用清理入口。
 
 ## 文档在哪里
 

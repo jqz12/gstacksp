@@ -149,6 +149,23 @@ def parallel_required(state):
             bool({'frontend', 'backend', 'integration'} & roles))
 
 
+def integration_dependencies(state, integration):
+    """Return all transitive task dependencies for an integration task."""
+    by_id = {str(task.get('id')): task for task in state.get('tasks') or []}
+    result = set()
+    pending = list(integration.get('depends') or [])
+    while pending:
+        task_id = pending.pop()
+        if task_id in result:
+            continue
+        task = by_id.get(task_id)
+        if task is None:
+            continue
+        result.add(task_id)
+        pending.extend(task.get('depends') or [])
+    return result
+
+
 def validate_parallel_bindings(state):
     """Validate task-level writable workspace bindings for a parent run.
 
@@ -204,7 +221,7 @@ def validate_parallel_bindings(state):
         integration_task = integration[0]
         integration_id = integration_task.get('id')
         child_ids = {task.get('id') for task in tasks if task.get('id') != integration_id}
-        missing_dependencies = sorted(child_ids - set(integration_task.get('depends') or []))
+        missing_dependencies = sorted(child_ids - integration_dependencies(state, integration_task))
         if missing_dependencies:
             blocking.append({'code': 'GIT_INTEGRATION_DEPENDENCY_MISSING', 'task': integration_id,
                              'detail': ', '.join(missing_dependencies)})
@@ -464,7 +481,7 @@ class Project:
         for child in state['tasks']:
             if child['id'] == integration['id'] or child.get('role') == 'observer':
                 continue
-            if child['id'] not in integration['depends'] or child['status'] != 'done':
+            if child['id'] not in integration_dependencies(state, integration) or child['status'] != 'done':
                 raise WorkflowError('GIT_INTEGRATION_DEPENDENCY_MISSING ' + child['id'])
             source = self.workspace_root(state, task_id=child['id'])
             inventory = probe(source, active_tasks=[])

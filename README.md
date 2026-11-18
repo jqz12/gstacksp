@@ -41,7 +41,7 @@ python E:\GstackSP\scripts\gsp.py --project E:\MyProject install --host both --o
 
 告诉 AI：“用 GstackSP 做这个需求，先讨论设计；确认后按推荐连续推进，准备交付。”
 
-Git 项目的新任务先盘点分支和 worktree，再记录一次工作位置选择；同一任务恢复时复用有效绑定。多会话、并行 agent 与前后端协作见[分支与 worktree 规则](docs/reference/git-topology.md)。如果需要主会话协调多个独立聊天，使用明确的 `cross-session` 意图；主会话维护唯一总体计划，使用 `session-dispatch` 批量发布 ready 任务，使用 `session-progress` 展示进度，使用 `session-watch` 消费完成事件，并在接受后使用 `session-clean` 记录 worktree 清理。完整规则见[跨会话开发模式](docs/reference/cross-session-development.md)。
+Git 项目的新任务先盘点分支和 worktree，再记录一次工作位置选择；同一任务恢复时复用有效绑定。多会话、并行 agent 与前后端协作见[分支与 worktree 规则](docs/reference/git-topology.md)。如果需要主会话协调多个独立聊天，使用明确的 `cross-session` 意图；主会话维护唯一总体计划，使用 `session-dispatch` 批量发布 ready 任务。未指定 worktree 时 GSP 自动创建 managed worktree，使用 `session-progress` 展示进度，使用 `session-watch` 消费完成事件，再用 `session-accept` 接受任务并自动释放租约和清理。`session-clean --retry` 只用于 cleanup-pending 恢复，显式绑定的 worktree 只释放不删除。完整规则见[跨会话开发模式](docs/reference/cross-session-development.md)。
 
 冻结没说明时问一次；已开启无人值守并授权推荐选择时记录后继续。小修改可以原地冻结，大功能可用隔离工作区。你已授权的推送、合并、删除分支等动作按精确范围执行，不重复问；默认只准备交付。
 

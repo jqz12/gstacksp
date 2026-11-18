@@ -1,6 +1,6 @@
 import unittest
 
-from gsp.runtime import parser, validate_parallel_bindings
+from gsp.runtime import integration_dependencies, parser, validate_parallel_bindings
 
 
 def task(task_id, role, workspace, status='done', branch=None, depends=None):
@@ -73,6 +73,15 @@ class ParallelTopologyTests(unittest.TestCase):
         ], intent='cross-session'))
         self.assertTrue(result['valid'], result)
         self.assertIsNone(result['integration_task'])
+
+    def test_integration_validation_expands_transitive_dependencies(self):
+        state = self.state([
+            task('T01', 'backend', 'E:/wt/backend'),
+            task('T02', 'backend', 'E:/wt/dispatch', depends=['T01']),
+            task('T03', 'integration', 'E:/wt/integration', depends=['T02']),
+        ])
+        self.assertEqual(integration_dependencies(state, state['tasks'][2]),
+                         {'T01', 'T02'})
 
     def test_task_add_parser_keeps_role_and_parent_metadata_options(self):
         args = parser().parse_args([
