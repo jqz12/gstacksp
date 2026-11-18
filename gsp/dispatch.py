@@ -6,6 +6,7 @@ import uuid
 from .runtime import WorkflowError, atomic, inside, now, read, redact
 from .sessions import _save as save_registry
 from .sessions import load_registry
+from .worktree_lifecycle import cleanup_worktree, prepare_worktree
 
 PLATFORMS = {'codex', 'claude', 'manual', 'other'}
 DISPATCH_MODES = {'auto', 'adapter', 'manual'}
@@ -41,6 +42,13 @@ def load_dispatch(project, state):
         raise WorkflowError('DISPATCH_REGISTRY_TASK_MISMATCH')
     for key, value in (('schema', 1), ('next_dispatch', 1), ('dispatches', []), ('cleanup', [])):
         data.setdefault(key, value)
+    for row in data.get('dispatches', []):
+        row.setdefault('managed_worktree', False)
+        row.setdefault('worktree_mode', 'bound')
+        row.setdefault('worktree_state', 'bound' if row.get('worktree') else 'unknown')
+        row.setdefault('base', None)
+        row.setdefault('cleanup_attempts', 0)
+        row.setdefault('cleanup_error', None)
     return data
 
 
@@ -137,6 +145,22 @@ def _relative(project, path):
         return str(path.resolve())
 
 
+def _rollback_prepared_worktrees(project, prepared):
+    """Remove resources created by a dispatch attempt that was not published."""
+    pending = []
+    for row in reversed(prepared):
+        if not row.get('managed_worktree'):
+            continue
+        result = cleanup_worktree(project, row, 'dispatch rollback', retry=True)
+        if result.get('result') == 'cleanup-pending':
+            pending.append({
+                'path': row.get('worktree'),
+                'branch': row.get('branch'),
+                'cleanup_error': result.get('cleanup_error'),
+            })
+    return pending
+
+
 def render_task_prompt(state, task, dispatch):
     paths = dispatch.get('claimed_paths') or ['—']
     dependencies = task.get('depends') or ['无']
@@ -213,83 +237,101 @@ def dispatch_tasks(project, state, args):
     session_hints = _next_session_hints(project, state, len(requested), data)
     prepared = []
     supersede = []
-    for index, task_id in enumerate(requested):
-        task = tasks_by_id.get(task_id)
-        if not task:
-            raise WorkflowError('DISPATCH_TASK_NOT_FOUND ' + str(task_id))
-        if task_id in existing_active and not getattr(args, 'retry', False):
-            raise WorkflowError('DISPATCH_TASK_EXISTS ' + task_id)
-        dependencies = set(task.get('depends') or [])
-        if dependencies - accepted:
-            raise WorkflowError('DISPATCH_DEPENDENCY_BLOCKED ' + task_id)
-        if dependencies.intersection(requested):
-            raise WorkflowError('DISPATCH_DEPENDENCY_BATCH ' + task_id)
-        platform = (target_map.get(task_id) or common_platform or getattr(args, 'platform', None) or 'manual').lower()
-        if platform not in PLATFORMS:
-            raise WorkflowError('DISPATCH_PLATFORM_INVALID ' + platform)
-        mode = (getattr(args, 'dispatch_mode', None) or ('auto' if platform == 'codex' else 'manual')).lower()
-        if mode not in DISPATCH_MODES:
-            raise WorkflowError('DISPATCH_MODE_INVALID ' + mode)
-        worktree = worktree_map.get(task_id) or common_worktree
-        if not worktree:
-            worktree = (state.get('git_topology') or {}).get('workspace_root') or str(project.root)
-        worktree_path = Path(worktree).resolve()
-        if not inside(project.root, worktree_path):
-            raise WorkflowError('DISPATCH_WORKTREE_ESCAPE ' + str(worktree_path))
-        raw_path = path_map.get(task_id) or common_path
-        if not raw_path:
-            raise WorkflowError('DISPATCH_PATH_REQUIRED ' + task_id)
-        claimed = [_normalize_path(worktree_path, raw_path)]
-        for previous in prepared:
-            if previous['worktree'] != str(worktree_path):
-                continue
-            if any(_overlap(left, right) for left in claimed for right in previous['claimed_paths']):
-                raise WorkflowError('DISPATCH_PATH_CONFLICT ' + task_id)
-            raise WorkflowError('DISPATCH_WORKTREE_CONFLICT ' + task_id)
-        for previous in data.get('dispatches', []):
-            if previous.get('status') not in ACTIVE_DISPATCH or previous.get('worktree') != str(worktree_path):
-                continue
-            if previous.get('task') == task_id and getattr(args, 'retry', False):
-                supersede.append(previous)
-                continue
-            if any(_overlap(left, right) for left in claimed for right in previous.get('claimed_paths') or []):
-                raise WorkflowError('DISPATCH_PATH_CONFLICT ' + task_id)
-            raise WorkflowError('DISPATCH_WORKTREE_CONFLICT ' + task_id)
-        status = 'adapter-ready' if mode in {'auto', 'adapter'} and platform != 'manual' else 'manual-required'
-        dispatch_id = _next_id(data)
-        prepared.append({
-            'id': dispatch_id,
-            'task': task_id,
-            'session_hint': session_hints[index],
-            'platform': platform,
-            'dispatch_mode': mode,
-            'status': status,
-            'worktree': str(worktree_path),
-            'branch': (state.get('git_topology') or {}).get('branch'),
-            'claimed_paths': claimed,
-            'dependencies': sorted(dependencies),
-            'created_at': now(),
-            'updated_at': now(),
-            'thread_id': None,
-            'prompt': None,
-        })
-    _, human = _folders(project, state)
-    for row in prepared:
-        task = tasks_by_id[row['task']]
-        prompt_target = human / f"{row['task']}-prompt.md"
-        brief_target = human / f"{row['task']}-brief.md"
-        if prompt_target.exists() or brief_target.exists():
-            if not getattr(args, 'retry', False):
-                raise WorkflowError('DISPATCH_PROMPT_EXISTS ' + row['task'])
-            for target in (prompt_target, brief_target):
-                if target.exists():
-                    archive = human / 'history' / f"{target.stem}-{row['id']}{target.suffix}"
-                    target.replace(archive)
-        row['brief'] = _relative(project, brief_target)
-        atomic(brief_target, render_task_prompt(state, task, row).replace('子会话启动提示词', '子会话 Brief', 1))
-        atomic(prompt_target, render_task_prompt(state, task, row))
-        row['prompt'] = _relative(project, prompt_target)
-        data['dispatches'].append(row)
+    allocated = []
+    created_documents = []
+    try:
+        for index, task_id in enumerate(requested):
+            task = tasks_by_id.get(task_id)
+            if not task:
+                raise WorkflowError('DISPATCH_TASK_NOT_FOUND ' + str(task_id))
+            if task_id in existing_active and not getattr(args, 'retry', False):
+                raise WorkflowError('DISPATCH_TASK_EXISTS ' + task_id)
+            dependencies = set(task.get('depends') or [])
+            if dependencies - accepted:
+                raise WorkflowError('DISPATCH_DEPENDENCY_BLOCKED ' + task_id)
+            if dependencies.intersection(requested):
+                raise WorkflowError('DISPATCH_DEPENDENCY_BATCH ' + task_id)
+            platform = (target_map.get(task_id) or common_platform or getattr(args, 'platform', None) or 'manual').lower()
+            if platform not in PLATFORMS:
+                raise WorkflowError('DISPATCH_PLATFORM_INVALID ' + platform)
+            mode = (getattr(args, 'dispatch_mode', None) or ('auto' if platform == 'codex' else 'manual')).lower()
+            if mode not in DISPATCH_MODES:
+                raise WorkflowError('DISPATCH_MODE_INVALID ' + mode)
+            requested_worktree = worktree_map.get(task_id) or common_worktree
+            raw_path = path_map.get(task_id) or common_path
+            if not raw_path:
+                raise WorkflowError('DISPATCH_PATH_REQUIRED ' + task_id)
+            dispatch_id = _next_id(data)
+            status = 'adapter-ready' if mode in {'auto', 'adapter'} and platform != 'manual' else 'manual-required'
+            candidate = {
+                'id': dispatch_id,
+                'task': task_id,
+                'session_hint': session_hints[index],
+                'platform': platform,
+                'dispatch_mode': mode,
+                'status': status,
+                'claimed_paths': [],
+                'dependencies': sorted(dependencies),
+                'created_at': now(),
+                'updated_at': now(),
+                'thread_id': None,
+                'prompt': None,
+            }
+            prepared_row = prepare_worktree(
+                project, state, task, candidate,
+                requested_path=requested_worktree,
+                mode=getattr(args, 'worktree_mode', None) or ('bind' if requested_worktree else 'auto'),
+            )
+            allocated.append(prepared_row)
+            worktree_path = Path(prepared_row['worktree']).resolve()
+            claimed = [_normalize_path(worktree_path, raw_path)]
+            prepared_row['claimed_paths'] = claimed
+            for previous in prepared:
+                if previous['worktree'] != str(worktree_path):
+                    continue
+                if any(_overlap(left, right) for left in claimed for right in previous['claimed_paths']):
+                    raise WorkflowError('DISPATCH_PATH_CONFLICT ' + task_id)
+                raise WorkflowError('DISPATCH_WORKTREE_CONFLICT ' + task_id)
+            for previous in data.get('dispatches', []):
+                if previous.get('status') not in ACTIVE_DISPATCH or previous.get('worktree') != str(worktree_path):
+                    continue
+                if previous.get('task') == task_id and getattr(args, 'retry', False):
+                    supersede.append(previous)
+                    continue
+                if any(_overlap(left, right) for left in claimed for right in previous.get('claimed_paths') or []):
+                    raise WorkflowError('DISPATCH_PATH_CONFLICT ' + task_id)
+                raise WorkflowError('DISPATCH_WORKTREE_CONFLICT ' + task_id)
+            prepared.append(prepared_row)
+        _, human = _folders(project, state)
+        for row in prepared:
+            task = tasks_by_id[row['task']]
+            prompt_target = human / f"{row['task']}-prompt.md"
+            brief_target = human / f"{row['task']}-brief.md"
+            if prompt_target.exists() or brief_target.exists():
+                if not getattr(args, 'retry', False):
+                    raise WorkflowError('DISPATCH_PROMPT_EXISTS ' + row['task'])
+                for target in (prompt_target, brief_target):
+                    if target.exists():
+                        archive = human / 'history' / f"{target.stem}-{row['id']}{target.suffix}"
+                        target.replace(archive)
+            row['brief'] = _relative(project, brief_target)
+            atomic(brief_target, render_task_prompt(state, task, row).replace('子会话启动提示词', '子会话 Brief', 1))
+            created_documents.append(brief_target)
+            atomic(prompt_target, render_task_prompt(state, task, row))
+            created_documents.append(prompt_target)
+            row['prompt'] = _relative(project, prompt_target)
+            data['dispatches'].append(row)
+    except Exception as exc:
+        for document in reversed(created_documents):
+            try:
+                document.unlink(missing_ok=True)
+            except OSError:
+                pass
+        pending = _rollback_prepared_worktrees(project, allocated)
+        if pending:
+            detail = '; '.join(f"{item['path']} {item['cleanup_error']}" for item in pending)
+            raise WorkflowError(f'DISPATCH_ROLLBACK_CLEANUP_PENDING {detail}') from exc
+        raise
     for previous in supersede:
         previous['status'] = 'superseded'
         previous['updated_at'] = now()
@@ -311,6 +353,90 @@ def dispatch_tasks(project, state, args):
         'next_action': 'Codex host adapter creates threads for adapter-ready requests; user forwards manual-required prompts.',
     }
 
+
+
+def accept_session_task(project, state, args):
+    """Accept one completed worker report and trigger owned cleanup."""
+    registry = load_registry(project, state)
+    controller = next((row for row in registry.get('sessions', [])
+                       if row.get('id') == args.session), None)
+    if not controller or controller.get('role') != 'controller' or registry.get('controller_session') != args.session:
+        raise WorkflowError('CONTROLLER_LEASE_REQUIRED')
+    task_id = args.task
+    data = load_dispatch(project, state)
+    rows = [row for row in data.get('dispatches', [])
+            if row.get('task') == task_id and row.get('status') != 'superseded']
+    if not rows:
+        raise WorkflowError('ACCEPTANCE_DISPATCH_NOT_FOUND ' + task_id)
+    row = rows[-1]
+    mapping = registry.get('tasks', {}).get(task_id) or {}
+    if mapping.get('acceptance_status') == 'accepted' or row.get('status') in {'accepted', 'cleaned'}:
+        cleanup = next((item for item in reversed(data.get('cleanup', []))
+                        if item.get('dispatch_id') == row.get('id')), None)
+        return {'task': state['id'], 'plan_task': task_id, 'acceptance': 'accepted',
+                'cleanup': cleanup or {'result': row.get('worktree_state')}, 'idempotent': True}
+    if mapping.get('report_status') != 'DONE':
+        raise WorkflowError('ACCEPTANCE_REPORT_REQUIRED ' + task_id)
+    task = next((item for item in state.get('tasks', []) if item.get('id') == task_id), None)
+    if not task or task.get('status') not in {'done', 'accepted', 'integrated', 'cleaned'}:
+        raise WorkflowError('ACCEPTANCE_TASK_INCOMPLETE ' + task_id)
+    reporter = mapping.get('report_session')
+    if not reporter:
+        raise WorkflowError('ACCEPTANCE_REPORT_SESSION_REQUIRED ' + task_id)
+    worker = next((item for item in registry.get('sessions', []) if item.get('id') == reporter), None)
+    if not worker or worker.get('task') not in (None, task_id):
+        raise WorkflowError('ACCEPTANCE_SESSION_MISMATCH ' + task_id)
+    if worker.get('worktree') and row.get('worktree') and Path(worker['worktree']).resolve() != Path(row['worktree']).resolve():
+        raise WorkflowError('ACCEPTANCE_WORKTREE_MISMATCH ' + task_id)
+
+    row['status'] = 'accepted'
+    row['worktree_state'] = 'accepted'
+    row['accepted_at'] = now()
+    row['accepted_by'] = args.session
+    row['updated_at'] = now()
+    mapping['acceptance_status'] = 'accepted'
+    mapping['accepted_at'] = row['accepted_at']
+    mapping['accepted_by'] = args.session
+    registry.setdefault('tasks', {})[task_id] = mapping
+    registry.setdefault('events', []).append({
+        'id': uuid.uuid4().hex, 'at': now(), 'event': 'task-accepted',
+        'session': args.session, 'detail': redact(task_id),
+    })
+    save_registry(project, state, registry)
+
+    from .sessions import release_session_lease
+    release_session_lease(project, state, reporter, args.reason)
+    cleanup_result = cleanup_worktree(project, row, args.reason)
+    row.update(cleanup_result)
+    cleanup_record = {
+        'id': uuid.uuid4().hex,
+        'dispatch_id': row['id'],
+        'task': task_id,
+        'result': cleanup_result.get('result'),
+        'worktree': row.get('worktree'),
+        'reason': redact(args.reason),
+        'attempt': cleanup_result.get('cleanup_attempts', 1),
+        'error': cleanup_result.get('cleanup_error'),
+        'cleanup_error': cleanup_result.get('cleanup_error'),
+        'at': now(),
+    }
+    data.setdefault('cleanup', []).append(cleanup_record)
+    if cleanup_result.get('result') in {'removed', 'released'}:
+        row['status'] = 'cleaned'
+        row['worktree_state'] = cleanup_result.get('worktree_state')
+        mapping['cleanup_status'] = cleanup_result.get('result')
+    else:
+        row['status'] = 'accepted'
+        mapping['cleanup_status'] = 'cleanup-pending'
+    mapping['cleanup_error'] = cleanup_result.get('cleanup_error')
+    registry = load_registry(project, state)
+    registry.setdefault('tasks', {}).setdefault(task_id, {}).update(mapping)
+    _save_dispatch(project, state, data)
+    save_registry(project, state, registry)
+    return {
+        'task': state['id'], 'plan_task': task_id, 'acceptance': 'accepted',
+        'cleanup': cleanup_record, 'idempotent': False,
+    }
 
 def session_progress(project, state):
     data = load_dispatch(project, state)

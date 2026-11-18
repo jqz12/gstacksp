@@ -992,12 +992,18 @@ class Project:
             allowed = [self.workspace_root(state)]
             if parallel_required(state):
                 allowed = [self.workspace_root(state, task_id=t['id']) for t in state['tasks'] if t['status'] == 'running' and t.get('topology')]
-            if not any(inside(base, target) for base in allowed):
+            source_allowed = any(inside(base, target) for base in allowed)
+            if not source_allowed:
                 raise WorkflowError('GIT_WORKSPACE_PATH edit must use the selected source workspace')
             from .git_topology import bound_task_for_path
             owner = bound_task_for_path(self.root, target)
             if owner and owner != state['id']:
                 raise WorkflowError('GIT_WORKSPACE_CLAIMED path belongs to task ' + owner)
+            # A parallel task worktree is its own frozen source boundary.  The
+            # parent scope still protects the controller worktree and workflow
+            # documents, but must not reject a path already admitted above.
+            if parallel_required(state) and source_allowed:
+                return target
         if not inside(root, target):
             raise WorkflowError(f'FROZEN_PATH {target} is outside {root}')
         return target

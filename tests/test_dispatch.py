@@ -152,5 +152,21 @@ class DispatchControlPlaneTests(unittest.TestCase):
         self.assertEqual(second['delivered'], 0)
 
 
+    def test_failed_batch_rolls_back_created_managed_worktrees(self):
+        with self.assertRaisesRegex(WorkflowError, 'DISPATCH_PATH_ESCAPE'):
+            dispatch_tasks(self.project, self.state, self.args(
+                '--task', 'T01', '--task', 'T02',
+                '--target', 'T01=codex', '--target', 'T02=codex',
+                '--path', 'T01=src/data', '--path', 'T02=../escape',
+                '--max-parallel', '2'))
+
+        listing = subprocess.run(
+            ['git', 'worktree', 'list', '--porcelain'], cwd=self.root,
+            capture_output=True, text=True, check=True,
+        ).stdout
+        self.assertNotIn('\\.gsp\\worktrees\\sessions', listing)
+        self.assertFalse((self.root / self.state['doc_dir'] / 'sessions' / 'T01-prompt.md').exists())
+
+
 if __name__ == '__main__':
     unittest.main()

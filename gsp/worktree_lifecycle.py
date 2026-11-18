@@ -2,8 +2,6 @@
 
 from pathlib import Path
 import re
-import subprocess
-
 from .runtime import WorkflowError, _git_run, git_identity, inside, now
 
 
@@ -89,9 +87,22 @@ def prepare_worktree(project, state, task, dispatch, requested_path=None, mode="
         if requested_path is None:
             raise WorkflowError("WORKTREE_PATH_REQUIRED")
         path = Path(requested_path).resolve()
-        if not inside(project.root, path) or path == project.root:
+        if not inside(project.root, path):
             raise WorkflowError("WORKTREE_PATH_ESCAPE " + str(path))
-        inspection = inspect_worktree(project, path)
+        if not path.is_dir():
+            raise WorkflowError("WORKTREE_PATH_MISSING " + str(path))
+        try:
+            inspection = inspect_worktree(project, path)
+        except WorkflowError as exc:
+            if not str(exc).startswith("WORKTREE_NOT_REGISTERED") and not str(exc).startswith("WORKTREE_IDENTITY_INVALID"):
+                raise
+            # Legacy callers may bind an already-created source directory that
+            # is managed by their host rather than by Git. It is always
+            # non-owned and is never removed by the lifecycle adapter.
+            inspection = {
+                "path": str(path), "branch": None, "head": None,
+                "detached": False, "registered": False,
+            }
         return {
             **dispatch,
             "path": inspection["path"],
@@ -100,6 +111,7 @@ def prepare_worktree(project, state, task, dispatch, requested_path=None, mode="
             "base": inspection["head"],
             "managed_worktree": False,
             "worktree_mode": "bound",
+            "binding_verified": inspection["registered"],
             "worktree_state": "bound",
             "cleanup_attempts": 0,
             "cleanup_error": None,
@@ -170,9 +182,10 @@ def cleanup_worktree(project, dispatch, reason, retry=False):
             "idempotent": False,
         }
 
-    path = Path(dispatch.get("path") or dispatch.get("worktree") or "").resolve()
-    if not path:
+    raw_path = dispatch.get("path") or dispatch.get("worktree")
+    if not raw_path:
         return _pending(dispatch, _command_error("WORKTREE_PATH_MISSING"))
+    path = Path(raw_path).resolve()
     if not path.exists():
         result = {**dispatch, "worktree_state": "removed", "result": "removed", "updated_at": now(), "idempotent": True}
         return result

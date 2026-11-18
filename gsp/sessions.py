@@ -239,6 +239,24 @@ def _write_session(project, state, token):
     return registry, row
 
 
+
+def release_session_lease(project, state, token, reason=''):
+    """Release a worker write lease after controller acceptance."""
+    registry = load_registry(project, state)
+    row = _find(registry, token)
+    if row.get('status') == 'released':
+        return {'session': token, 'released': True, 'idempotent': True}
+    key = _key(row.get('worktree')) if row.get('worktree') else None
+    if key and registry.get('workspace_leases', {}).get(key) == row.get('id'):
+        registry['workspace_leases'].pop(key, None)
+    row['status'] = 'released'
+    row['released_at'] = now()
+    row['release_reason'] = redact(reason)
+    row['updated_at'] = now()
+    _event(registry, 'session-lease-released', row['id'], reason)
+    _save(project, state, registry)
+    return {'session': row['id'], 'released': True, 'idempotent': False}
+
 def claim_session(project, state, token, paths, replace=False):
     registry, row = _write_session(project, state, token)
     normalized = _normalize_paths(Path(row["worktree"]), paths)
