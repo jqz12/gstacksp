@@ -1449,6 +1449,11 @@ def parser():
     q.add_argument('--evidence', action='append', default=[])
     q.add_argument('--need-from-main', default='')
     q.add_argument('--ruling', default='')
+    q = sub.add_parser('session-accept', help='accept a completed child task and trigger lifecycle cleanup')
+    q.add_argument('id')
+    q.add_argument('task')
+    q.add_argument('--session', required=True, help='current controller session, such as S01')
+    q.add_argument('--reason', required=True)
     q = sub.add_parser('session-handoff', help='transfer the controller lease')
     q.add_argument('id')
     q.add_argument('--from', dest='from_session', required=True)
@@ -1463,6 +1468,8 @@ def parser():
     q.add_argument('--dispatch-mode', choices=['auto', 'adapter', 'manual'])
     q.add_argument('--path', action='append', default=[], metavar='TASK=PATH')
     q.add_argument('--worktree', action='append', default=[], metavar='TASK=PATH')
+    q.add_argument('--worktree-mode', choices=['auto', 'bind'], default='auto',
+                   help='create GSP-managed worktrees or bind explicit paths')
     q.add_argument('--max-parallel', type=int, default=4)
     q.add_argument('--retry', action='store_true', help='archive prior prompt and allow a tracked retry')
     sub.add_parser('session-progress', help='show controller progress and the next ready batch').add_argument('id')
@@ -1476,6 +1483,7 @@ def parser():
     q.add_argument('--task', required=True)
     q.add_argument('--result', choices=['archived', 'released', 'removed'], required=True)
     q.add_argument('--reason', required=True)
+    q.add_argument('--retry', action='store_true', help='retry lifecycle cleanup for an accepted managed worktree')
     sub.add_parser('codex-hook', help='native Codex hook protocol (stdin JSON)')
     sub.add_parser('hooks-report', help='bounded offline Codex hook audit summary for --project')
     for name in ('hooks-install','hooks-upgrade','hooks-uninstall','hooks-recover','hooks-status'):
@@ -1814,6 +1822,9 @@ def dispatch(project, args):
             result = write_brief(project, state, args)
         elif command == 'session-report':
             result = write_report(project, state, args)
+        elif command == 'session-accept':
+            from .dispatch import accept_session_task
+            result = accept_session_task(project, state, args)
         elif command == 'session-handoff':
             result = handoff_controller(project, state, args)
         elif command in {'session-dispatch', 'session-progress', 'session-watch', 'session-clean'}:

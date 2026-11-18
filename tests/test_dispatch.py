@@ -95,11 +95,15 @@ class DispatchControlPlaneTests(unittest.TestCase):
         self.assertEqual(progress['distinct_tasks'], 1)
         self.assertEqual(progress['accepted_tasks'], 1)
         self.assertEqual(progress['cleaned_worktrees'], 0)
+        self.assertEqual(progress['managed_worktrees'], 1)
+        self.assertEqual(progress['bound_worktrees'], 0)
+        self.assertEqual(progress['cleanup_pending_worktrees'], 0)
         self.assertEqual(progress['overall_progress'], 33.3)
 
     def test_cleanup_requires_accepted_task_and_records_success(self):
         dispatch_tasks(self.project, self.state, self.args(
-            '--task', 'T01', '--target', 'T01=manual', '--path', 'T01=src/data'))
+            '--task', 'T01', '--target', 'T01=manual', '--path', 'T01=src/data',
+            '--worktree', str(self.root)))
         clean_args = parser().parse_args([
             'session-clean', 'work', '--task', 'T01', '--result', 'archived',
             '--reason', '主会话已接受 report',
@@ -166,6 +170,21 @@ class DispatchControlPlaneTests(unittest.TestCase):
         ).stdout
         self.assertNotIn('\\.gsp\\worktrees\\sessions', listing)
         self.assertFalse((self.root / self.state['doc_dir'] / 'sessions' / 'T01-prompt.md').exists())
+
+
+    def test_retry_removes_accepted_managed_worktree(self):
+        row = dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--target', 'T01=codex', '--path', 'T01=src/data'))['dispatches'][0]
+        current = read(self.root / '.gsp/runs/work/state.json')
+        current['tasks'][0]['status'] = 'done'
+        self.project.write(current, 'test-accept', 'test fixture')
+        retry_args = parser().parse_args([
+            'session-clean', 'work', '--task', 'T01', '--result', 'removed',
+            '--reason', 'retry lifecycle removal', '--retry',
+        ])
+        result = clean_session_worktree(self.project, current, retry_args)
+        self.assertEqual(result['cleanup']['result'], 'removed')
+        self.assertFalse(Path(row['worktree']).exists())
 
 
 if __name__ == '__main__':

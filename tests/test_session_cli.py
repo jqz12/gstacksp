@@ -73,5 +73,40 @@ class SessionCliTests(unittest.TestCase):
         self.assertEqual(status['tasks']['T01']['report_status'], 'DONE')
 
 
+    def test_cli_auto_dispatch_accepts_and_cleans_managed_worktree(self):
+        self.cli('session-register', 'work', '--role', 'controller', '--host', 'codex',
+                 '--thread', 'main-thread', '--write-mode', 'write', '--path', '.')
+        dispatched = json.loads(self.cli(
+            'session-dispatch', 'work', '--session', 'S01', '--task', 'T01',
+            '--target', 'T01=codex', '--path', 'T01=src/service').stdout)
+        row = dispatched['dispatches'][0]
+        self.assertTrue(row['managed_worktree'])
+        self.assertTrue(Path(row['worktree']).is_dir())
+
+        self.cli('session-register', 'work', '--session', row['session_hint'], '--role', 'worker',
+                 '--host', 'codex', '--thread', 'worker-thread', '--task', 'T01',
+                 '--branch', row['branch'], '--worktree', row['worktree'],
+                 '--write-mode', 'write', '--path', 'src/service')
+        self.cli('session-report', 'work', 'T01', '--session', row['session_hint'],
+                 '--status', 'DONE', '--summary', 'worker complete', '--files', 'src/service.py',
+                 '--tests', 'focused tests pass')
+        state = self.state()
+        state['tasks'][0]['status'] = 'done'
+        (self.project / '.gsp/runs/work/state.json').write_text(
+            json.dumps(state, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+        accepted = json.loads(self.cli(
+            'session-accept', 'work', 'T01', '--session', 'S01', '--reason',
+            'controller verified report and tests').stdout)
+        self.assertEqual(accepted['acceptance'], 'accepted')
+        self.assertEqual(accepted['cleanup']['result'], 'removed')
+        self.assertFalse(Path(row['worktree']).exists())
+        progress = json.loads(self.cli('session-progress', 'work').stdout)
+        self.assertEqual(progress['accepted_tasks'], 1)
+        self.assertEqual(progress['cleaned_worktrees'], 1)
+        self.assertEqual(progress['managed_worktrees'], 0)
+        self.assertEqual(progress['cleanup_pending_worktrees'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -454,6 +454,22 @@ def session_progress(project, state):
     cleaned = len([row for row in data.get('cleanup', []) if row.get('result') in CLEANUP_RESULTS])
     manual_required = len([row for row in data.get('dispatches', []) if row.get('status') == 'manual-required'])
     running = len([row for row in data.get('dispatches', []) if row.get('status') == 'running'])
+    latest_dispatches = {}
+    for row in data.get('dispatches', []):
+        if row.get('status') != 'superseded':
+            latest_dispatches[row.get('task')] = row
+    managed_worktrees = sum(
+        1 for row in latest_dispatches.values()
+        if row.get('managed_worktree') and row.get('worktree_state') not in {'removed', 'released'}
+    )
+    bound_worktrees = sum(
+        1 for row in latest_dispatches.values()
+        if not row.get('managed_worktree') and row.get('worktree_state') not in {'removed', 'released'}
+    )
+    cleanup_pending_worktrees = sum(
+        1 for row in latest_dispatches.values()
+        if row.get('worktree_state') == 'cleanup-pending'
+    )
     active_tasks = {row.get('task') for row in data.get('dispatches', []) if row.get('status') in ACTIVE_DISPATCH}
     next_tasks = []
     for task in tasks:
@@ -479,6 +495,9 @@ def session_progress(project, state):
         'reports_done': reports_done,
         'accepted_tasks': len(accepted_ids),
         'cleaned_worktrees': cleaned,
+        'managed_worktrees': managed_worktrees,
+        'bound_worktrees': bound_worktrees,
+        'cleanup_pending_worktrees': cleanup_pending_worktrees,
         'running_sessions': running,
         'blocked_tasks': len(blocked_ids),
         'change_requests': change_requests,
@@ -525,7 +544,8 @@ def watch_session_events(project, state, args):
 def clean_session_worktree(project, state, args):
     data = load_dispatch(project, state)
     task_id = args.task
-    rows = [row for row in data.get('dispatches', []) if row.get('task') == task_id]
+    rows = [row for row in data.get('dispatches', [])
+            if row.get('task') == task_id and row.get('status') != 'superseded']
     if not rows:
         raise WorkflowError('CLEANUP_DISPATCH_NOT_FOUND ' + task_id)
     row = rows[-1]
@@ -533,10 +553,48 @@ def clean_session_worktree(project, state, args):
     if not task or task.get('status') not in {'done', 'accepted', 'integrated', 'cleaned'}:
         if row.get('status') not in {'accepted', 'integrated'}:
             raise WorkflowError('CLEANUP_ACCEPTANCE_REQUIRED ' + task_id)
+    retry = bool(getattr(args, 'retry', False))
+    if row.get('managed_worktree') and not retry:
+        raise WorkflowError('CLEANUP_RETRY_REQUIRED use --retry for a managed worktree')
+    if retry:
+        existing = next((item for item in reversed(data.get('cleanup', []))
+                         if item.get('dispatch_id') == row.get('id')
+                         and item.get('result') in {'removed', 'released'}), None)
+        if existing:
+            return {'task': state['id'], 'cleanup': existing, 'idempotent': True}
+        cleanup_result = cleanup_worktree(project, row, args.reason, retry=True)
+        row.update(cleanup_result)
+        cleanup = {
+            'id': uuid.uuid4().hex,
+            'dispatch_id': row['id'],
+            'task': task_id,
+            'result': cleanup_result.get('result'),
+            'worktree': row.get('worktree'),
+            'reason': redact(args.reason),
+            'attempt': cleanup_result.get('cleanup_attempts', 1),
+            'error': cleanup_result.get('cleanup_error'),
+            'cleanup_error': cleanup_result.get('cleanup_error'),
+            'at': now(),
+        }
+        data.setdefault('cleanup', []).append(cleanup)
+        if cleanup_result.get('result') in {'removed', 'released'}:
+            row['status'] = 'cleaned'
+        else:
+            row['status'] = 'accepted'
+        row['updated_at'] = now()
+        _save_dispatch(project, state, data)
+        registry = load_registry(project, state)
+        mapping = registry.setdefault('tasks', {}).setdefault(task_id, {})
+        mapping['cleanup_status'] = cleanup_result.get('result')
+        mapping['cleanup_error'] = cleanup_result.get('cleanup_error')
+        save_registry(project, state, registry)
+        return {'task': state['id'], 'cleanup': cleanup, 'idempotent': cleanup_result.get('idempotent', False)}
     result = args.result
     if result not in CLEANUP_RESULTS:
         raise WorkflowError('CLEANUP_RESULT_INVALID')
-    existing = next((item for item in data.get('cleanup', []) if item.get('dispatch_id') == row.get('id') and item.get('result') in CLEANUP_RESULTS), None)
+    existing = next((item for item in data.get('cleanup', [])
+                     if item.get('dispatch_id') == row.get('id')
+                     and item.get('result') in CLEANUP_RESULTS), None)
     if existing:
         return {'task': state['id'], 'cleanup': existing, 'idempotent': True}
     cleanup = {
