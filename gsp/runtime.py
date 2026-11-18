@@ -1448,6 +1448,28 @@ def parser():
     q.add_argument('--from', dest='from_session', required=True)
     q.add_argument('--to', dest='to_session', required=True)
     q.add_argument('--reason', required=True)
+    q = sub.add_parser('session-dispatch', help='dispatch ready child tasks as one independent batch')
+    q.add_argument('id')
+    q.add_argument('--session', required=True, help='current controller session, such as S01')
+    q.add_argument('--task', action='append', dest='tasks', default=[], help='task ID, repeat for a batch')
+    q.add_argument('--target', action='append', default=[], metavar='TASK=PLATFORM')
+    q.add_argument('--platform', choices=['codex', 'claude', 'manual', 'other'], default='manual')
+    q.add_argument('--dispatch-mode', choices=['auto', 'adapter', 'manual'])
+    q.add_argument('--path', action='append', default=[], metavar='TASK=PATH')
+    q.add_argument('--worktree', action='append', default=[], metavar='TASK=PATH')
+    q.add_argument('--max-parallel', type=int, default=4)
+    q.add_argument('--retry', action='store_true', help='archive prior prompt and allow a tracked retry')
+    sub.add_parser('session-progress', help='show controller progress and the next ready batch').add_argument('id')
+    q = sub.add_parser('session-watch', help='consume durable child report events')
+    q.add_argument('id')
+    q.add_argument('--adapter', choices=['manual', 'codex', 'claude', 'other'], default='manual')
+    q.add_argument('--limit', type=int, default=20)
+    q.add_argument('--event-id')
+    q = sub.add_parser('session-clean', help='record accepted child worktree cleanup')
+    q.add_argument('id')
+    q.add_argument('--task', required=True)
+    q.add_argument('--result', choices=['archived', 'released', 'removed'], required=True)
+    q.add_argument('--reason', required=True)
     sub.add_parser('codex-hook', help='native Codex hook protocol (stdin JSON)')
     sub.add_parser('hooks-report', help='bounded offline Codex hook audit summary for --project')
     for name in ('hooks-install','hooks-upgrade','hooks-uninstall','hooks-recover','hooks-status'):
@@ -1788,6 +1810,17 @@ def dispatch(project, args):
             result = write_report(project, state, args)
         elif command == 'session-handoff':
             result = handoff_controller(project, state, args)
+        elif command in {'session-dispatch', 'session-progress', 'session-watch', 'session-clean'}:
+            from .dispatch import (dispatch_tasks, session_progress, watch_session_events,
+                                   clean_session_worktree)
+            if command == 'session-dispatch':
+                result = dispatch_tasks(project, state, args)
+            elif command == 'session-progress':
+                return session_progress(project, state), True
+            elif command == 'session-watch':
+                result = watch_session_events(project, state, args)
+            else:
+                result = clean_session_worktree(project, state, args)
         else:
             raise WorkflowError('SESSION_COMMAND_UNKNOWN')
         project.write(state, command, json.dumps(result, ensure_ascii=False))

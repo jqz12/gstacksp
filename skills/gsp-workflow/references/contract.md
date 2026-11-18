@@ -97,4 +97,12 @@ Claude 的 PreToolUse hook 只在插件/hook 真正启用时拦截 Edit/Write/No
 
 跨会话写入需要三层门禁：controller lease、同一 worktree 的单一 write lease、相对于 worktree 的 `claimed_paths` 声明。`session-register`、`session-claim` 和已接线的 Codex/Claude direct-edit hook 必须在 Edit/Write/apply_patch 前复核会话身份、租约和路径；未注册会话、旧 controller、未声明路径、租约冲突和重叠声明直接拒绝。该机制不是文件系统沙箱：Shell、外部编辑器、MCP/宿主未接线工具只能报告 `NOT_CHECKED`，不能把事后 Git 指纹检查说成编辑前保护。
 
+主会话发布任务时使用 `session-dispatch`。它按依赖图计算 ready 批次，预检 `claimed_paths`、worktree 和并发上限，生成唯一的 `Dnnn`、预分配 `Snn`、`Tnn-brief.md` 和 `Tnn-prompt.md`。`platform=codex` 且 `dispatch_mode=auto` 的请求进入 `adapter-ready`，当前主会话调用宿主原生线程、worktree 和等待入口完成实际派发。没有连接器的平台进入 `manual-required`，由用户转发同一份 prompt。CLI 不伪造线程创建或外部消息发送。
+
+主会话在发布前和进入等待时使用 `session-progress`。摘要必须同时展示总体进度、发布次数、独立任务数、DONE 报告数、accepted 数、已清理 worktree 数、运行中、阻塞、CHANGE_REQUEST、待人工转发和下一阶段任务表。总体进度只按 `accepted_tasks / planned_tasks` 计算，不能把报告或 prompt 生成冒充接受。
+
+`session-report` 会把结构化报告追加到 durable outbox。主会话或有界 watcher 使用 `session-watch` 按事件 ID 消费，重复消费保持幂等。Codex 宿主用有界 `wait_threads` 等待，不要求 controller 进程全天轮询；主会话关闭时事件留在 outbox，下一次 resume 继续消费。主会话检查报告、测试和集成结果并明确接受后，才可运行 `session-clean` 记录 `archived`、`released` 或 `removed`。清理失败保持 pending，不计入 cleaned。
+
+子 agent 与正式子会话必须区分。子 agent 是当前主会话内的临时辅助，不拥有独立 `Snn`、worktree、report 或恢复边界。正式子会话才计入 dispatch 统计，并拥有 `Snn`、`Tnn`、brief、report、outbox 和清理生命周期。普通单会话任务不创建这些资料，原有流程保持兼容。
+
 跨会话机器正本位于 `.gsp/runs/<task>/sessions/index.json`，人读 brief/report/index 位于任务档案 `sessions/`，旧 report 移入 `sessions/history/`。稳定目录主题由 GSP 编号和 ASCII 主题组成；中文标题无法生成主题时回退到稳定 run id，未来不同任务不会都落到相同的 `-work` 目录。历史任务的既有目录和绑定不迁移。

@@ -27,7 +27,7 @@ def _paths(project, state):
 def _default(state):
     return {"schema": 1, "task": state["id"], "number": state.get("number"),
             "controller_session": None, "next_session": 1,
-            "workspace_leases": {}, "sessions": [], "tasks": {}, "events": []}
+            "workspace_leases": {}, "sessions": [], "tasks": {}, "events": [], "outbox": []}
 
 
 def load_registry(project, state):
@@ -38,7 +38,7 @@ def load_registry(project, state):
         raise WorkflowError("SESSION_REGISTRY_TASK_MISMATCH")
     for key, default in (("schema", 1), ("controller_session", None),
                          ("next_session", 1), ("workspace_leases", {}),
-                         ("sessions", []), ("tasks", {}), ("events", [])):
+                         ("sessions", []), ("tasks", {}), ("events", []), ("outbox", [])):
         registry.setdefault(key, default)
     return registry
 
@@ -350,6 +350,21 @@ def write_report(project, state, args):
     row["status"] = "blocked" if status != "DONE" else "reported"
     row["updated_at"] = now()
     _event(registry, "report-written", row["id"], f"{task['id']} {status}")
+    # Reports are durable handoff events.  Keep them in an append-only outbox
+    # so an inactive controller can consume the completion later without
+    # polling the child session or relying on chat history.
+    registry.setdefault("outbox", []).append({
+        "id": uuid.uuid4().hex,
+        "task": task["id"],
+        "session": row["id"],
+        "status": status,
+        "report": mapping["report"],
+        "worktree": row.get("worktree"),
+        "reported_at": mapping["reported_at"],
+        "delivered": False,
+        "created_at": now(),
+    })
+    registry["outbox"] = registry["outbox"][-500:]
     _save(project, state, registry)
     return {"task": state["id"], "plan_task": task["id"], "report": mapping["report"], "status": status}
 
