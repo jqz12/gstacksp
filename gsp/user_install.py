@@ -18,16 +18,17 @@ def publish(path, data):
 class UserInstall:
     def __init__(self, host, profile=None, source_root=None, source_version=None,
                  source_commit=None, source_url=None):
-        if host not in ('codex','claude'): raise WorkflowError('USER_HOST_REQUIRED choose one host')
+        if host not in ('codex','claude','zcode'): raise WorkflowError('USER_HOST_REQUIRED choose one host')
         self.host = host
-        self.root = Path(profile or Path.home()/('.codex' if host == 'codex' else '.claude')).resolve()
+        default_profile = { 'codex': '.codex', 'claude': '.claude', 'zcode': '.zcode' }[host]
+        self.root = Path(profile or Path.home()/default_profile).resolve()
         self.source_root = Path(source_root).resolve() if source_root else None
         self.source_version = source_version
         self.source_commit = source_commit
         self.source_url = source_url
         self.manifest = self.root/'gstacksp/install.json'
         self.journal = self.root/'gstacksp/transaction.json'
-        self.instruction = self.root/('AGENTS.md' if host == 'codex' else 'CLAUDE.md')
+        self.instruction = self.root/('CLAUDE.md' if host == 'claude' else 'AGENTS.md')
         self.scope = host+'-user'
 
     def path(self, rel):
@@ -94,7 +95,8 @@ class UserInstall:
         with tempfile.TemporaryDirectory(prefix='gsp-user-stage-') as folder:
             stage = Path(folder)
             install(stage, self.host, list(set(optional or []) | set(previous_optional)), source_root=source)
-            base = stage/('.agents/skills' if self.host=='codex' else '.claude/skills')
+            base = stage/('.claude/skills' if self.host == 'claude' else
+                          '.zcode/skills' if self.host == 'zcode' else '.agents/skills')
             files = {'skills/'+p.relative_to(base).as_posix():p.read_bytes() for p in base.rglob('*') if p.is_file() and '__pycache__' not in p.parts}
             skills = sorted(p.name for p in base.iterdir() if p.is_dir())
         return files, skills, catalog['version']

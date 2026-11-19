@@ -22,10 +22,14 @@ def install(project, host, optional, source_root=None):
     project = Path(project).resolve()
     if not project.is_dir():
         raise WorkflowError('PROJECT_MISSING')
+    allowed_hosts = {'claude', 'codex', 'zcode', 'both'}
+    if host not in allowed_hosts:
+        raise WorkflowError('INSTALL_HOST_REQUIRED choose claude, codex, zcode, or both')
     with locked(project):
         plans = []
         for target in (['claude', 'codex'] if host == 'both' else [host]):
-            base = project / ('.claude/skills' if target == 'claude' else '.agents/skills')
+            base = project / ('.claude/skills' if target == 'claude' else
+                              '.zcode/skills' if target == 'zcode' else '.agents/skills')
             if not inside(project, base):
                 raise WorkflowError('INSTALL_ESCAPE skill root resolves outside project')
             manifest = project / '.gsp' / f'install-{target}.json'

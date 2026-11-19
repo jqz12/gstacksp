@@ -154,6 +154,16 @@ m.UserInstall("codex",{str(self.profile)!r}).apply("install")
         self.assertFalse(self.manager.manifest.exists())
         self.assertFalse((self.profile/'skills/gsp-workflow/SKILL.md').exists())
 
+    def test_zcode_user_install_uses_global_zcode_profile(self):
+        from gsp.user_install import UserInstall
+        profile = self.root / 'zcode-profile'
+        manager = UserInstall('zcode', profile)
+        result = manager.apply('install')
+        self.assertEqual(result['scope'], 'zcode-user')
+        self.assertTrue((profile / 'skills/gsp-workflow/SKILL.md').is_file())
+        self.assertTrue((profile / 'AGENTS.md').is_file())
+        self.assertEqual(read(profile / 'gstacksp/install.json')['scope'], 'zcode-user')
+
     def test_user_edits_refuse_before_any_mutation(self):
         self.manager.apply('install')
         file = self.profile/'skills/gsp-learn/SKILL.md'
