@@ -20,6 +20,16 @@ import sys
 import tempfile
 import time
 import uuid
+import contextlib
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - Windows
+    _fcntl = None
+try:
+    import msvcrt as _msvcrt
+except ImportError:  # pragma: no cover - POSIX
+    _msvcrt = None
 
 from . import __version__
 
@@ -284,24 +294,132 @@ def redact(text):
     return text
 
 
-@contextmanager
-def locked(root):
-    """No age-based lock stealing: a slow live writer must not be evicted."""
+def process_token(pid=None):
+    """Return a best-effort process creation token; never infer liveness from PID alone."""
+    pid = int(pid or os.getpid())
+    if pid == os.getpid():
+        try:
+            return f'self:{os.getpid()}'
+        except Exception:
+            return None
+    proc = Path(f'/proc/{pid}/stat')
+    try:
+        fields = proc.read_text(encoding='utf-8').split()
+        return f'proc-start:{fields[21]}'
+    except (OSError, IndexError, ValueError):
+        pass
+    if os.name == 'nt':
+        try:
+            import ctypes
+            from ctypes import wintypes
+            handle = ctypes.windll.kernel32.OpenProcess(0x0400 | 0x0010, False, pid)
+            if handle:
+                created = wintypes.FILETIME(); exited = wintypes.FILETIME(); kernel = wintypes.FILETIME(); user = wintypes.FILETIME()
+                ok = ctypes.windll.kernel32.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel), ctypes.byref(user))
+                ctypes.windll.kernel32.CloseHandle(handle)
+                if ok:
+                    value = (created.dwHighDateTime << 32) | created.dwLowDateTime
+                    return f'win-start:{value}'
+        except (OSError, AttributeError):
+            pass
+    return None
+def _advisory(fd, blocking):
+    if _fcntl is not None:
+        flags = _fcntl.LOCK_EX | (0 if blocking else _fcntl.LOCK_NB)
+        try:
+            _fcntl.flock(fd, flags); return True
+        except (BlockingIOError, OSError): return False
+    if _msvcrt is not None:
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            _msvcrt.locking(fd, _msvcrt.LK_LOCK if blocking else _msvcrt.LK_NBLCK, 1); return True
+        except OSError: return False
+    return True
+
+
+def _advisory_release(fd):
+    if _fcntl is not None:
+        with contextlib.suppress(OSError): _fcntl.flock(fd, _fcntl.LOCK_UN)
+    elif _msvcrt is not None:
+        with contextlib.suppress(OSError):
+            os.lseek(fd, 0, os.SEEK_SET); _msvcrt.locking(fd, _msvcrt.LK_UNLCK, 1)
+
+def inspect_lock(root):
+    """Read and classify writer.lock without deleting or taking ownership."""
     folder = Path(root) / '.gsp'
     if not inside(root, folder):
         raise WorkflowError('STATE_ESCAPE .gsp resolves outside the project')
     folder.mkdir(parents=True, exist_ok=True)
     lock = folder / 'writer.lock'
+    result = {'path': str(lock), 'status': 'absent'}
+    if not lock.exists():
+        return result
+    metadata = None; read_error = None
     try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError as exc:
-        raise WorkflowError(f'WORKFLOW_BUSY {lock}; inspect owner, do not delete a live writer lock') from exc
+        metadata = json.loads(lock.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        read_error = exc
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-            json.dump({'pid': os.getpid(), 'at': now()}, stream)
+        fd = os.open(lock, os.O_RDWR)
+        try: busy = not _advisory(fd, False)
+        finally: os.close(fd)
+    except OSError:
+        busy = True
+    if busy and read_error is not None:
+        return {**result, 'status': 'live', 'error': str(read_error)}
+    if read_error is not None:
+        return {**result, 'status': 'malformed', 'error': str(read_error)}
+    result.update({'metadata': metadata})
+    if not isinstance(metadata, dict) or not isinstance(metadata.get('pid'), int):
+        result['status'] = 'malformed'; return result
+    token = process_token(metadata['pid']); result['process_token'] = token
+    if busy: result['status'] = 'live'
+    elif token is None: result['status'] = 'unknown'
+    elif metadata.get('process_token') and metadata.get('process_token') != token:
+        result['status'] = 'unknown'; result['reason'] = 'PID_REUSED'
+    else: result['status'] = 'dead'
+    return result
+def recover_lock(root, evidence, reason):
+    """Release only a demonstrably dead, well-formed writer metadata file."""
+    info = inspect_lock(root)
+    if info['status'] != 'dead':
+        raise WorkflowError(f"LOCK_RECOVERY_REFUSED status={info['status']} reason=owner_not_proven_dead")
+    if not evidence or not Path(evidence).is_file():
+        raise WorkflowError('LOCK_RECOVERY_EVIDENCE_REQUIRED provide an investigation report')
+    folder = Path(root) / '.gsp'; lock = folder / 'writer.lock'
+    history = folder / 'recovery'
+    history.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex
+    backup = history / f'writer-lock-{stamp}.json'
+    atomic(backup, {'lock': info, 'evidence': str(Path(evidence).resolve()), 'reason': redact(reason), 'at': now()})
+    lock.unlink(missing_ok=True)
+    return {'status': 'recovered', 'backup': str(backup), 'evidence': str(Path(evidence).resolve())}
+
+
+@contextmanager
+def locked(root):
+    """Use an OS advisory lock; metadata is diagnostic and may safely remain after a crash."""
+    folder = Path(root) / '.gsp'
+    if not inside(root, folder):
+        raise WorkflowError('STATE_ESCAPE .gsp resolves outside the project')
+    folder.mkdir(parents=True, exist_ok=True)
+    lock = folder / 'writer.lock'
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR)
+    if os.fstat(fd).st_size == 0:
+        os.ftruncate(fd, 1)
+    if not _advisory(fd, False):
+        os.close(fd)
+        raise WorkflowError(f'WORKFLOW_BUSY {lock}; inspect owner, do not delete a live writer lock')
+    try:
+        os.ftruncate(fd, 0); os.lseek(fd, 0, os.SEEK_SET)
+        with os.fdopen(os.dup(fd), 'w', encoding='utf-8') as stream:
+            json.dump({'schema': 2, 'pid': os.getpid(), 'process_token': process_token(), 'at': now()}, stream)
         yield
     finally:
-        lock.unlink(missing_ok=True)
+        _advisory_release(fd)
+        os.close(fd)
+        with contextlib.suppress(OSError):
+            lock.unlink()
 
 
 class Project:
@@ -1494,6 +1612,8 @@ def parser():
         elif name == 'external-link':
             q.add_argument('--kind', choices=['issue', 'pr'], required=True)
             q.add_argument('--value', required=True)
+    q = sub.add_parser('inspect-lock', help='inspect writer lock without mutating it'); q.add_argument('id', nargs='?')
+    q = sub.add_parser('recover-lock', help='recover a proven-dead writer lock'); q.add_argument('--evidence', required=True); q.add_argument('--reason', required=True)
     q = sub.add_parser('session-register', help='register a task-scoped main or child session')
     q.add_argument('id')
     q.add_argument('--session')
@@ -1724,6 +1844,10 @@ def main(argv=None):
             from .driver import handle
             print(json.dumps(handle(project, args), ensure_ascii=False, indent=2))
             return 0
+        if args.command == 'inspect-lock':
+            result = inspect_lock(project.root); print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
+        if args.command == 'recover-lock':
+            result = recover_lock(project.root, args.evidence, args.reason); print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
         if args.command == 'hook':
             print(json.dumps(hook(project.root), ensure_ascii=False)); return 0
         if args.command == 'source-resolve':
@@ -1766,7 +1890,7 @@ def main(argv=None):
             # handoff so telemetry records the route for the next skill.
             from .document_health import git_route
             result['route'] = git_route(project.invocation_root)
-            if args.documents or args.documents_only:
+            if args.documents or args.report_dir:
                 from .document_health import audit
                 report=audit(project.root,args.report_dir)
                 result['documents']={key:report[key] for key in ('report_markdown','report_json','inventory','integrity_ok','checks')}
@@ -1810,6 +1934,15 @@ def main(argv=None):
             install_notice('project', args.host, [project.root / ('.claude/skills' if host == 'claude' else '.zcode/skills' if host == 'zcode' else '.agents/skills') for host in targets])
             result = install(project.root, args.host, args.optional)
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
+        if args.command in ('status', 'resume') and (project.meta / 'writer.lock').exists():
+            lock_info = inspect_lock(project.root)
+            if args.command == 'status':
+                result, success = dispatch(project, args)
+                result = {'state': result, 'writer_lock': lock_info}
+                print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
+            result = {'status': 'blocked', 'code': 'WORKFLOW_BUSY', 'writer_lock': lock_info,
+                      'recovery': 'inspect-lock then recover-lock with an investigation report'}
+            print(json.dumps(result, ensure_ascii=False, indent=2)); return 1
         with locked(project.root):
             result, success = dispatch(project, args)
         _emit_telemetry(project, args, result, success)

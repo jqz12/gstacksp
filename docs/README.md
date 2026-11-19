@@ -19,3 +19,8 @@
 - `tests/`：自动化测试。
 
 任务记录、审计、研究和构建产物由各开发工作区本地保存，不随公开发布版本提供。
+
+## 锁恢复
+
+inspect-lock 只读显示 writer.lock 的 live/dead/unknown/malformed 状态；ecover-lock --evidence <报告> --reason <理由> 仅恢复已证明退出的 owner，并保存恢复备份。health --documents-only 不写默认报告目录，显式 --documents 才持久化审计。
+
