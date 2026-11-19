@@ -1274,7 +1274,73 @@ def validate_delivery(project, state, doc):
     return fp, checks, backlog
 
 
-def health(root, host):
+def _user_update_check(target, profile, manifest_path, force=False):
+    """Return a read-only GitHub release row for one managed user install."""
+    prefix = target + '-user-update'
+    if not manifest_path.is_file():
+        return {'check': prefix, 'scope': 'user', 'status': 'NOT_CHECKED',
+                'detail': 'no managed user installation manifest'}
+    try:
+        manifest = read(manifest_path)
+        if manifest.get('scope') != target + '-user' or manifest.get('host') != target:
+            return {'check': prefix, 'scope': 'user', 'status': 'NOT_CHECKED',
+                    'detail': 'manifest is not a managed GSP user installation'}
+        current = manifest.get('source_version') or manifest.get('version') or __version__
+        from .update_check import check, source_for_manifest
+        source = source_for_manifest(manifest)
+        result = check(profile / 'gstacksp' / 'update-check.json', source,
+                       current_version=current, force=force)
+        detail = {
+            'current': current,
+            'latest': result.get('latest'),
+            'source': result.get('source', source),
+            'checked_at': result.get('checked_at'),
+            'cached': bool(result.get('cached')),
+            'comparison': result.get('comparison', 'unknown'),
+        }
+        if result.get('commit'):
+            detail['commit'] = result['commit']
+        if result.get('error'):
+            detail['error'] = result['error']
+        status = 'UPDATE_AVAILABLE' if result.get('available') is True else (
+            'PASS' if result.get('status') == 'ok' else 'NOT_CHECKED')
+        return {'check': prefix, 'scope': 'user', 'status': status, 'detail': detail}
+    except (WorkflowError, OSError, ValueError) as exc:
+        return {'check': prefix, 'scope': 'user', 'status': 'NOT_CHECKED',
+                'detail': {'error': type(exc).__name__, 'message': str(exc)}}
+
+
+def _github_user_upgrade(manager, optional, dry_run=False):
+    """Stage a user upgrade from the latest published stable GitHub tag."""
+    from .github_source import resolve_source
+    from .update_check import check, source_for_manifest
+    from .user_install import UserInstall
+    if not manager.manifest.is_file():
+        raise WorkflowError('USER_INSTALL_MISSING')
+    previous = read(manager.manifest)
+    source = source_for_manifest(previous)
+    current = previous.get('source_version') or previous.get('version') or __version__
+    update = check(manager.root / 'gstacksp' / 'update-check.json', source,
+                   current_version=current, force=True)
+    if update.get('status') != 'ok' or not update.get('latest'):
+        raise WorkflowError('UPGRADE_SOURCE_UNAVAILABLE GitHub stable tag check failed')
+    with tempfile.TemporaryDirectory(prefix='gsp-upgrade-source-') as folder:
+        resolved = resolve_source(source, update['latest'], Path(folder) / 'source')
+        staged = UserInstall(manager.host, manager.root,
+                             source_root=resolved['path'],
+                             source_version=resolved['version'],
+                             source_commit=resolved['commit'],
+                             source_url=resolved['source'])
+        result = staged.apply('upgrade', optional, dry_run)
+    result['update_check'] = {
+        'source': source, 'current': current,
+        'latest': update['latest'], 'commit': update.get('commit'),
+        'resolved_commit': resolved['commit'],
+    }
+    return result
+
+
+def health(root, host, force_update=False):
     rows = []
     source = Path(__file__).resolve().parents[1]
     rows.append({'check': 'python', 'status': 'PASS' if sys.version_info >= (3, 10) else 'FAIL', 'detail': sys.version.split()[0]})
@@ -1288,6 +1354,7 @@ def health(root, host):
         locations = [('project', root, root / ('.claude/skills' if target == 'claude' else '.agents/skills'), root / '.gsp' / f'install-{target}.json'),
                      ('user', profile, profile / 'skills', profile / 'gstacksp/install.json')]
         detected = False
+        user_manifest = locations[1][3]
         for scope, owner, base, manifest in locations:
             installed = sorted(p.parent.name for p in base.glob('gsp-*/SKILL.md'))
             present = bool(installed) or manifest.exists()
@@ -1323,6 +1390,7 @@ def health(root, host):
         rows.append({'check': target + '-cli', 'status': 'PASS' if shutil.which(target) else 'NOT_CHECKED', 'detail': 'on PATH' if shutil.which(target) else 'not found; app host may still be available'})
         rows.append({'check': target + '-live-discovery', 'status': 'NOT_CHECKED', 'detail': 'ask the actual host to invoke gsp-health and cite this installation; file existence is not discovery proof'})
         rows.append({'check': target + '-freeze', 'status': 'NOT_CHECKED', 'detail': 'Claude hook requires plugin/hooks activation; Codex uses explicit path check; no shell sandbox'})
+        rows.append(_user_update_check(target, profile, user_manifest, force=force_update))
     rows.append({'check': 'browser-and-agents', 'status': 'NOT_CHECKED', 'detail': 'discover tools in the running host; no paid calls made'})
     return {'version': __version__, 'checks': rows, 'static_ok': not any(r['status'] == 'FAIL' for r in rows), 'live_verified': False}
 
@@ -1508,6 +1576,7 @@ def parser():
         q.add_argument('--profile', help='Codex profile root (default: ~/.codex)')
         q.add_argument('--dry-run', action='store_true')
     q = sub.add_parser('health'); q.add_argument('--host', choices=['claude', 'codex', 'both'], default='both'); q.add_argument('--strict', action='store_true', help='return non-zero for a blocking Git route')
+    q.add_argument('--force-update-check', action='store_true', help='bypass the 24-hour GitHub update-check cache')
     q.add_argument('--documents',action='store_true',help='include document governance audit')
     q.add_argument('--documents-only',action='store_true',help='read-only target; no installation checks')
     q.add_argument('--report-dir',help='explicit report destination (default: target docs/gsp/reports/document-governance)')
@@ -1537,6 +1606,9 @@ def parser():
         q.add_argument('--profile', help='explicit user profile root; defaults to the selected host profile')
         q.add_argument('--optional', nargs='*', default=[])
         q.add_argument('--dry-run', action='store_true')
+        if name == 'upgrade':
+            q.add_argument('--source', choices=['github', 'local'], default='github',
+                           help='published stable GitHub tag by default; local is an explicit developer-only override')
     q = sub.add_parser('preference'); q.add_argument('key'); q.add_argument('--value', choices=['ask', 'recommended']); q.add_argument('--quote')
     q = sub.add_parser('learn'); q.add_argument('--text'); q.add_argument('--source'); q.add_argument('--query', default='')
     group = q.add_mutually_exclusive_group(); group.add_argument('--supersedes'); group.add_argument('--invalidate')
@@ -1684,7 +1756,7 @@ def main(argv=None):
             print(json.dumps(result,ensure_ascii=False,indent=2));return 0
         if args.command == 'health':
             if args.report_dir and not (args.documents or args.documents_only): raise WorkflowError('DOCUMENT_AUDIT_REQUIRED --report-dir needs --documents')
-            result = health(project.root, args.host) if not args.documents_only else {'static_ok':True,'checks':[],'live_verified':False}
+            result = health(project.root, args.host, force_update=args.force_update_check) if not args.documents_only else {'static_ok':True,'checks':[],'live_verified':False}
             # Health is the workflow entry point. Attach the compact Git
             # handoff so telemetry records the route for the next skill.
             from .document_health import git_route
@@ -1721,7 +1793,10 @@ def main(argv=None):
                 manager = UserInstall(args.host, args.profile)
                 if args.command == 'install':
                     install_notice('user', args.host, [manager.root / 'skills'])
-                result = manager.recover(args.dry_run) if args.command=='install-recover' else manager.apply(args.command,args.optional,args.dry_run)
+                if args.command == 'upgrade' and args.source == 'github':
+                    result = _github_user_upgrade(manager, args.optional, args.dry_run)
+                else:
+                    result = manager.recover(args.dry_run) if args.command=='install-recover' else manager.apply(args.command,args.optional,args.dry_run)
                 print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
             if args.command != 'install' or args.profile or args.dry_run:
                 raise WorkflowError('USER_SCOPE_REQUIRED maintenance/dry-run/profile requires --scope user')

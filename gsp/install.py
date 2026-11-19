@@ -6,8 +6,9 @@ import shutil
 from .runtime import WorkflowError, atomic, digest, inside, locked, now, read, sha
 
 
-def install(project, host, optional):
-    source = Path(__file__).resolve().parents[1]
+def install(project, host, optional, source_root=None):
+    """Install from this checkout or an explicitly staged source package."""
+    source = Path(source_root or Path(__file__).resolve().parents[1]).resolve()
     if not (source / 'catalog.json').is_file() or not (source / 'skills').is_dir():
         raise WorkflowError('SOURCE_PACKAGE_REQUIRED install from the GstackSP source checkout')
     catalog = read(source / 'catalog.json')

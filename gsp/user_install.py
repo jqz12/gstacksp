@@ -16,10 +16,15 @@ def publish(path, data):
 
 
 class UserInstall:
-    def __init__(self, host, profile=None):
+    def __init__(self, host, profile=None, source_root=None, source_version=None,
+                 source_commit=None, source_url=None):
         if host not in ('codex','claude'): raise WorkflowError('USER_HOST_REQUIRED choose one host')
         self.host = host
         self.root = Path(profile or Path.home()/('.codex' if host == 'codex' else '.claude')).resolve()
+        self.source_root = Path(source_root).resolve() if source_root else None
+        self.source_version = source_version
+        self.source_commit = source_commit
+        self.source_url = source_url
         self.manifest = self.root/'gstacksp/install.json'
         self.journal = self.root/'gstacksp/transaction.json'
         self.instruction = self.root/('AGENTS.md' if host == 'codex' else 'CLAUDE.md')
@@ -60,15 +65,35 @@ class UserInstall:
         block = (begin+'\n## GstackSP\n\nFor software development use GstackSP by default. First read `'+str(self.root/'skills/gsp-workflow/SKILL.md')+'` and its shared contract. Load only relevant stages. User instructions take precedence. Do not alter unrelated host configuration.\n'+end)
         return existing+ ('\n\n' if existing and not existing.endswith('\n\n') else '')+block+'\n', sha(block.encode())
 
+    def source_package(self, previous=None):
+        candidates = []
+        if self.source_root:
+            candidates.append(self.source_root)
+        embedded = self.embedded_source()
+        if embedded:
+            candidates.append(embedded)
+        if isinstance(previous, dict) and isinstance(previous.get('source'), str):
+            recorded = Path(previous['source'])
+            if not recorded.is_absolute():
+                recorded = Path.cwd() / recorded
+            candidates.append(recorded.resolve())
+        for source in candidates:
+            if (source / 'catalog.json').is_file() and (source / 'skills').is_dir():
+                return source
+        raise WorkflowError('SOURCE_PACKAGE_REQUIRED upgrade/install from a complete GstackSP source package')
+
+    def embedded_source(self):
+        source = Path(__file__).resolve().parents[1]
+        return source if (source / 'catalog.json').is_file() and (source / 'skills').is_dir() else None
+
     def payload(self, optional, previous):
         from .install import install
-        source = Path(__file__).resolve().parents[1]
-        if not (source/'skills').is_dir(): raise WorkflowError('SOURCE_PACKAGE_REQUIRED upgrade/install from source package')
+        source = self.source_package(previous)
         catalog = read(source/'catalog.json')
         previous_optional = [s['name'] for s in catalog['skills'] if s['pack']=='optional' and s['name'] in previous.get('skills',[])]
         with tempfile.TemporaryDirectory(prefix='gsp-user-stage-') as folder:
             stage = Path(folder)
-            install(stage, self.host, list(set(optional or []) | set(previous_optional)))
+            install(stage, self.host, list(set(optional or []) | set(previous_optional)), source_root=source)
             base = stage/('.agents/skills' if self.host=='codex' else '.claude/skills')
             files = {'skills/'+p.relative_to(base).as_posix():p.read_bytes() for p in base.rglob('*') if p.is_file() and '__pycache__' not in p.parts}
             skills = sorted(p.name for p in base.iterdir() if p.is_dir())
@@ -98,7 +123,14 @@ class UserInstall:
         changes[self.instruction.name] = routing.encode('utf-8')
         manifest_rel = 'gstacksp/install.json'
         import json
-        manifest = {'schema':2,'scope':self.scope,'host':self.host,'source':str(Path(__file__).resolve().parents[1]),'version':version,'installed_at':previous.get('installed_at',now()),'updated_at':now(),'skills':skills,'files':{rel:sha(data) for rel,data in files.items()},'instruction_block_sha256':block_hash,'live_discovery':'NOT_CHECKED'}
+        source = self.source_package(previous) if action != 'uninstall' else None
+        manifest = {'schema':2,'scope':self.scope,'host':self.host,
+                    'source':self.source_url or (str(source) if source else previous.get('source')),
+                    'source_version':self.source_version or previous.get('source_version') or version,
+                    'source_commit':self.source_commit or previous.get('source_commit'),
+                    'version':version,'installed_at':previous.get('installed_at',now()),'updated_at':now(),
+                    'skills':skills,'files':{rel:sha(data) for rel,data in files.items()},
+                    'instruction_block_sha256':block_hash,'live_discovery':'NOT_CHECKED'}
         changes[manifest_rel] = None if action=='uninstall' else (json.dumps(manifest,ensure_ascii=False,indent=2)+'\n').encode()
         result = {'action':action,'scope':self.scope,'profile':str(self.root),'version':version,'files':len(files),'dry_run':dry_run,'paths':sorted(changes),'live_discovery':'NOT_CHECKED'}
         if self.host == 'codex' and action in ('install','upgrade'):
