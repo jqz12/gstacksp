@@ -24,8 +24,25 @@ class UpdateCheckTests(unittest.TestCase):
             first = check(cache, 'https://github.com/jqz12/gstacksp.git', 'v0.9.3', now=100, runner=self.runner(output))
             second = check(cache, 'https://github.com/jqz12/gstacksp.git', 'v0.9.3', now=100 + 10, runner=self.runner(''))
             self.assertEqual(first['latest'], 'v0.10.0')
+            self.assertTrue(first['available'])
             self.assertFalse(first['cached'])
             self.assertTrue(second['cached'])
+
+    def test_same_or_older_remote_is_not_an_upgrade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / 'check.json'
+            output = 'a1\trefs/tags/v0.9.3\n'
+            same = check(cache, 'https://github.com/example/gstacksp.git', 'v0.9.3', now=100, runner=self.runner(output))
+            self.assertFalse(same['available'])
+            cache.unlink()
+            older = check(cache, 'https://github.com/example/gstacksp.git', 'v0.10.0', now=100, runner=self.runner(output))
+            self.assertFalse(older['available'])
+
+    def test_missing_current_version_is_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = check(Path(tmp) / 'check.json', 'https://github.com/example/gstacksp.git', None,
+                           now=100, runner=self.runner('a1\trefs/tags/v0.9.3\n'))
+            self.assertIsNone(result['available'])
 
     def test_network_failure_is_not_checked_and_does_not_raise(self):
         with tempfile.TemporaryDirectory() as tmp:

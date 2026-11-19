@@ -117,7 +117,10 @@ m.UserInstall("codex",{str(self.profile)!r}).apply("install")
         from process_helpers import run
         script = Path(__file__).resolve().parents[1]/'scripts/gsp.py'
         for action in ('install','upgrade','uninstall'):
-            result = run([sys.executable,str(script),action,'--host','claude','--scope','user','--profile',str(self.profile)], capture_output=True, text=True, encoding='utf-8')
+            argv = [sys.executable,str(script),action,'--host','claude','--scope','user','--profile',str(self.profile)]
+            if action == 'upgrade':
+                argv.extend(['--source', 'local'])
+            result = run(argv, capture_output=True, text=True, encoding='utf-8')
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertEqual(json.loads(result.stdout)['scope'],'claude-user')
         self.assertFalse((self.profile/'AGENTS.md').exists())
