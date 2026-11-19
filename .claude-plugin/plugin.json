@@ -1,10 +1,11 @@
 {
   "name": "gstacksp",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "Personal Windows development workflow: design, execute, evidence and delivery.",
   "author": {
     "name": "GstackSP contributors"
   },
   "license": "MIT"
 }
+
 

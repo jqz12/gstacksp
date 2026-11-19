@@ -37,7 +37,7 @@ python E:\GstackSP\scripts\gsp.py --project E:\MyProject install --host both --o
 
 ## 日常使用
 
-新任务采用 `docs/work/<年份>/<月份>/<固定档案>/`，先保存想法用 `work-new`，文档按阶段生成。`health --documents-only` 检查结构并保存独立报告；旧项目先预览再整理。命令及边界见 [项目文档索引](docs/README.md)。旧任务继续兼容，以 status/resume 返回路径为准。
+新任务采用 `docs/work/<年份>/<月份>/<固定档案>/`，先保存想法用 `work-new`，文档按阶段生成。`health --documents-only` 只读检查结构；需要持久化报告时使用 `health --documents`。残留锁可用 `inspect-lock` 诊断，并在证据完整时用 `recover-lock` 恢复；旧项目先预览再整理。命令及边界见 [项目文档索引](docs/README.md)。旧任务继续兼容，以 status/resume 返回路径为准。
 
 告诉 AI：“用 GstackSP 做这个需求，先讨论设计；确认后按推荐连续推进，准备交付。”
 
@@ -59,5 +59,6 @@ python scripts/package.py
 ```
 
 `scripts/build_skills.py` 是生成技能的维护源；路由 `gsp-workflow` 和共同契约手工维护。可选技能通过当前宿主/项目已有工具完成工作，未集成第三方浏览器守护进程、模型服务或部署账户。
+
 
 
