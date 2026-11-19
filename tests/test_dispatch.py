@@ -65,6 +65,13 @@ class DispatchControlPlaneTests(unittest.TestCase):
         self.assertIn('session-report', (self.root / self.state['doc_dir'] / 'sessions' / 'T01-prompt.md').read_text(encoding='utf-8'))
         self.assertIn('T02', (self.root / self.state['doc_dir'] / 'sessions' / 'T02-prompt.md').read_text(encoding='utf-8'))
 
+    def test_zcode_is_a_manual_required_worker_platform(self):
+        result = dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--target', 'T01=zcode', '--path', 'T01=src/data'))
+        row = result['dispatches'][0]
+        self.assertEqual(row['platform'], 'zcode')
+        self.assertEqual(row['status'], 'manual-required')
+
     def test_dependency_is_blocked_until_prerequisites_are_accepted(self):
         with self.assertRaisesRegex(WorkflowError, 'DISPATCH_DEPENDENCY_BLOCKED'):
             dispatch_tasks(self.project, self.state, self.args(

@@ -27,6 +27,8 @@ resume 返回根待办路径及当前事项；读取原文和人工历史内容�
 
 controller 在发布前和进入等待时使用 `<gsp> session-progress`。摘要必须展示总体进度、发布次数、独立任务数、DONE 报告数、accepted 数、已清理 worktree 数、managed worktree 数、bound worktree 数、cleanup-pending 数、运行中、阻塞、CHANGE_REQUEST、待人工转发和下一阶段任务表。总体进度只按 `accepted_tasks / planned_tasks` 计算，不能把报告、接受或 prompt 生成冒充清理完成。
 
+ZCode 作为用户级宿主时使用 `--host zcode` 安装到 `~/.zcode/skills` 和 `~/.zcode/AGENTS.md`，所有 ZCode 工作区共用同一份 GSP。`session-dispatch --target Tnn=zcode` 当前进入 `manual-required`，主会话把生成的 prompt 复制到 ZCode 子会话；子会话仍必须在指定 worktree 中工作并运行固定的 `session-report`，主会话再用 `session-watch` 和 `session-accept` 收口。这个安装范围不要求每个项目创建 `.agents/skills`。
+
 `session-report` 会把结构化报告追加到 durable outbox。主会话或有界 watcher 使用 `<gsp> session-watch` 按事件 ID 消费，重复消费保持幂等。Codex 宿主用有界 `wait_threads` 等待，不要求 controller 进程全天轮询。主会话关闭时事件留在 outbox，下一次 resume 继续消费。controller 检查报告、测试和集成结果后，使用 `<gsp> session-accept <run> <task> --session <Snn>` 明确接受任务。`session-accept` 会记录接受事件、释放 worker lease，并按 worktree 所有权自动处理清理。干净的 managed worktree 会被移除并执行 prune，bound worktree 只释放租约并保留目录。
 
 接受和清理是两个独立状态。managed worktree 遇到脏文件、锁定、Git 非零退出或未知结果时保留目录和分支，状态为 `cleanup-pending`，不计入 `cleaned_worktrees`。主会话随后使用 `<gsp> session-clean --retry` 重试 cleanup-pending。重复接受、释放或重试必须幂等。正常路径不要求用户手动删除 GSP 创建的 worktree，也不删除分支、commit、报告或显式绑定目录。

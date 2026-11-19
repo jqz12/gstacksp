@@ -1349,9 +1349,14 @@ def health(root, host, force_update=False):
         catalog = read(catalog_path)
         missing = [s['name'] for s in catalog['skills'] if not (source / 'skills' / s['name'] / 'SKILL.md').is_file()]
         rows.append({'check': 'source-skills', 'status': 'FAIL' if missing else 'PASS', 'detail': missing or len(catalog['skills'])})
+    if host not in ('claude', 'codex', 'zcode', 'both'):
+        raise WorkflowError('HEALTH_HOST_REQUIRED choose claude, codex, zcode, or both')
     for target in (['claude', 'codex'] if host == 'both' else [host]):
-        profile = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex') if target == 'codex' else Path.home() / '.claude'
-        locations = [('project', root, root / ('.claude/skills' if target == 'claude' else '.agents/skills'), root / '.gsp' / f'install-{target}.json'),
+        profile = (Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex') if target == 'codex'
+                   else Path.home() / ('.claude' if target == 'claude' else '.zcode'))
+        project_skills = (root / '.claude/skills' if target == 'claude' else
+                          root / '.zcode/skills' if target == 'zcode' else root / '.agents/skills')
+        locations = [('project', root, project_skills, root / '.gsp' / f'install-{target}.json'),
                      ('user', profile, profile / 'skills', profile / 'gstacksp/install.json')]
         detected = False
         user_manifest = locations[1][3]
@@ -1549,7 +1554,7 @@ def parser():
     q.add_argument('--session', required=True, help='current controller session, such as S01')
     q.add_argument('--task', action='append', dest='tasks', default=[], help='task ID, repeat for a batch')
     q.add_argument('--target', action='append', default=[], metavar='TASK=PLATFORM')
-    q.add_argument('--platform', choices=['codex', 'claude', 'manual', 'other'], default='manual')
+    q.add_argument('--platform', choices=['codex', 'claude', 'zcode', 'manual', 'other'], default='manual')
     q.add_argument('--dispatch-mode', choices=['auto', 'adapter', 'manual'])
     q.add_argument('--path', action='append', default=[], metavar='TASK=PATH')
     q.add_argument('--worktree', action='append', default=[], metavar='TASK=PATH')
@@ -1560,7 +1565,7 @@ def parser():
     sub.add_parser('session-progress', help='show controller progress and the next ready batch').add_argument('id')
     q = sub.add_parser('session-watch', help='consume durable child report events')
     q.add_argument('id')
-    q.add_argument('--adapter', choices=['manual', 'codex', 'claude', 'other'], default='manual')
+    q.add_argument('--adapter', choices=['manual', 'codex', 'claude', 'zcode', 'other'], default='manual')
     q.add_argument('--limit', type=int, default=20)
     q.add_argument('--event-id')
     q = sub.add_parser('session-clean', help='record accepted child worktree cleanup')
@@ -1575,7 +1580,7 @@ def parser():
         q = sub.add_parser(name, help='maintain GSP Codex user-level hooks only')
         q.add_argument('--profile', help='Codex profile root (default: ~/.codex)')
         q.add_argument('--dry-run', action='store_true')
-    q = sub.add_parser('health'); q.add_argument('--host', choices=['claude', 'codex', 'both'], default='both'); q.add_argument('--strict', action='store_true', help='return non-zero for a blocking Git route')
+    q = sub.add_parser('health'); q.add_argument('--host', choices=['claude', 'codex', 'zcode', 'both'], default='both'); q.add_argument('--strict', action='store_true', help='return non-zero for a blocking Git route')
     q.add_argument('--force-update-check', action='store_true', help='bypass the 24-hour GitHub update-check cache')
     q.add_argument('--documents',action='store_true',help='include document governance audit')
     q.add_argument('--documents-only',action='store_true',help='read-only target; no installation checks')
@@ -1601,7 +1606,7 @@ def parser():
     q.add_argument('--version')
     for name in ('install','upgrade','uninstall','install-recover'):
         q = sub.add_parser(name, description='Scopes: project = this project; user = global for the current user.')
-        q.add_argument('--host', choices=['claude','codex','both'], required=True)
+        q.add_argument('--host', choices=['claude','codex','zcode','both'], required=True)
         q.add_argument('--scope', choices=['project','user'], default='project' if name=='install' else 'user', help='project: target project skills; user: current user profile skills (install defaults to project)')
         q.add_argument('--profile', help='explicit user profile root; defaults to the selected host profile')
         q.add_argument('--optional', nargs='*', default=[])
@@ -1802,7 +1807,7 @@ def main(argv=None):
                 raise WorkflowError('USER_SCOPE_REQUIRED maintenance/dry-run/profile requires --scope user')
             from .install import install
             targets = ['claude', 'codex'] if args.host == 'both' else [args.host]
-            install_notice('project', args.host, [project.root / ('.claude/skills' if host == 'claude' else '.agents/skills') for host in targets])
+            install_notice('project', args.host, [project.root / ('.claude/skills' if host == 'claude' else '.zcode/skills' if host == 'zcode' else '.agents/skills') for host in targets])
             result = install(project.root, args.host, args.optional)
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
         with locked(project.root):

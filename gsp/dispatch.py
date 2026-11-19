@@ -8,7 +8,7 @@ from .sessions import _save as save_registry
 from .sessions import load_registry
 from .worktree_lifecycle import cleanup_worktree, prepare_worktree
 
-PLATFORMS = {'codex', 'claude', 'manual', 'other'}
+PLATFORMS = {'codex', 'claude', 'zcode', 'manual', 'other'}
 DISPATCH_MODES = {'auto', 'adapter', 'manual'}
 ACTIVE_DISPATCH = {'adapter-ready', 'running', 'reported', 'manual-required'}
 CLEANUP_RESULTS = {'archived', 'released', 'removed'}
@@ -350,7 +350,7 @@ def dispatch_tasks(project, state, args):
         'task': state['id'],
         'batch_size': len(prepared),
         'dispatches': prepared,
-        'next_action': 'Codex host adapter creates threads for adapter-ready requests; user forwards manual-required prompts.',
+        'next_action': 'Codex host adapter creates threads for adapter-ready requests; user forwards manual-required prompts to ZCode or other manual platforms.',
     }
 
 
