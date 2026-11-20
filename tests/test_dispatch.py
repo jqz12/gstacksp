@@ -193,6 +193,45 @@ class DispatchControlPlaneTests(unittest.TestCase):
         self.assertEqual(result['cleanup']['result'], 'removed')
         self.assertFalse(Path(row['worktree']).exists())
 
+    def test_model_route_is_recorded_and_rendered_without_secrets(self):
+        result = dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--target', 'T01=codex', '--path', 'T01=src/data',
+            '--provider', 'magpie', '--model-profile', 'worker-low-cost',
+            '--model', 'opencode-go/qwen4-max', '--reasoning-effort', 'low'))
+        row = result['dispatches'][0]
+        self.assertEqual(row['model_route'], {
+            'provider': 'magpie', 'model_profile': 'worker-low-cost',
+            'model': 'opencode-go/qwen4-max', 'reasoning_effort': 'low',
+        })
+        prompt = (self.root / self.state['doc_dir'] / 'sessions' / 'T01-prompt.md').read_text(encoding='utf-8')
+        self.assertIn('模型路由：magpie profile=worker-low-cost model=opencode-go/qwen4-max reasoning=low', prompt)
+        self.assertIn('不保存 API key', prompt)
+        self.assertNotIn('secret', prompt.lower())
+        registry = load_registry(self.project, self.state)
+        self.assertEqual(registry['tasks']['T01']['model_route'], row['model_route'])
+
+    def test_model_route_can_be_overridden_per_task(self):
+        one = self.root / 'route-one'
+        two = self.root / 'route-two'
+        one.mkdir(); two.mkdir()
+        result = dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--task', 'T02', '--target', 'T01=codex', '--target', 'T02=codex',
+            '--path', 'T01=src/data', '--path', 'T02=src/api',
+            '--worktree', f'T01={one}', '--worktree', f'T02={two}', '--max-parallel', '2',
+            '--provider', 'magpie', '--provider-assignment', 'T02=inherit',
+            '--model', 'opencode-go/qwen4-max', '--model-assignment', 'T02=opencode-go/deepseek-v4.1-flash'))
+        self.assertEqual(result['dispatches'][0]['model_route']['provider'], 'magpie')
+        self.assertEqual(result['dispatches'][1]['model_route']['provider'], 'inherit')
+        self.assertEqual(result['dispatches'][1]['model_route']['model'], 'opencode-go/deepseek-v4.1-flash')
+
+    def test_invalid_model_route_is_rejected_before_worktree_creation(self):
+        with self.assertRaisesRegex(WorkflowError, 'DISPATCH_MODEL_ROUTE_INVALID provider'):
+            dispatch_tasks(self.project, self.state, self.args(
+                '--task', 'T01', '--target', 'T01=codex', '--path', 'T01=src/data',
+                '--provider', 'unknown-provider'))
+        self.assertFalse((self.root / self.state['doc_dir'] / 'sessions' / 'T01-prompt.md').exists())
+
+
 
 if __name__ == '__main__':
     unittest.main()

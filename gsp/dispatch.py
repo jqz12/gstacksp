@@ -12,6 +12,17 @@ PLATFORMS = {'codex', 'claude', 'zcode', 'manual', 'other'}
 DISPATCH_MODES = {'auto', 'adapter', 'manual'}
 ACTIVE_DISPATCH = {'adapter-ready', 'running', 'reported', 'manual-required'}
 CLEANUP_RESULTS = {'archived', 'released', 'removed'}
+MODEL_ROUTE_KEYS = ('provider', 'model_profile', 'model', 'reasoning_effort')
+MODEL_ROUTE_DEFAULTS = {
+    'provider': 'inherit',
+    'model_profile': None,
+    'model': None,
+    'reasoning_effort': None,
+}
+MODEL_ROUTE_CHOICES = {
+    'provider': {'inherit', 'openai', 'magpie', 'opencode-go', 'anthropic', 'gemini', 'custom'},
+    'reasoning_effort': {'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'},
+}
 
 
 def _folders(project, state):
@@ -76,6 +87,34 @@ def _assignment(values, label):
     if len(common) > 1:
         raise WorkflowError(f'DISPATCH_{label.upper()}_DUPLICATE common value')
     return result, common[0] if common else None
+
+
+def _route_value(value, key):
+    """Validate one non-secret model-routing value before side effects."""
+    if value is None or not str(value).strip():
+        return None
+    text = str(value).strip()
+    if any(ord(char) < 32 or ord(char) == 127 for char in text):
+        raise WorkflowError(f'DISPATCH_MODEL_ROUTE_INVALID {key}')
+    if len(text) > 160:
+        raise WorkflowError(f'DISPATCH_MODEL_ROUTE_INVALID {key}')
+    if key in MODEL_ROUTE_CHOICES and text.lower() not in MODEL_ROUTE_CHOICES[key]:
+        raise WorkflowError(f'DISPATCH_MODEL_ROUTE_INVALID {key} {text}')
+    if key in {'model_profile', 'model'} and any(char.isspace() for char in text):
+        raise WorkflowError(f'DISPATCH_MODEL_ROUTE_INVALID {key}')
+    return text.lower() if key in {'provider', 'reasoning_effort'} else text
+
+
+def _model_route(args, task_id):
+    routes = {}
+    for key in MODEL_ROUTE_KEYS:
+        mapping, common = _assignment(getattr(args, f'{key}_assignment', []) or [], f'model-{key}')
+        value = mapping.get(task_id, common)
+        if value is None:
+            value = getattr(args, key, None)
+        routes[key] = _route_value(value, key)
+    routes['provider'] = routes['provider'] or 'inherit'
+    return routes
 
 
 def _task_map(state):
@@ -177,6 +216,7 @@ def render_task_prompt(state, task, dispatch):
         '- 主会话：controller，结果通过 report 回传',
         f"- 平台目标：{dispatch.get('platform')}",
         f"- 派发方式：{dispatch.get('dispatch_mode')}",
+        f"- 模型路由：{_render_model_route(dispatch.get('model_route'))}",
         f"- branch：{dispatch.get('branch') or '由宿主绑定'}",
         f"- worktree：{dispatch.get('worktree') or '由宿主绑定'}", '',
         '## 必读文件', '',
@@ -195,6 +235,10 @@ def render_task_prompt(state, task, dispatch):
         '## 禁止范围', '',
         '- 不修改总体 plan、父状态或其他任务的文件。',
         '- 不扩大到未声明的路径、公共契约、凭据或外部动作。', '',
+        '## 模型路由边界', '',
+        '- 上述路由是宿主选择提示；由 Codex/profile/Magpie 负责实际连接和模型调用。',
+        '- GSP 不保存 API key、token 或秘密 endpoint；不要把凭据写入 report、代码或任务文档。',
+        '- 如果宿主无法使用指定路由，提交 CHANGE_REQUEST，不要静默改用其他模型。', '',
         '## 工作规则', '',
         '- 先读取总体 plan.md 和本任务 brief。',
         '- 局部实现、局部测试和普通机械检查由本子会话决定顺序。',
@@ -204,6 +248,18 @@ def render_task_prompt(state, task, dispatch):
         '报告至少包含 STATUS、TASK、FILES、TESTS、INTERFACES、EVIDENCE 和 NEED_FROM_MAIN。',
         f"示例：`python scripts/gsp.py session-report {state['id']} {task['id']} --session <Snn> --status DONE --summary \"...\"`", '',
     ])
+
+
+def _render_model_route(route):
+    route = {**MODEL_ROUTE_DEFAULTS, **(route or {})}
+    values = [route['provider']]
+    if route.get('model_profile'):
+        values.append(f"profile={route['model_profile']}")
+    if route.get('model'):
+        values.append(f"model={route['model']}")
+    if route.get('reasoning_effort'):
+        values.append(f"reasoning={route['reasoning_effort']}")
+    return ' '.join(values)
 
 
 def dispatch_tasks(project, state, args):
@@ -261,6 +317,7 @@ def dispatch_tasks(project, state, args):
             raw_path = path_map.get(task_id) or common_path
             if not raw_path:
                 raise WorkflowError('DISPATCH_PATH_REQUIRED ' + task_id)
+            model_route = _model_route(args, task_id)
             dispatch_id = _next_id(data)
             status = 'adapter-ready' if mode in {'auto', 'adapter'} and platform != 'manual' else 'manual-required'
             candidate = {
@@ -269,6 +326,7 @@ def dispatch_tasks(project, state, args):
                 'session_hint': session_hints[index],
                 'platform': platform,
                 'dispatch_mode': mode,
+                'model_route': model_route,
                 'status': status,
                 'claimed_paths': [],
                 'dependencies': sorted(dependencies),
@@ -343,6 +401,7 @@ def dispatch_tasks(project, state, args):
             'brief': row['brief'],
             'platform': row['platform'],
             'dispatch_mode': row['dispatch_mode'],
+            'model_route': row.get('model_route') or dict(MODEL_ROUTE_DEFAULTS),
             'prompt': row['prompt'],
         })
     save_registry(project, state, registry)
