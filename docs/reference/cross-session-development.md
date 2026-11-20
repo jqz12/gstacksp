@@ -135,3 +135,8 @@ docs/work/YYYY/MM/GSP-<编号>-<稳定主题>/
 ## 与原有流程的关系
 
 原有单会话的设计确认、计划封存、`task-start`、测试收据、审查、验证和交付语义保持不变。`cross-session` 只在任务明确选择该意图时增加 session registry、租约、brief/report、dispatch、progress、watch、clean 和 handoff；旧任务没有 `sessions/` 也不会因此阻塞恢复。子 agent 仍可以作为主会话内部的临时只读辅助，不计入正式 `Snn` 派发统计。需要独立 worktree、独立恢复或并行编码时才登记正式子会话。公开规则的生成源在 `scripts/build_skills.py`，共享约束在 `skills/gsp-workflow/references/contract.md` 与 `document-governance.md`，修改后必须重建并校验生成技能。
+
+## 模型路由
+
+跨会话派发可通过 --provider、--model-profile、--model 和 --reasoning-effort 为 worker 记录模型选择，并使用 TASK=VALUE 为单个任务覆盖默认值。主会话继续维护总体计划，worker 只读取 brief/prompt。推荐让主会话保留原生 Codex provider，让 Codex worker 使用独立 profile 连接 Magpie/OpenCode Go；ZCode 和其他平台继续走 manual-required。路由字段只保存非敏感标识，不保存 API key 或 token。完整字段和边界见 [模型路由与宿主适配](model-routing.md)。
+

@@ -108,3 +108,7 @@ Claude 的 PreToolUse hook 只在插件/hook 真正启用时拦截 Edit/Write/No
 子 agent 与正式子会话必须区分。子 agent 是当前主会话内的临时辅助，不拥有独立 `Snn`、worktree、report 或恢复边界。正式子会话才计入 dispatch 统计，并拥有 `Snn`、`Tnn`、brief、report、outbox 和 worktree 清理生命周期。普通单会话任务不创建这些资料，原有流程保持兼容。
 
 跨会话机器正本位于 `.gsp/runs/<task>/sessions/index.json`，人读 brief、report、index 位于任务档案 `sessions/`，旧 report 移入 `sessions/history/`。稳定目录主题由 GSP 编号和 ASCII 主题组成。中文标题无法生成主题时回退到稳定 run id，未来不同任务不会都落到相同的 `-work` 目录。历史任务的既有目录和绑定不迁移。
+
+### 模型路由与宿主边界
+
+`cross-session` 的 `session-dispatch` 可带 `--provider`、`--model-profile`、`--model`、`--reasoning-effort`，也可用 `TASK=VALUE` 逐任务覆盖。未指定时为 `provider=inherit`，不改变单会话或旧跨会话行为。路由只保存非敏感标识并同步到 dispatch registry、session registry、brief 和 prompt；GSP 不保存 API key、token、秘密 endpoint，也不启动 Codex、Magpie 或 OpenCode。主会话保持当前高质量 provider，Codex worker 可由独立 profile 连接 Magpie/OpenCode Go，ZCode/其他平台继续走 `manual-required`。真实宿主线程创建、模型可用性、网络和计费必须单独验证并标记 `NOT_CHECKED`，不能把路由字段当作调用成功证据。

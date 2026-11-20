@@ -24,3 +24,6 @@
 
 inspect-lock 只读显示 writer.lock 的 live/dead/unknown/malformed 状态；ecover-lock --evidence <报告> --reason <理由> 仅恢复已证明退出的 owner，并保存恢复备份。health --documents-only 不写默认报告目录，显式 --documents 才持久化审计。
 
+
+模型路由和 Magpie/OpenCode Go worker 的宿主边界见 [模型路由与宿主适配](reference/model-routing.md)。
+
