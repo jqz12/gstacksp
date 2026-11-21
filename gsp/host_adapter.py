@@ -171,7 +171,7 @@ def route_health(route: Optional[Dict[str, Any]], host: Dict[str, Any]) -> Dict[
         if profile not in host.get("profiles", []):
             reasons.append("profile_not_found")
             resolvable = False
-    desktop_visible = bool(model and model in set(host.get("catalog_models", [])))
+    desktop_visible = bool(model and model in set(host.get("desktop_visible_models") or []))
     return {
         "route": normalized,
         "configured": bool(configured),

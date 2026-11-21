@@ -33,8 +33,20 @@ class HostAdapterTests(unittest.TestCase):
             self.assertEqual(result["profiles"], ["worker-low-cost"])
             self.assertNotIn("secret", json.dumps(result))
 
-    def test_route_health_separates_desktop_visibility_from_request_verification(self):
+    def test_catalog_membership_does_not_claim_desktop_visibility(self):
         host = {"providers": ["magpie"], "catalog_models": ["opencode-go/qwen4-max"], "profiles": ["worker-low-cost"]}
+        result = route_health({"provider": "magpie", "model": "opencode-go/qwen4-max", "model_profile": "worker-low-cost"}, host)
+        self.assertFalse(result["desktop_visible"])
+        self.assertFalse(result["request_verified"])
+        self.assertEqual(result["status"], "NOT_CHECKED")
+
+    def test_route_health_separates_desktop_visibility_from_request_verification(self):
+        host = {
+            "providers": ["magpie"],
+            "catalog_models": ["opencode-go/qwen4-max"],
+            "profiles": ["worker-low-cost"],
+            "desktop_visible_models": ["opencode-go/qwen4-max"],
+        }
         result = route_health({"provider": "magpie", "model": "opencode-go/qwen4-max", "model_profile": "worker-low-cost"}, host)
         self.assertTrue(result["configured"])
         self.assertTrue(result["resolvable"])
