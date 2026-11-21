@@ -352,6 +352,56 @@ class DispatchControlPlaneTests(unittest.TestCase):
         active = [row for row in data['dispatches'] if row['status'] in {'adapter-ready', 'running', 'reported', 'manual-required'}]
         self.assertEqual([row['id'] for row in active], [third['id']])
 
+    def test_retry_supersedes_previous_worker_state_and_outbox_before_new_dispatch(self):
+        first_child = self.root / 'retry-worker-state-one'
+        second_child = self.root / 'retry-worker-state-two'
+        first_child.mkdir()
+        second_child.mkdir()
+        first = dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--target', 'T01=manual', '--path', 'T01=src/data',
+            '--worktree', f'T01={first_child}'))['dispatches'][0]
+        register_session(self.project, self.state, parser().parse_args([
+            'session-register', 'work', '--session', 'S02', '--role', 'worker', '--host', 'manual',
+            '--task', 'T01', '--worktree', str(first_child), '--write-mode', 'write',
+            '--path', 'src/data',
+        ]))
+        dispatch(self.project, parser().parse_args([
+            'session-report', 'work', 'T01', '--session', 'S02', '--status', 'DONE',
+            '--summary', 'old worker completed before controller retried',
+        ]))
+        before = load_registry(self.project, self.state)
+        self.assertEqual(before['tasks']['T01']['report_status'], 'DONE')
+        self.assertIn('S02', before['workspace_leases'].values())
+        self.assertTrue(any(event.get('task') == 'T01' and event.get('session') == 'S02'
+                            and not event.get('delivered') for event in before['outbox']))
+
+        second = dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--target', 'T01=manual', '--path', 'T01=src/data',
+            '--worktree', f'T01={second_child}', '--retry'))['dispatches'][0]
+        registry = load_registry(self.project, self.state)
+        mapping = registry['tasks']['T01']
+        previous_worker = next(row for row in registry['sessions'] if row['id'] == 'S02')
+        old_event = next(event for event in registry['outbox']
+                         if event.get('task') == 'T01' and event.get('session') == 'S02')
+
+        self.assertEqual(mapping['dispatch_id'], second['id'])
+        self.assertNotIn('report_status', mapping)
+        self.assertNotIn('report_session', mapping)
+        self.assertEqual(mapping['previous_dispatches'][0]['dispatch_id'], first['id'])
+        self.assertEqual(previous_worker['status'], 'superseded')
+        self.assertNotIn('S02', registry['workspace_leases'].values())
+        self.assertTrue(old_event['superseded'])
+        watch = watch_session_events(
+            self.project, self.state,
+            parser().parse_args(['session-watch', 'work', '--adapter', 'manual', '--limit', '10']),
+        )
+        self.assertEqual(watch['delivered'], 0)
+
+        register_session(self.project, self.state, parser().parse_args([
+            'session-register', 'work', '--session', 'S04', '--role', 'worker', '--host', 'manual',
+            '--task', 'T01', '--worktree', str(first_child), '--write-mode', 'write',
+            '--path', 'src/data',
+        ]))
     @patch('gsp.dispatch.inspect_codex_host')
     def test_retry_route_failure_keeps_previous_dispatch_and_current_prompt(self, inspect_host):
         inspect_host.return_value = {

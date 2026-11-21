@@ -1,6 +1,7 @@
 """Task dispatch, progress, durable event delivery and cleanup controls."""
 from pathlib import Path, PurePosixPath
 import json
+import os
 import re
 import shutil
 import uuid
@@ -193,6 +194,99 @@ def _restore_archived_documents(archives):
             errors.append(f'{target}: {exc}')
     return errors
 
+
+def _same_worktree(left, right):
+    try:
+        return Path(left).resolve() == Path(right).resolve()
+    except (OSError, TypeError, ValueError):
+        return str(left) == str(right)
+
+
+def _supersede_runtime_state(registry, previous):
+    """Revoke live worker state associated with a superseded dispatch."""
+    task_id = previous.get('task')
+    mapping = (registry.get('tasks') or {}).get(task_id) or {}
+    tokens = {
+        value for value in (
+            previous.get('session_hint'), previous.get('thread_id'),
+            mapping.get('owner_session'), mapping.get('report_session'),
+        ) if value
+    }
+    superseded_sessions = set()
+    leases = registry.setdefault('workspace_leases', {})
+    for row in registry.get('sessions', []):
+        if row.get('role') not in {'worker', 'integration'}:
+            continue
+        if row.get('status') in {'released', 'handed-off', 'superseded'}:
+            continue
+        token_match = row.get('id') in tokens or (
+            row.get('thread_id') and row.get('thread_id') in tokens)
+        worktree_match = (
+            row.get('task') in (None, task_id)
+            and previous.get('worktree')
+            and row.get('worktree')
+            and _same_worktree(previous.get('worktree'), row.get('worktree'))
+        )
+        if not token_match and not worktree_match:
+            continue
+        superseded_sessions.add(row.get('id'))
+        row['previous_status'] = row.get('status')
+        row['status'] = 'superseded'
+        row['superseded_at'] = now()
+        row['superseded_reason'] = f"dispatch {previous.get('id')} retried"
+        row['updated_at'] = now()
+        if row.get('worktree'):
+            key = os.path.normcase(str(Path(row['worktree']).resolve()))
+            if leases.get(key) == row.get('id'):
+                leases.pop(key, None)
+        registry.setdefault('events', []).append({
+            'id': uuid.uuid4().hex,
+            'at': now(),
+            'event': 'session-superseded',
+            'session': row.get('id'),
+            'detail': redact(f"{task_id} {previous.get('id')} retried"),
+        })
+    for event in registry.get('outbox', []):
+        if event.get('task') != task_id or event.get('superseded'):
+            continue
+        session_match = event.get('session') in superseded_sessions
+        worktree_match = (
+            event.get('worktree') and previous.get('worktree')
+            and _same_worktree(event.get('worktree'), previous.get('worktree'))
+        )
+        if session_match or worktree_match:
+            event['superseded'] = True
+            event['superseded_at'] = now()
+            event['superseded_by_dispatch'] = previous.get('id')
+            event['delivery'] = 'superseded'
+    return superseded_sessions
+
+
+def _current_task_mapping(registry, row, superseded):
+    """Replace stale task projections while preserving prior mappings as history."""
+    mapping = (registry.get('tasks') or {}).get(row['task']) or {}
+    history = list(mapping.get('previous_dispatches') or [])
+    snapshot = {key: value for key, value in mapping.items() if key != 'previous_dispatches'}
+    if snapshot.get('dispatch_id') and (
+            not history or history[-1].get('dispatch_id') != snapshot.get('dispatch_id')):
+        history.append(snapshot)
+    current = {
+        'dispatch_id': row['id'],
+        'dispatch_status': row['status'],
+        'brief_status': 'dispatched',
+        'brief': row['brief'],
+        'platform': row['platform'],
+        'dispatch_mode': row['dispatch_mode'],
+        'prompt': row['prompt'],
+        'claimed_paths': list(row.get('claimed_paths') or []),
+        'model_route': row.get('model_route'),
+        'launch_plan': row.get('launch_plan'),
+    }
+    if history:
+        current['previous_dispatches'] = history
+    if superseded:
+        current['superseded_dispatch_ids'] = [item.get('id') for item in superseded]
+    return current
 
 def render_task_prompt(state, task, dispatch):
     paths = dispatch.get('claimed_paths') or ['—']
@@ -431,17 +525,11 @@ def dispatch_tasks(project, state, args):
         previous['status'] = 'superseded'
         previous['updated_at'] = now()
     _save_dispatch(project, state, data)
+    for previous in supersede:
+        _supersede_runtime_state(registry, previous)
     for row in prepared:
-        registry.setdefault('tasks', {}).setdefault(row['task'], {}).update({
-            'dispatch_id': row['id'],
-            'dispatch_status': row['status'],
-            'brief': row['brief'],
-            'platform': row['platform'],
-            'dispatch_mode': row['dispatch_mode'],
-            'prompt': row['prompt'],
-            'model_route': row.get('model_route'),
-            'launch_plan': row.get('launch_plan'),
-        })
+        registry.setdefault('tasks', {})[row['task']] = _current_task_mapping(
+            registry, row, [item for item in supersede if item.get('task') == row['task']])
     save_registry(project, state, registry)
     return {
         'task': state['id'],
@@ -682,7 +770,9 @@ def watch_session_events(project, state, args):
     if limit < 1:
         raise WorkflowError('WATCH_LIMIT_INVALID')
     event_id = getattr(args, 'event_id', None)
-    pending = [event for event in registry.get('outbox', []) if not event.get('delivered') and (not event_id or event.get('id') == event_id)]
+    pending = [event for event in registry.get('outbox', [])
+               if not event.get('delivered') and not event.get('superseded')
+               and (not event_id or event.get('id') == event_id)]
     selected = pending[:limit]
     delivered = 0
     notifications = []
