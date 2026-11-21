@@ -49,11 +49,13 @@ GSP 把“一个主会话管理多个独立开发会话”作为 `cross-session`
 
 如果宿主已经准备好目录，传入 `--worktree <path>` 或 `--worktree-mode bind`。这类目录只做 bound，GSP 取得写租约并记录绑定关系，任务接受后只释放租约，不自动删除目录、分支或宿主文件。显式绑定的目录仍需满足路径和 worktree 预检。
 
-每个批次都会产生唯一的 `Dnnn`、预分配的 `Snn` 提示、独立的 brief、可复制 prompt、平台和派发方式。模型参数会规范化为非敏感的 `model_route`。Codex 目标还会校验宿主能力并生成 `launch_plan`，保存 `codex exec` 的 argv、`CODEX_HOME`、stdin prompt、`started=false` 和 `request_verified=false`；计划写入 dispatch、registry 和任务 prompt。Codex 目标返回 `adapter-ready`，当前主会话随后调用宿主原生的线程创建、worktree 绑定、消息发送和有界等待入口。控制面记录线程返回的身份后，子会话再按同一 `Snn` 注册。GSP Python CLI 不假装拥有 MCP 客户端，也不会在没有宿主回调时伪造线程已创建；生成 launch plan 同样不等于已经发起模型请求。
+每个批次都会产生唯一的 `Dnnn`、预分配的 `Snn` 提示、独立的 brief、可复制 prompt、平台和派发方式。模型参数会规范化为非敏感的 `model_route`。Codex 目标还会校验宿主能力并生成 `launch_plan`，保存 `codex exec` 的 argv、`CODEX_HOME`、stdin prompt、`started=false` 和 `request_verified=false`；计划写入 dispatch、registry 和任务 prompt。Codex 目标返回 `adapter-ready`，当前主会话随后调用宿主原生的线程创建、worktree 绑定、消息发送和有界等待入口。
+
+GSP Python CLI 不假装拥有 MCP 客户端，也不会在没有宿主回调时伪造线程已创建；生成 launch plan 同样不等于已经发起模型请求。宿主实际创建线程或发送 prompt 后，controller 用 `session-launch-receipt --status started --evidence thread:<id>` 记录观察事实。只有拿到真实 worker 响应或等价请求日志，才能再记录 `request-verified`。`blocked` 不会抹掉此前已经启动的事实；`reported`、`accepted`、`integrated`、`cleaned`、`superseded` 等终态不能回退。详细转换表见 [Codex 宿主适配](codex-host-adapter.md)。
 
 没有连接器的平台返回 `manual-required`。主会话把 `sessions/Tnn-prompt.md` 转发给用户，用户只需在对应平台粘贴一次。提示词内容与 Codex 自动发送的内容来自同一份任务记录，包含总体计划、brief、目标、允许路径、接口、测试、依赖、禁止范围和固定 report 命令。任务完成后用户带回 report 路径或报告内容，主会话仍通过 `session-report` 写入同一 registry。
 
-同一批次中可以并行发布多个独立任务。控制面拒绝重复任务、依赖未接受的任务、同一 worktree 的第二个可写任务以及父子或相同路径声明。重试必须显式使用 `--retry`，旧 prompt 会进入 `sessions/history/`，旧 dispatch 记录保留为 `superseded`。
+同一批次中可以并行发布多个独立任务。控制面拒绝重复任务、依赖未接受的任务、同一 worktree 的第二个可写任务以及父子或相同路径声明。重试必须显式使用 `--retry`。重派会先完成依赖、worktree、路径和模型路由校验，再把旧 prompt/brief 复制到 `sessions/history/`；当前文件在新版本原子发布前保持不动，失败时恢复原字节并保留旧 dispatch 为 active。只有新批次成功发布后，同一任务的全部旧 active dispatch 才统一标为 `superseded`，包括此前位于其他 worktree 的记录。旧 worker 会话会失去写租约和 report 资格，未消费的旧 outbox 事件会标成不可投递，当前 task 投影重建为新 dispatch，旧映射保留在 `previous_dispatches`。历史文件和提交都不会删除，`--retry` 也不会允许不同任务共享同一可写 worktree；已经绕过 hook 的外部进程仍属于 `NOT_CHECKED` 边界。
 
 ## 主会话发布和等待时的固定摘要
 

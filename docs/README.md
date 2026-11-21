@@ -9,8 +9,8 @@
 | [计划结构检查接口](reference/plan-quality.md) | 计划结构检查与验收边界 |
 | [分支、worktree 与并行任务](reference/git-topology.md) | 选择矩阵、中文编号、父子任务、集成与恢复 |
 | [主会话协调的跨会话开发模式](reference/cross-session-development.md) | `cross-session` 的 controller/worker、总体计划、批量派发、自动 managed worktree、接受后清理、进度摘要、outbox 和文档命名 |
-| [模型路由](reference/model-routing.md) | provider/profile/model/effort 参数、`model_route`、非秘密 launch plan 和四层状态边界 |
-| [Codex 宿主适配](reference/codex-host-adapter.md) | `codex exec` 启动计划、profile catalog、Desktop 刷新、能力错误和真实请求证据边界 |
+| [模型路由](reference/model-routing.md) | provider/profile/model/effort 参数、只读 route 诊断、非秘密 launch plan、启动收据和四层状态边界 |
+| [Codex 宿主适配](reference/codex-host-adapter.md) | `codex exec` 显式 provider、profile catalog、Desktop 刷新、provider 冲突、事务性重派和启动收据状态机 |
 | [根 README](../README.md) | 安装范围、基本用法和项目说明 |
 
 ## 源码入口
