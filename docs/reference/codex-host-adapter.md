@@ -13,6 +13,8 @@ GSP 的 `model_route` 有四个独立状态，不能合并成一个“已接入�
 
 主会话通过 `session-dispatch` 写入 provider、model profile、model 和 reasoning effort。Codex adapter 使用独立 profile 或 `CODEX_HOME`，生成显式的 `--profile`、`--model`、`-c model_reasoning_effort=...` 和 worktree 参数。适配器默认只生成启动计划，不自动执行付费请求。
 
+profile 可以自带 `model_catalog_json`。宿主诊断会按路由中的 profile 读取该目录并用于 worker 可解析性判断；profile 专属目录不会因此被描述为普通 Desktop 会话已经显示。这样主配置可以保留官方模型目录，worker profile 则独立加载 OpenCode 目录。
+
 这条路径不要求 OpenCode 模型出现在普通新会话的 UI 下拉框里。只要 Codex CLI 能解析启动参数，GSP worker 就可以按路由启动；模型选择器可见性仍单独报告。
 
 ## 普通新会话的刷新边界
