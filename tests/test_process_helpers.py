@@ -31,6 +31,45 @@ class HiddenProcessTests(unittest.TestCase):
             process_helpers.run(['fixture'])
             self.assertNotIn('creationflags', launch.call_args.kwargs)
 
+    def test_environment_context_preserves_unrelated_empty_native_values(self):
+        import json
+        import os
+        import sys
+        from pathlib import Path
+
+        script = """
+import json
+import os
+import subprocess
+import sys
+from process_helpers import environment
+
+with environment('CODEX_HOME', 'fixture-profile'):
+    pass
+
+probe = subprocess.run(
+    [sys.executable, '-c', 'import json, os; print(json.dumps({k: os.environ.get(k) for k in (\"GSP_EMPTY_FIXTURE\", \"CODEX_HOME\")}))'],
+    capture_output=True,
+    text=True,
+    check=True,
+)
+print(probe.stdout.strip())
+"""
+        env = os.environ.copy()
+        env['GSP_EMPTY_FIXTURE'] = ''
+        result = subprocess.run(
+            [sys.executable, '-c', script],
+            cwd=Path(__file__).parent,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {'GSP_EMPTY_FIXTURE': '', 'CODEX_HOME': None},
+        )
+
     def test_commit_number_warning_is_non_blocking(self):
         from pathlib import Path
         from gsp.runtime import commit_number_warnings

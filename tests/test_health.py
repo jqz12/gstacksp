@@ -8,6 +8,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+try:
+    from process_helpers import environment
+except ModuleNotFoundError:
+    from tests.process_helpers import environment
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gsp.runtime import health
 
@@ -19,8 +24,8 @@ class HealthScopesTests(unittest.TestCase):
         root = Path(self.temp.name)
         self.project, self.home = root / 'project', root / 'home'
         self.project.mkdir(); self.home.mkdir()
-        self.env = patch.dict(os.environ, {'CODEX_HOME': str(self.home / '.codex')})
-        self.env.start(); self.addCleanup(self.env.stop)
+        self.env = environment('CODEX_HOME', str(self.home / '.codex'))
+        self.env.__enter__(); self.addCleanup(self.env.__exit__, None, None, None)
 
     def global_install(self):
         profile = self.home / '.codex'

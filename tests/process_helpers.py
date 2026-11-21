@@ -1,4 +1,5 @@
 """Test-owned subprocesses stay hidden on Windows; production is not patched."""
+from contextlib import contextmanager
 import os
 import subprocess
 
@@ -16,6 +17,21 @@ def run(*args, **kwargs):
 
 def popen(*args, **kwargs):
     return subprocess.Popen(*args, **options(kwargs))
+
+
+@contextmanager
+def environment(name, value):
+    """Temporarily set one variable without rebuilding the whole native environment."""
+    missing = object()
+    previous = os.environ.get(name, missing)
+    os.environ[name] = value
+    try:
+        yield
+    finally:
+        if previous is missing:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
 
 
 def document(root, task, kind):

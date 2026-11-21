@@ -8,6 +8,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+try:
+    from process_helpers import environment
+except ModuleNotFoundError:
+    from tests.process_helpers import environment
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gsp.runtime import WorkflowError, _github_user_upgrade, health
 from gsp.user_install import UserInstall
@@ -31,8 +36,8 @@ class HealthUpdateTests(unittest.TestCase):
             'source': 'E:/GstackSP', 'version': '0.8.10',
             'files': {'skills/gsp-workflow/SKILL.md': hashlib.sha256(skill.read_bytes()).hexdigest()},
         }), encoding='utf-8')
-        self.env = patch.dict(os.environ, {'CODEX_HOME': str(self.profile)})
-        self.env.start(); self.addCleanup(self.env.stop)
+        self.env = environment('CODEX_HOME', str(self.profile))
+        self.env.__enter__(); self.addCleanup(self.env.__exit__, None, None, None)
 
     def result(self, **values):
         row = {
