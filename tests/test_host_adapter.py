@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from gsp.host_adapter import inspect_codex_host, normalize_route, route_health
@@ -37,6 +38,37 @@ class HostAdapterTests(unittest.TestCase):
             self.assertNotIn("secret", json.dumps(result))
 
     def test_catalog_membership_does_not_claim_desktop_visibility(self):
+        host = {"providers": ["magpie"], "catalog_models": ["opencode-go/qwen4-max"], "profiles": ["worker-low-cost"]}
+        result = route_health({"provider": "magpie", "model": "opencode-go/qwen4-max", "model_profile": "worker-low-cost"}, host)
+        self.assertFalse(result["desktop_visible"])
+        self.assertFalse(result["request_verified"])
+        self.assertEqual(result["status"], "NOT_CHECKED")
+
+    @patch('gsp.host_adapter.subprocess.run')
+    def test_inspect_detects_exec_and_reasoning_config_support(self, run):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            cli = home / 'codex.exe'
+            cli.write_bytes(b'')
+            (home / 'config.toml').write_text(
+                'model = "gpt-6.1-sol"\n'
+                'model_reasoning_effort = "max"\n', encoding='utf-8')
+            run.return_value = SimpleNamespace(stdout=(
+                'Usage: codex [OPTIONS] <COMMAND>\n'
+                '  exec  Run Codex non-interactively\n'
+                '  -c, --config <key=value>\n'))
+            result = inspect_codex_host(home, cli_path=cli)
+            self.assertTrue(result['cli_supports']['exec'])
+            self.assertTrue(result['cli_supports']['reasoning_effort'])
+
+    def test_route_health_separates_desktop_visibility_from_request_verification(self):
+        host = {
+            "providers": ["magpie"],
+            "catalog_models": ["opencode-go/qwen4-max"],
+            "profiles": ["worker-low-cost"],
+            "desktop_visible_models": ["opencode-go/qwen4-max"],
+        }
+        result = route_health({"provider": "magpie", "model": "opencode-go/qwen4-max", "model_profile": "worker-low-cost"}, host)
         host = {"providers": ["magpie"], "catalog_models": ["opencode-go/qwen4-max"], "profiles": ["worker-low-cost"]}
         result = route_health({"provider": "magpie", "model": "opencode-go/qwen4-max", "model_profile": "worker-low-cost"}, host)
         self.assertFalse(result["desktop_visible"])

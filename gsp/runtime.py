@@ -1678,6 +1678,10 @@ def parser():
     q.add_argument('--dispatch-mode', choices=['auto', 'adapter', 'manual'])
     q.add_argument('--path', action='append', default=[], metavar='TASK=PATH')
     q.add_argument('--worktree', action='append', default=[], metavar='TASK=PATH')
+    q.add_argument('--provider', action='append', default=[], metavar='[TASK=]PROVIDER')
+    q.add_argument('--model-profile', action='append', default=[], metavar='[TASK=]PROFILE')
+    q.add_argument('--model', action='append', default=[], metavar='[TASK=]MODEL')
+    q.add_argument('--reasoning-effort', action='append', default=[], metavar='[TASK=]EFFORT')
     q.add_argument('--worktree-mode', choices=['auto', 'bind'], default='auto',
                    help='create GSP-managed worktrees or bind explicit paths')
     q.add_argument('--max-parallel', type=int, default=4)

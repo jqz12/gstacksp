@@ -2,6 +2,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from gsp.dispatch import (
     clean_session_worktree,
@@ -64,6 +65,68 @@ class DispatchControlPlaneTests(unittest.TestCase):
         self.assertEqual([row['status'] for row in result['dispatches']], ['adapter-ready', 'manual-required'])
         self.assertIn('session-report', (self.root / self.state['doc_dir'] / 'sessions' / 'T01-prompt.md').read_text(encoding='utf-8'))
         self.assertIn('T02', (self.root / self.state['doc_dir'] / 'sessions' / 'T02-prompt.md').read_text(encoding='utf-8'))
+
+    @patch('gsp.dispatch.inspect_codex_host')
+    def test_codex_dispatch_route_builds_and_records_a_launch_plan(self, inspect_host):
+        inspect_host.return_value = {
+            'codex_home': 'C:/Users/example/.codex',
+            'providers': ['magpie'],
+            'catalog_models': [],
+            'profiles': ['magpie'],
+            'profile_catalogs': {
+                'magpie': {'catalog_models': ['opencode-go/deepseek-v4.1-flash']},
+            },
+            'profile_providers': {'magpie': ['magpie']},
+            'cli_path': 'codex',
+            'cli_supports': {'exec': True, 'profile': True, 'model': True, 'reasoning_effort': True},
+        }
+        child = self.root / 'child-routed'
+        child.mkdir()
+        result = dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--target', 'T01=codex', '--path', 'T01=src/data',
+            '--worktree', f'T01={child}',
+            '--provider', 'T01=magpie', '--model-profile', 'T01=magpie',
+            '--model', 'T01=opencode-go/deepseek-v4.1-flash',
+            '--reasoning-effort', 'T01=max'))
+        row = result['dispatches'][0]
+        self.assertEqual(row['model_route'], {
+            'provider': 'magpie',
+            'model_profile': 'magpie',
+            'model': 'opencode-go/deepseek-v4.1-flash',
+            'reasoning_effort': 'max',
+        })
+        self.assertEqual(row['launch_plan']['argv'], [
+            'codex', 'exec', '--profile', 'magpie',
+            '--model', 'opencode-go/deepseek-v4.1-flash',
+            '-c', 'model_reasoning_effort="max"',
+            '-C', str(child.resolve()), '-',
+        ])
+        self.assertEqual(row['launch_plan']['env'], {'CODEX_HOME': 'C:\\Users\\example\\.codex'})
+        self.assertIn('# T01 子会话启动提示词', row['launch_plan']['stdin'])
+        self.assertFalse(row['launch_plan']['started'])
+        self.assertEqual(row['launch_plan']['status'], 'NOT_CHECKED')
+        prompt = (self.root / row['prompt']).read_text(encoding='utf-8')
+        self.assertIn('opencode-go/deepseek-v4.1-flash', prompt)
+        self.assertIn('NOT_CHECKED', prompt)
+
+    @patch('gsp.dispatch.inspect_codex_host')
+    def test_codex_dispatch_rejects_an_unsupported_route_before_publishing(self, inspect_host):
+        inspect_host.return_value = {
+            'providers': ['magpie'],
+            'catalog_models': ['opencode-go/deepseek-v4.1-flash'],
+            'profiles': ['magpie'],
+            'profile_catalogs': {},
+            'profile_providers': {},
+            'cli_path': 'codex',
+            'cli_supports': {'profile': True, 'model': False, 'reasoning_effort': True},
+        }
+        with self.assertRaisesRegex(WorkflowError, r'DISPATCH_MODEL_ROUTE_UNSUPPORTED T01.*cli_does_not_support_model'):
+            dispatch_tasks(self.project, self.state, self.args(
+                '--task', 'T01', '--target', 'T01=codex', '--path', 'T01=src/data',
+                '--provider', 'T01=magpie',
+                '--model', 'T01=opencode-go/deepseek-v4.1-flash'))
+        self.assertFalse(
+            (self.root / self.state['doc_dir'] / 'sessions' / 'T01-prompt.md').exists())
 
     def test_zcode_is_a_manual_required_worker_platform(self):
         result = dispatch_tasks(self.project, self.state, self.args(

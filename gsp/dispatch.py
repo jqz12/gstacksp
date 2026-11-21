@@ -1,9 +1,12 @@
 """Task dispatch, progress, durable event delivery and cleanup controls."""
 from pathlib import Path, PurePosixPath
+import json
 import re
 import uuid
 
+from .host_adapter import inspect_codex_host, normalize_route
 from .runtime import WorkflowError, atomic, inside, now, read, redact
+from .worker_launcher import HostAdapterError, build_codex_worker_plan
 from .sessions import _save as save_registry
 from .sessions import load_registry
 from .worktree_lifecycle import cleanup_worktree, prepare_worktree
@@ -49,6 +52,8 @@ def load_dispatch(project, state):
         row.setdefault('base', None)
         row.setdefault('cleanup_attempts', 0)
         row.setdefault('cleanup_error', None)
+        row.setdefault('model_route', None)
+        row.setdefault('launch_plan', None)
     return data
 
 
@@ -168,6 +173,24 @@ def render_task_prompt(state, task, dispatch):
     brief_path = dispatch.get('brief') or f"{state.get('doc_dir', 'docs/work')}/sessions/{task['id']}-brief.md"
     interfaces = task.get('interfaces') or ['遵循总体 plan.md 中的公共接口约束']
     tests = task.get('tests') or [str(task.get('acceptance') or '完成任务验收并提交 report')]
+    route_section = []
+    route = dispatch.get('model_route')
+    if route:
+        route_section = [
+            '## 模型路由', '',
+            f"- provider：{route.get('provider') or 'inherit'}",
+            f"- profile：{route.get('model_profile') or '未指定'}",
+            f"- model：{route.get('model') or '由 profile 决定'}",
+            f"- reasoning effort：{route.get('reasoning_effort') or '由 profile 决定'}",
+        ]
+        plan = dispatch.get('launch_plan')
+        if plan:
+            route_section += [
+                f"- launch argv：`{json.dumps(plan.get('argv') or [], ensure_ascii=False)}`",
+                f"- CODEX_HOME：`{(plan.get('env') or {}).get('CODEX_HOME') or '继承当前宿主环境'}`",
+                '- 真实请求：NOT_CHECKED；主会话只保存可审计启动计划，不自动发起付费请求。',
+            ]
+        route_section.append('')
     return '\n'.join([
         f"# {task['id']} 子会话启动提示词", '',
         f"- GSP：{state.get('number') or state['id']}",
@@ -192,6 +215,7 @@ def render_task_prompt(state, task, dispatch):
         *[f'- {item}' for item in tests], '',
         '## 依赖', '',
         *[f'- {item}' for item in dependencies], '',
+        *route_section,
         '## 禁止范围', '',
         '- 不修改总体 plan、父状态或其他任务的文件。',
         '- 不扩大到未声明的路径、公共契约、凭据或外部动作。', '',
@@ -216,6 +240,10 @@ def dispatch_tasks(project, state, args):
     target_map, common_platform = _assignment(getattr(args, 'target', []), 'target')
     path_map, common_path = _assignment(getattr(args, 'path', []), 'path')
     worktree_map, common_worktree = _assignment(getattr(args, 'worktree', []), 'worktree')
+    provider_map, common_provider = _assignment(getattr(args, 'provider', []), 'provider')
+    profile_map, common_profile = _assignment(getattr(args, 'model_profile', []), 'model-profile')
+    model_map, common_model = _assignment(getattr(args, 'model', []), 'model')
+    effort_map, common_effort = _assignment(getattr(args, 'reasoning_effort', []), 'reasoning-effort')
     requested = list(getattr(args, 'tasks', []) or [])
     if not requested:
         accepted = _accepted_task_ids(state, data)
@@ -239,6 +267,7 @@ def dispatch_tasks(project, state, args):
     supersede = []
     allocated = []
     created_documents = []
+    codex_host = None
     try:
         for index, task_id in enumerate(requested):
             task = tasks_by_id.get(task_id)
@@ -257,6 +286,17 @@ def dispatch_tasks(project, state, args):
             mode = (getattr(args, 'dispatch_mode', None) or ('auto' if platform == 'codex' else 'manual')).lower()
             if mode not in DISPATCH_MODES:
                 raise WorkflowError('DISPATCH_MODE_INVALID ' + mode)
+            route_values = {
+                'provider': provider_map.get(task_id) or common_provider,
+                'model_profile': profile_map.get(task_id) or common_profile,
+                'model': model_map.get(task_id) or common_model,
+                'reasoning_effort': effort_map.get(task_id) or common_effort,
+            }
+            route_present = any(value is not None for value in route_values.values())
+            try:
+                model_route = normalize_route(route_values) if route_present else None
+            except ValueError as exc:
+                raise WorkflowError(f'DISPATCH_MODEL_ROUTE_INVALID {task_id}: {exc}') from exc
             requested_worktree = worktree_map.get(task_id) or common_worktree
             raw_path = path_map.get(task_id) or common_path
             if not raw_path:
@@ -276,6 +316,8 @@ def dispatch_tasks(project, state, args):
                 'updated_at': now(),
                 'thread_id': None,
                 'prompt': None,
+                'model_route': model_route,
+                'launch_plan': None,
             }
             prepared_row = prepare_worktree(
                 project, state, task, candidate,
@@ -314,10 +356,27 @@ def dispatch_tasks(project, state, args):
                     if target.exists():
                         archive = human / 'history' / f"{target.stem}-{row['id']}{target.suffix}"
                         target.replace(archive)
+            if row.get('platform') == 'codex' and row.get('model_route'):
+                if codex_host is None:
+                    codex_host = inspect_codex_host()
+                initial_prompt = render_task_prompt(state, task, row)
+                try:
+                    plan = build_codex_worker_plan(
+                        row['model_route'], codex_host, row['worktree'], initial_prompt,
+                        codex_home=codex_host.get('codex_home'),
+                    )
+                except HostAdapterError as exc:
+                    raise WorkflowError(
+                        f'DISPATCH_MODEL_ROUTE_UNSUPPORTED {row["task"]}: {exc}') from exc
+                row['launch_plan'] = plan
+                prompt_text = render_task_prompt(state, task, row)
+                plan['stdin'] = prompt_text
+            else:
+                prompt_text = render_task_prompt(state, task, row)
             row['brief'] = _relative(project, brief_target)
-            atomic(brief_target, render_task_prompt(state, task, row).replace('子会话启动提示词', '子会话 Brief', 1))
+            atomic(brief_target, prompt_text.replace('子会话启动提示词', '子会话 Brief', 1))
             created_documents.append(brief_target)
-            atomic(prompt_target, render_task_prompt(state, task, row))
+            atomic(prompt_target, prompt_text)
             created_documents.append(prompt_target)
             row['prompt'] = _relative(project, prompt_target)
             data['dispatches'].append(row)
@@ -344,13 +403,15 @@ def dispatch_tasks(project, state, args):
             'platform': row['platform'],
             'dispatch_mode': row['dispatch_mode'],
             'prompt': row['prompt'],
+            'model_route': row.get('model_route'),
+            'launch_plan': row.get('launch_plan'),
         })
     save_registry(project, state, registry)
     return {
         'task': state['id'],
         'batch_size': len(prepared),
         'dispatches': prepared,
-        'next_action': 'Codex host adapter creates threads for adapter-ready requests; user forwards manual-required prompts to ZCode or other manual platforms.',
+        'next_action': 'Codex host adapter creates threads from launch_plan for routed adapter-ready requests; user forwards manual-required prompts to ZCode or other manual platforms.',
     }
 
 
