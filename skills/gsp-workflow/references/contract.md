@@ -53,6 +53,10 @@ Git 生命周期由 health route、workflow 和按需 `gsp-git` 共同承接：h
 
 Claude 的 PreToolUse hook 只在插件/hook 真正启用时拦截 Edit/Write/NotebookEdit；项目技能目录安装本身不激活 hook。Codex 使用 `check-path` 并遵循范围；已安装且受信任的原生 hooks 可检查支持的直接 apply_patch 路径，PowerShell/Bash 不在完整拦截范围。通过 `run` 启动的命令会比较项目文件的前后指纹，发现越界后阻塞，不回滚；它是事后检测，不是沙箱，不覆盖项目外写入和忽略目录。必须据实说明这些限制。
 
+长命令或 stdout/stderr 被重定向时，执行说明必须同时提供日志路径、PID 或 exec session、状态/退出码来源和预期产物。相同空 `write_stdin` 最多等待两次，第三次前必须读取日志尾部、检查日志大小、进程、退出码或产物。等待时长和输出上限变化不构成新的观测。Codex wait-guard 只在实际受信并收到 `PreToolUse` 时提供拒绝保护，状态和审计只保存哈希化标识、计数与时间，真实宿主触发仍是 `NOT_CHECKED`。
+
+Codex direct-edit hook 解析 `apply_patch`、`Edit`、`Write` 和 `NotebookEdit` 的目标路径时，目标 source worktree 优先于控制根 `cwd` 选择任务归属。控制根只作为项目定位和流程文档回退。当前任务的目标 worktree 通过 scope、branch、lease 和任务状态继续检查，其他任务、未绑定路径、链接路径和多任务冲突继续拒绝。
+
 ## 连续执行与授权
 
 用户明确启动无人值守才设置 `new --mode unattended --quote ...`。设计仍须先确认；确认后计划、普通技术选择、测试修复和交付准备连续推进。记录推荐决定、理由和代价，不问“继续吗”。只在无法可靠完成目标、重要歧义、连续修复达到设定次数、工具/额度阻塞、下一步超出授权时保留状态并说明。

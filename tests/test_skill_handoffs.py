@@ -94,3 +94,22 @@ class SkillHandoffGenerationTests(unittest.TestCase):
                 self.assertIn('cleanup-pending', text)
                 self.assertIn('managed worktree', text)
         self.assertIn('session-clean --retry', reference)
+
+    def test_long_command_observability_reaches_generated_execute_skill(self):
+        source = (ROOT / 'scripts/build_skills.py').read_text(encoding='utf-8')
+        execute = (ROOT / 'skills/gsp-execute/SKILL.md').read_text(encoding='utf-8')
+        contract = (ROOT / 'skills/gsp-workflow/references/contract.md').read_text(encoding='utf-8')
+        hook_reference = (ROOT / 'skills/gsp-workflow/references/codex-hooks.md').read_text(encoding='utf-8')
+        user_reference = (ROOT / 'docs/Codex全局hooks.md').read_text(encoding='utf-8')
+        for text in (source, execute):
+            with self.subTest(document='execute guidance'):
+                self.assertIn('write_stdin', text)
+                self.assertIn('两次', text)
+                self.assertIn('日志', text)
+                self.assertIn('进程', text)
+                self.assertIn('退出码', text)
+                self.assertIn('产物', text)
+        self.assertIn('wait-guard', hook_reference)
+        self.assertIn('NOT_CHECKED', hook_reference)
+        self.assertIn('目标路径', contract)
+        self.assertIn('wait-guard', user_reference)
