@@ -15,6 +15,6 @@ GSP 把模型偏好作为任务路由保存，而不是把它混入 prompt 的�
 
 ## 四层证据
 
-`configured`、`resolvable`、`desktop_visible` 和 `request_verified` 必须分别记录。配置文件或 profile catalog 中存在模型标识，只能证明配置与解析状态；不能证明 Desktop 选择器已经刷新，也不能证明真实请求已经完成。
+`configured`、`resolvable`、`desktop_visible` 和 `request_verified` 必须分别记录。配置文件或 profile catalog 中存在模型标识，只能证明配置与解析状态；不能证明 Desktop 选择器已经刷新，也不能证明真实请求已经完成。因此 catalog 命中不会自动设置 `desktop_visible`，只有显式 Desktop/宿主观察证据才能给出 true。
 
 修改模型目录后先重新打开选择器，必要时完全重启 Codex。Desktop 观察、CLI 启动计划和真实模型请求是三种不同证据，不能相互替代。没有执行真实请求时，`request_verified=false` 与 `status=NOT_CHECKED` 必须保留。

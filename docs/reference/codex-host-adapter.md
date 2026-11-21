@@ -47,6 +47,8 @@ profile 可以自带 `model_catalog_json`。宿主诊断会读取路由指定 pr
 
 这条路径不要求 OpenCode 模型出现在普通新会话的 UI 下拉框里。只要 Codex CLI 能解析启动参数，GSP worker 就可以按路由启动；模型选择器可见性仍单独报告。
 
+宿主诊断不会仅凭 catalog 命中就把 `desktop_visible` 设为 true。只有调用方提供显式的 `desktop_visible_models` Desktop/宿主观察证据时，`route_health` 才返回 true；否则即使模型可解析，也保持 false，并继续要求真实 UI 或宿主事件确认。
+
 ## 普通新会话的刷新边界
 
 如果用户刚修改了 `config.toml` 或模型目录，已经运行的 Codex Desktop 进程可能继续使用旧的模型目录快照。应先重新打开模型选择器；仍没有变化时完全退出并重新启动 Codex，再进行一次新会话观察。这个操作只刷新宿主缓存，不改变 GSP 任务路由。
