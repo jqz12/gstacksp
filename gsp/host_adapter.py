@@ -73,7 +73,12 @@ def _catalog_metadata(home: Path, catalog_name: Optional[str]) -> Dict[str, Any]
 
 def _config_metadata(config_path: Path) -> Dict[str, Any]:
     """Extract known safe config metadata without returning secret values."""
-    result: Dict[str, Any] = {"model": None, "model_catalog_json": None, "providers": []}
+    result: Dict[str, Any] = {
+        "model": None,
+        "model_provider": None,
+        "model_catalog_json": None,
+        "providers": [],
+    }
     try:
         lines = config_path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError):
@@ -90,7 +95,7 @@ def _config_metadata(config_path: Path) -> Dict[str, Any]:
             continue
         if section:
             continue
-        match = re.match(r'^(model|model_catalog_json)\s*=\s*(["\'])(.*?)\2\s*$', stripped)
+        match = re.match(r'^(model|model_provider|model_catalog_json)\s*=\s*(["\'])(.*?)\2\s*$', stripped)
         if match:
             result[match.group(1)] = match.group(3)
     return result
@@ -106,12 +111,14 @@ def inspect_codex_host(codex_home: Optional[os.PathLike[str] | str] = None,
     base_catalog = _catalog_metadata(home, catalog_name)
     profile_paths = sorted(home.glob("*.config.toml"))
     profile_catalogs: Dict[str, Dict[str, Any]] = {}
+    profile_providers: Dict[str, list[str]] = {}
     for profile_path in profile_paths:
         profile_name = profile_path.stem.removesuffix(".config")
         profile_meta = _config_metadata(profile_path)
         profile_catalogs[profile_name] = _catalog_metadata(
             home, profile_meta.get("model_catalog_json") or catalog_name
         )
+        profile_providers[profile_name] = sorted(profile_meta.get("providers", []))
     cli = Path(cli_path) if cli_path else (Path(shutil.which("codex") or "") if shutil.which("codex") else None)
     cli_supports = {"profile": False, "model": False, "reasoning_effort": False}
     if cli and cli.exists():
@@ -126,10 +133,12 @@ def inspect_codex_host(codex_home: Optional[os.PathLike[str] | str] = None,
         "codex_home": str(home),
         "config_exists": config.is_file(),
         "configured_model": meta.get("model"),
+        "configured_model_provider": meta.get("model_provider"),
         **base_catalog,
         "providers": sorted(meta.get("providers", [])),
         "profiles": sorted(profile_catalogs),
         "profile_catalogs": profile_catalogs,
+        "profile_providers": profile_providers,
         "cli_path": str(cli) if cli else None,
         "cli_supports": cli_supports,
     }
@@ -140,10 +149,15 @@ def route_health(route: Optional[Dict[str, Any]], host: Dict[str, Any]) -> Dict[
     normalized = normalize_route(route)
     model = normalized.get("model")
     provider = normalized.get("provider")
-    configured = provider == "inherit" or provider in host.get("providers", []) or provider == "magpie"
+    profile = normalized.get("model_profile")
+    profile_providers = (host.get("profile_providers") or {}).get(profile, [])
+    configured = (provider == "inherit"
+                  or provider in host.get("providers", [])
+                  or provider in profile_providers)
     resolvable = True
     reasons: list[str] = []
-    profile = normalized.get("model_profile")
+    if not configured:
+        reasons.append("provider_not_configured")
     catalog = set(host.get("catalog_models", []))
     if profile:
         profile_catalog = (host.get("profile_catalogs") or {}).get(profile)
