@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .host_adapter import normalize_route, route_health
+from .host_adapter import normalize_route, profile_provider_mismatch, route_health
 
 
 class HostAdapterError(ValueError):
@@ -20,12 +20,15 @@ def build_codex_worker_plan(route: Optional[Dict[str, Any]], host: Dict[str, Any
     if not isinstance(prompt, str) or not prompt.strip() or any(ord(c) < 32 and c not in "\r\n\t" for c in prompt):
         raise HostAdapterError("invalid worker prompt")
     route = normalize_route(route)
+    profile = route.get("model_profile")
+    provider = route.get("provider")
+    if profile_provider_mismatch(route, host):
+        raise HostAdapterError("CHANGE_REQUEST: profile_provider_mismatch")
     health = route_health(route, host)
     if not health["configured"] or not health["resolvable"]:
         raise HostAdapterError("CHANGE_REQUEST: " + ",".join(health["reasons"] or ["route_not_supported"]))
     supports = host.get("cli_supports") or {}
-    required = ["exec"]
-    profile = route.get("model_profile")
+    required = ["exec", "workdir"]
     model = route.get("model")
     effort = route.get("reasoning_effort")
     if profile:
@@ -34,12 +37,16 @@ def build_codex_worker_plan(route: Optional[Dict[str, Any]], host: Dict[str, Any
         required.append("model")
     if effort:
         required.append("reasoning_effort")
+    if provider != "inherit":
+        required.append("config_override")
     missing = [name for name in required if not supports.get(name)]
     if missing:
         raise HostAdapterError(
             "CHANGE_REQUEST: " + ",".join("cli_does_not_support_" + name for name in missing))
     exe = str(codex_executable or host.get("cli_path") or "codex")
     argv = [exe, "exec"]
+    if provider != "inherit":
+        argv += ["-c", f'model_provider="{provider}"']
     if profile:
         argv += ["--profile", profile]
     if model:
@@ -49,9 +56,9 @@ def build_codex_worker_plan(route: Optional[Dict[str, Any]], host: Dict[str, Any
     argv += ["-C", str(Path(worktree)), "-"]
     env = {}
     if codex_home:
-        env["CODEX_HOME"] = str(Path(codex_home))
+        env["CODEX_HOME"] = str(Path(codex_home).resolve())
     return {
-        "provider": route["provider"],
+        "provider": provider,
         "route": route,
         "argv": argv,
         "env": env,

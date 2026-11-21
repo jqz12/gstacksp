@@ -53,27 +53,20 @@ class HostAdapterTests(unittest.TestCase):
             (home / 'config.toml').write_text(
                 'model = "gpt-6.1-sol"\n'
                 'model_reasoning_effort = "max"\n', encoding='utf-8')
-            run.return_value = SimpleNamespace(stdout=(
+            run.return_value = SimpleNamespace(returncode=0, stdout=(
                 'Usage: codex [OPTIONS] <COMMAND>\n'
                 '  exec  Run Codex non-interactively\n'
-                '  -c, --config <key=value>\n'))
+                '  -c, --config <key=value>\n'
+                '  -m, --model <MODEL>\n'
+                '  -p, --profile <PROFILE>\n'
+                '  -C, --cd <DIR>\n'))
             result = inspect_codex_host(home, cli_path=cli)
             self.assertTrue(result['cli_supports']['exec'])
             self.assertTrue(result['cli_supports']['reasoning_effort'])
-
-    def test_route_health_separates_desktop_visibility_from_request_verification(self):
-        host = {
-            "providers": ["magpie"],
-            "catalog_models": ["opencode-go/qwen4-max"],
-            "profiles": ["worker-low-cost"],
-            "desktop_visible_models": ["opencode-go/qwen4-max"],
-        }
-        result = route_health({"provider": "magpie", "model": "opencode-go/qwen4-max", "model_profile": "worker-low-cost"}, host)
-        host = {"providers": ["magpie"], "catalog_models": ["opencode-go/qwen4-max"], "profiles": ["worker-low-cost"]}
-        result = route_health({"provider": "magpie", "model": "opencode-go/qwen4-max", "model_profile": "worker-low-cost"}, host)
-        self.assertFalse(result["desktop_visible"])
-        self.assertFalse(result["request_verified"])
-        self.assertEqual(result["status"], "NOT_CHECKED")
+            self.assertTrue(result['cli_supports']['config_override'])
+            self.assertTrue(result['cli_supports']['model'])
+            self.assertTrue(result['cli_supports']['profile'])
+            self.assertTrue(result['cli_supports']['workdir'])
 
     def test_route_health_separates_desktop_visibility_from_request_verification(self):
         host = {
@@ -88,6 +81,32 @@ class HostAdapterTests(unittest.TestCase):
         self.assertTrue(result["desktop_visible"])
         self.assertFalse(result["request_verified"])
         self.assertEqual(result["status"], "NOT_CHECKED")
+
+    def test_health_rejects_a_provider_that_conflicts_with_the_selected_profile(self):
+        host = {
+            "providers": ["magpie", "acme"],
+            "catalog_models": ["opencode-go/qwen4-max"],
+            "profiles": ["worker-low-cost"],
+            "profile_catalogs": {
+                "worker-low-cost": {
+                    "catalog_models": ["opencode-go/qwen4-max"],
+                    "configured_model": "opencode-go/qwen4-max",
+                }
+            },
+            "profile_providers": {"worker-low-cost": ["magpie"]},
+            "profile_model_providers": {"worker-low-cost": "magpie"},
+        }
+        result = route_health(
+            {
+                "provider": "acme",
+                "model_profile": "worker-low-cost",
+                "model": "opencode-go/qwen4-max",
+            },
+            host,
+        )
+        self.assertFalse(result["configured"])
+        self.assertFalse(result["resolvable"])
+        self.assertIn("profile_provider_mismatch", result["reasons"])
 
     def test_profile_catalog_and_provider_resolve_without_claiming_desktop_visibility(self):
         with tempfile.TemporaryDirectory() as tmp:

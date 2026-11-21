@@ -2,6 +2,7 @@
 from pathlib import Path, PurePosixPath
 import json
 import re
+import shutil
 import uuid
 
 from .host_adapter import inspect_codex_host, normalize_route
@@ -13,8 +14,14 @@ from .worktree_lifecycle import cleanup_worktree, prepare_worktree
 
 PLATFORMS = {'codex', 'claude', 'zcode', 'manual', 'other'}
 DISPATCH_MODES = {'auto', 'adapter', 'manual'}
-ACTIVE_DISPATCH = {'adapter-ready', 'running', 'reported', 'manual-required'}
+ACTIVE_DISPATCH = {'adapter-ready', 'running', 'reported', 'manual-required', 'blocked'}
 CLEANUP_RESULTS = {'archived', 'released', 'removed'}
+LAUNCH_RECEIPT_TRANSITIONS = {
+    'adapter-ready': {'BLOCKED', 'STARTED'},
+    'running': {'BLOCKED', 'STARTED', 'REQUEST_VERIFIED'},
+    'blocked': {'BLOCKED', 'STARTED'},
+}
+LAUNCH_RECEIPT_CLOSED = {'reported', 'accepted', 'integrated', 'cleaned', 'superseded'}
 
 
 def _folders(project, state):
@@ -166,6 +173,27 @@ def _rollback_prepared_worktrees(project, prepared):
     return pending
 
 
+def _archive_document(target, human, dispatch_id):
+    """Copy a retry predecessor without moving the current deliverable away."""
+    archive = human / 'history' / f"{target.stem}-{dispatch_id}{target.suffix}"
+    if archive.exists():
+        archive = human / 'history' / (
+            f"{target.stem}-{dispatch_id}-{uuid.uuid4().hex[:8]}{target.suffix}")
+    shutil.copy2(target, archive)
+    return target, archive
+
+
+def _restore_archived_documents(archives):
+    errors = []
+    for target, archive in reversed(archives):
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(archive, target)
+        except OSError as exc:
+            errors.append(f'{target}: {exc}')
+    return errors
+
+
 def render_task_prompt(state, task, dispatch):
     paths = dispatch.get('claimed_paths') or ['—']
     dependencies = task.get('depends') or ['无']
@@ -267,6 +295,7 @@ def dispatch_tasks(project, state, args):
     supersede = []
     allocated = []
     created_documents = []
+    archived_documents = []
     codex_host = None
     try:
         for index, task_id in enumerate(requested):
@@ -335,10 +364,13 @@ def dispatch_tasks(project, state, args):
                     raise WorkflowError('DISPATCH_PATH_CONFLICT ' + task_id)
                 raise WorkflowError('DISPATCH_WORKTREE_CONFLICT ' + task_id)
             for previous in data.get('dispatches', []):
-                if previous.get('status') not in ACTIVE_DISPATCH or previous.get('worktree') != str(worktree_path):
+                if previous.get('status') not in ACTIVE_DISPATCH:
                     continue
                 if previous.get('task') == task_id and getattr(args, 'retry', False):
-                    supersede.append(previous)
+                    if all(row.get('id') != previous.get('id') for row in supersede):
+                        supersede.append(previous)
+                    continue
+                if previous.get('worktree') != str(worktree_path):
                     continue
                 if any(_overlap(left, right) for left in claimed for right in previous.get('claimed_paths') or []):
                     raise WorkflowError('DISPATCH_PATH_CONFLICT ' + task_id)
@@ -354,8 +386,8 @@ def dispatch_tasks(project, state, args):
                     raise WorkflowError('DISPATCH_PROMPT_EXISTS ' + row['task'])
                 for target in (prompt_target, brief_target):
                     if target.exists():
-                        archive = human / 'history' / f"{target.stem}-{row['id']}{target.suffix}"
-                        target.replace(archive)
+                        archived_documents.append(
+                            _archive_document(target, human, row['id']))
             if row.get('platform') == 'codex' and row.get('model_route'):
                 if codex_host is None:
                     codex_host = inspect_codex_host()
@@ -386,7 +418,11 @@ def dispatch_tasks(project, state, args):
                 document.unlink(missing_ok=True)
             except OSError:
                 pass
+        restore_errors = _restore_archived_documents(archived_documents)
         pending = _rollback_prepared_worktrees(project, allocated)
+        if restore_errors:
+            raise WorkflowError(
+                'DISPATCH_ROLLBACK_RESTORE_PENDING ' + '; '.join(restore_errors)) from exc
         if pending:
             detail = '; '.join(f"{item['path']} {item['cleanup_error']}" for item in pending)
             raise WorkflowError(f'DISPATCH_ROLLBACK_CLEANUP_PENDING {detail}') from exc
@@ -415,6 +451,72 @@ def dispatch_tasks(project, state, args):
     }
 
 
+
+def record_launch_receipt(project, state, args):
+    """Record an observed worker launch state without fabricating execution."""
+    registry = load_registry(project, state)
+    controller = next((row for row in registry.get('sessions', [])
+                       if row.get('id') == args.session), None)
+    if not controller or controller.get('role') != 'controller' or registry.get('controller_session') != args.session:
+        raise WorkflowError('CONTROLLER_LEASE_REQUIRED')
+    data = load_dispatch(project, state)
+    row = next((item for item in data.get('dispatches', [])
+                if item.get('id') == args.dispatch and item.get('task') == args.task), None)
+    if not row:
+        raise WorkflowError('WORKER_LAUNCH_DISPATCH_NOT_FOUND ' + args.dispatch)
+    previous_status = row.get('status')
+    if previous_status in LAUNCH_RECEIPT_CLOSED:
+        raise WorkflowError('WORKER_LAUNCH_TERMINAL ' + str(previous_status))
+    if not isinstance(row.get('launch_plan'), dict):
+        raise WorkflowError('WORKER_LAUNCH_PLAN_REQUIRED ' + args.task)
+    status = args.status.replace('-', '_').upper()
+    if status not in LAUNCH_RECEIPT_TRANSITIONS.get(previous_status, set()):
+        raise WorkflowError(
+            f'WORKER_LAUNCH_TRANSITION_INVALID {previous_status}->{status}')
+    reason = str(args.reason or '').strip()
+    if not reason:
+        raise WorkflowError('WORKER_LAUNCH_REASON_REQUIRED')
+    evidence = [
+        redact(str(value).strip())
+        for value in (getattr(args, 'evidence', None) or [])
+        if str(value).strip()
+    ]
+    if status in {'STARTED', 'REQUEST_VERIFIED'} and not evidence:
+        raise WorkflowError(
+            'WORKER_LAUNCH_EVIDENCE_REQUIRED '
+            f'{status.lower()} needs a non-empty evidence identifier')
+    receipt = {
+        'schema': 1,
+        'at': now(),
+        'dispatch_id': row['id'],
+        'task': args.task,
+        'status': status,
+        'previous_status': previous_status,
+        'reason': redact(reason),
+        'evidence': evidence,
+        'recorded_by': args.session,
+        'source': 'caller-observed',
+    }
+    plan = row['launch_plan']
+    plan['status'] = status
+    plan['started'] = bool(plan.get('started')) or status in {'STARTED', 'REQUEST_VERIFIED'}
+    plan['request_verified'] = (
+        bool(plan.get('request_verified')) or status == 'REQUEST_VERIFIED')
+    row['status'] = 'blocked' if status == 'BLOCKED' else 'running'
+    row['launch_receipt'] = receipt
+    row.setdefault('launch_receipts', []).append(receipt)
+    row['updated_at'] = now()
+    mapping = registry.setdefault('tasks', {}).setdefault(args.task, {})
+    mapping.update({
+        'dispatch_id': row['id'],
+        'dispatch_status': row['status'],
+        'launch_receipt': receipt,
+        'launch_receipts': row['launch_receipts'],
+        'launch_plan': plan,
+    })
+    _save_dispatch(project, state, data)
+    save_registry(project, state, registry)
+    return receipt
 
 def accept_session_task(project, state, args):
     """Accept one completed worker report and trigger owned cleanup."""
@@ -506,6 +608,10 @@ def session_progress(project, state):
     accepted_ids = _accepted_task_ids(state, data)
     reports_done = len({task for task, row in (registry.get('tasks') or {}).items() if row.get('report_status') == 'DONE'})
     blocked_ids = {task.get('id') for task in tasks if task.get('status') == 'blocked'}
+    blocked_ids.update(
+        row.get('task') for row in data.get('dispatches', [])
+        if row.get('status') == 'blocked'
+    )
     change_requests = 0
     for task, row in (registry.get('tasks') or {}).items():
         if row.get('report_status') == 'BLOCKED':

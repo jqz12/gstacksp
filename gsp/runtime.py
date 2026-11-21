@@ -1692,6 +1692,14 @@ def parser():
     q.add_argument('--adapter', choices=['manual', 'codex', 'claude', 'zcode', 'other'], default='manual')
     q.add_argument('--limit', type=int, default=20)
     q.add_argument('--event-id')
+    q = sub.add_parser('session-launch-receipt', help='record observed worker launch or explicit blocking')
+    q.add_argument('id')
+    q.add_argument('--task', required=True)
+    q.add_argument('--dispatch', required=True)
+    q.add_argument('--session', required=True)
+    q.add_argument('--status', choices=['blocked', 'started', 'request-verified'], required=True)
+    q.add_argument('--reason', required=True)
+    q.add_argument('--evidence', action='append', default=[])
     q = sub.add_parser('session-clean', help='record accepted child worktree cleanup')
     q.add_argument('id')
     q.add_argument('--task', required=True)
@@ -2086,15 +2094,18 @@ def dispatch(project, args):
             result = accept_session_task(project, state, args)
         elif command == 'session-handoff':
             result = handoff_controller(project, state, args)
-        elif command in {'session-dispatch', 'session-progress', 'session-watch', 'session-clean'}:
+        elif command in {'session-dispatch', 'session-progress', 'session-watch', 'session-clean',
+                         'session-launch-receipt'}:
             from .dispatch import (dispatch_tasks, session_progress, watch_session_events,
-                                   clean_session_worktree)
+                                   clean_session_worktree, record_launch_receipt)
             if command == 'session-dispatch':
                 result = dispatch_tasks(project, state, args)
             elif command == 'session-progress':
                 return session_progress(project, state), True
             elif command == 'session-watch':
                 result = watch_session_events(project, state, args)
+            elif command == 'session-launch-receipt':
+                result = record_launch_receipt(project, state, args)
             else:
                 result = clean_session_worktree(project, state, args)
         else:

@@ -5,8 +5,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from gsp.dispatch import (
+    _save_dispatch,
     clean_session_worktree,
     dispatch_tasks,
+    load_dispatch,
+    record_launch_receipt,
     session_progress,
     watch_session_events,
 )
@@ -50,6 +53,29 @@ class DispatchControlPlaneTests(unittest.TestCase):
     def args(self, *argv):
         return parser().parse_args(['session-dispatch', 'work', '--session', 'S01', *argv])
 
+    def routed_codex_dispatch(self, name='launch-receipt-child'):
+        host = {
+            'codex_home': 'C:/Users/example/.codex',
+            'providers': ['magpie'],
+            'catalog_models': ['opencode-go/deepseek-v4.1-flash'],
+            'profiles': ['magpie'],
+            'profile_catalogs': {'magpie': {'catalog_models': ['opencode-go/deepseek-v4.1-flash']}},
+            'profile_providers': {'magpie': ['magpie']},
+            'profile_model_providers': {'magpie': 'magpie'},
+            'cli_path': 'codex',
+            'cli_supports': {
+                'exec': True, 'profile': True, 'model': True,
+                'reasoning_effort': True, 'config_override': True, 'workdir': True,
+            },
+        }
+        child = self.root / name
+        child.mkdir()
+        with patch('gsp.dispatch.inspect_codex_host', return_value=host):
+            return dispatch_tasks(self.project, self.state, self.args(
+                '--task', 'T01', '--target', 'T01=codex', '--path', 'T01=src/data',
+                '--worktree', f'T01={child}', '--provider', 'T01=magpie',
+                '--model', 'T01=opencode-go/deepseek-v4.1-flash'))['dispatches'][0]
+
     def test_dispatches_independent_batch_with_platform_specific_requests(self):
         one = self.root / 'child-one'
         two = self.root / 'child-two'
@@ -77,8 +103,16 @@ class DispatchControlPlaneTests(unittest.TestCase):
                 'magpie': {'catalog_models': ['opencode-go/deepseek-v4.1-flash']},
             },
             'profile_providers': {'magpie': ['magpie']},
+            'profile_model_providers': {'magpie': 'magpie'},
             'cli_path': 'codex',
-            'cli_supports': {'exec': True, 'profile': True, 'model': True, 'reasoning_effort': True},
+            'cli_supports': {
+                'exec': True,
+                'profile': True,
+                'model': True,
+                'reasoning_effort': True,
+                'config_override': True,
+                'workdir': True,
+            },
         }
         child = self.root / 'child-routed'
         child.mkdir()
@@ -96,7 +130,8 @@ class DispatchControlPlaneTests(unittest.TestCase):
             'reasoning_effort': 'max',
         })
         self.assertEqual(row['launch_plan']['argv'], [
-            'codex', 'exec', '--profile', 'magpie',
+            'codex', 'exec', '-c', 'model_provider="magpie"',
+            '--profile', 'magpie',
             '--model', 'opencode-go/deepseek-v4.1-flash',
             '-c', 'model_reasoning_effort="max"',
             '-C', str(child.resolve()), '-',
@@ -110,6 +145,140 @@ class DispatchControlPlaneTests(unittest.TestCase):
         self.assertIn('NOT_CHECKED', prompt)
 
     @patch('gsp.dispatch.inspect_codex_host')
+    def test_launch_receipt_records_blocking_without_claiming_a_request(self, inspect_host):
+        inspect_host.return_value = {
+            'codex_home': 'C:/Users/example/.codex',
+            'providers': ['magpie'],
+            'catalog_models': ['opencode-go/deepseek-v4.1-flash'],
+            'profiles': ['magpie'],
+            'profile_catalogs': {'magpie': {'catalog_models': ['opencode-go/deepseek-v4.1-flash']}},
+            'profile_providers': {'magpie': ['magpie']},
+            'profile_model_providers': {'magpie': 'magpie'},
+            'cli_path': 'codex',
+            'cli_supports': {
+                'exec': True, 'profile': True, 'model': True,
+                'reasoning_effort': True, 'config_override': True, 'workdir': True,
+            },
+        }
+        child = self.root / 'launch-receipt-child'
+        child.mkdir()
+        row = dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--target', 'T01=codex', '--path', 'T01=src/data',
+            '--worktree', f'T01={child}', '--provider', 'T01=magpie',
+            '--model', 'T01=opencode-go/deepseek-v4.1-flash'))['dispatches'][0]
+        receipt_args = parser().parse_args([
+            'session-launch-receipt', 'work', '--task', 'T01', '--dispatch', row['id'],
+            '--session', 'S01', '--status', 'blocked',
+            '--reason', 'paid model request was not authorized for this automated verification',
+        ])
+        receipt = record_launch_receipt(self.project, self.state, receipt_args)
+        self.assertEqual(receipt['status'], 'BLOCKED')
+        current = load_dispatch(self.project, self.state)
+        stored = next(item for item in current['dispatches'] if item['id'] == row['id'])
+        self.assertEqual(stored['launch_receipt']['status'], 'BLOCKED')
+        self.assertIn('not authorized', stored['launch_receipt']['reason'])
+        self.assertFalse(stored['launch_plan']['started'])
+        self.assertFalse(stored['launch_plan']['request_verified'])
+        self.assertEqual(stored['status'], 'blocked')
+        progress = session_progress(self.project, self.state)
+        self.assertEqual(progress['blocked_tasks'], 1)
+        self.assertEqual(progress['running_sessions'], 0)
+
+        verified_args = parser().parse_args([
+            'session-launch-receipt', 'work', '--task', 'T01', '--dispatch', row['id'],
+            '--session', 'S01', '--status', 'request-verified', '--reason', 'worker replied',
+        ])
+        with self.assertRaisesRegex(WorkflowError, 'WORKER_LAUNCH_TRANSITION_INVALID'):
+            record_launch_receipt(self.project, self.state, verified_args)
+
+    def test_launch_receipt_enforces_evidence_and_valid_state_transitions(self):
+        row = self.routed_codex_dispatch('launch-state-child')
+
+        def receipt(status, *, evidence=None, reason='observed worker state'):
+            argv = [
+                'session-launch-receipt', 'work', '--task', 'T01',
+                '--dispatch', row['id'], '--session', 'S01',
+                '--status', status, '--reason', reason,
+            ]
+            for item in evidence or []:
+                argv += ['--evidence', item]
+            return parser().parse_args(argv)
+
+        with self.assertRaisesRegex(WorkflowError, 'WORKER_LAUNCH_EVIDENCE_REQUIRED'):
+            record_launch_receipt(
+                self.project, self.state,
+                receipt('started', evidence=['   ']),
+            )
+        with self.assertRaisesRegex(WorkflowError, 'WORKER_LAUNCH_TRANSITION_INVALID'):
+            record_launch_receipt(
+                self.project, self.state,
+                receipt('request-verified', evidence=['response:one']),
+            )
+
+        started = record_launch_receipt(
+            self.project, self.state,
+            receipt('started', evidence=['thread:S02', '   ']),
+        )
+        self.assertEqual(started['status'], 'STARTED')
+        self.assertEqual(started['evidence'], ['thread:S02'])
+        current = load_dispatch(self.project, self.state)
+        stored = next(item for item in current['dispatches'] if item['id'] == row['id'])
+        self.assertEqual(stored['status'], 'running')
+        self.assertTrue(stored['launch_plan']['started'])
+        self.assertFalse(stored['launch_plan']['request_verified'])
+        self.assertEqual(session_progress(self.project, self.state)['running_sessions'], 1)
+        with self.assertRaisesRegex(WorkflowError, 'WORKER_LAUNCH_EVIDENCE_REQUIRED'):
+            record_launch_receipt(
+                self.project, self.state,
+                receipt('request-verified'),
+            )
+
+        blocked = record_launch_receipt(
+            self.project, self.state,
+            receipt('blocked', reason='worker process exited before report'),
+        )
+        self.assertEqual(blocked['status'], 'BLOCKED')
+        current = load_dispatch(self.project, self.state)
+        stored = next(item for item in current['dispatches'] if item['id'] == row['id'])
+        self.assertEqual(stored['status'], 'blocked')
+        self.assertEqual(stored['launch_plan']['status'], 'BLOCKED')
+        self.assertTrue(stored['launch_plan']['started'])
+        self.assertFalse(stored['launch_plan']['request_verified'])
+        progress = session_progress(self.project, self.state)
+        self.assertEqual(progress['blocked_tasks'], 1)
+        self.assertEqual(progress['running_sessions'], 0)
+
+        with self.assertRaisesRegex(WorkflowError, 'WORKER_LAUNCH_TRANSITION_INVALID'):
+            record_launch_receipt(
+                self.project, self.state,
+                receipt('request-verified', evidence=['response:too-early']),
+            )
+
+        record_launch_receipt(
+            self.project, self.state,
+            receipt('started', evidence=['thread:S03']),
+        )
+        verified = record_launch_receipt(
+            self.project, self.state,
+            receipt('request-verified', evidence=['response:success']),
+        )
+        self.assertEqual(verified['status'], 'REQUEST_VERIFIED')
+        current = load_dispatch(self.project, self.state)
+        stored = next(item for item in current['dispatches'] if item['id'] == row['id'])
+        self.assertTrue(stored['launch_plan']['started'])
+        self.assertTrue(stored['launch_plan']['request_verified'])
+        self.assertEqual(stored['status'], 'running')
+        self.assertEqual(len(stored['launch_receipts']), 4)
+
+        stored['status'] = 'accepted'
+        _save_dispatch(self.project, self.state, current)
+        with self.assertRaisesRegex(WorkflowError, 'WORKER_LAUNCH_TERMINAL'):
+            record_launch_receipt(
+                self.project, self.state,
+                receipt('blocked', reason='too late'),
+            )
+
+    @patch('gsp.dispatch.inspect_codex_host')
     def test_codex_dispatch_rejects_an_unsupported_route_before_publishing(self, inspect_host):
         inspect_host.return_value = {
             'providers': ['magpie'],
@@ -117,8 +286,16 @@ class DispatchControlPlaneTests(unittest.TestCase):
             'profiles': ['magpie'],
             'profile_catalogs': {},
             'profile_providers': {},
+            'profile_model_providers': {},
             'cli_path': 'codex',
-            'cli_supports': {'profile': True, 'model': False, 'reasoning_effort': True},
+            'cli_supports': {
+                'exec': True,
+                'profile': True,
+                'model': False,
+                'reasoning_effort': True,
+                'config_override': True,
+                'workdir': True,
+            },
         }
         with self.assertRaisesRegex(WorkflowError, r'DISPATCH_MODEL_ROUTE_UNSUPPORTED T01.*cli_does_not_support_model'):
             dispatch_tasks(self.project, self.state, self.args(
@@ -153,6 +330,93 @@ class DispatchControlPlaneTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkflowError, 'DISPATCH_TASK_EXISTS'):
             dispatch_tasks(self.project, self.state, self.args(
                 '--task', 'T01', '--target', 'T01=manual', '--path', 'T01=src/data'))
+
+    def test_retry_supersedes_every_active_dispatch_across_worktrees(self):
+        worktrees = [self.root / f'retry-child-{index}' for index in range(1, 4)]
+        for worktree in worktrees:
+            worktree.mkdir()
+        first = dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--target', 'T01=manual', '--path', 'T01=src/data',
+            '--worktree', f'T01={worktrees[0]}'))['dispatches'][0]
+        second = dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--target', 'T01=manual', '--path', 'T01=src/data',
+            '--worktree', f'T01={worktrees[1]}', '--retry'))['dispatches'][0]
+        third = dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--target', 'T01=manual', '--path', 'T01=src/data',
+            '--worktree', f'T01={worktrees[2]}', '--retry'))['dispatches'][0]
+        data = load_dispatch(self.project, self.state)
+        by_id = {row['id']: row for row in data['dispatches']}
+        self.assertEqual(by_id[first['id']]['status'], 'superseded')
+        self.assertEqual(by_id[second['id']]['status'], 'superseded')
+        self.assertEqual(by_id[third['id']]['status'], 'manual-required')
+        active = [row for row in data['dispatches'] if row['status'] in {'adapter-ready', 'running', 'reported', 'manual-required'}]
+        self.assertEqual([row['id'] for row in active], [third['id']])
+
+    @patch('gsp.dispatch.inspect_codex_host')
+    def test_retry_route_failure_keeps_previous_dispatch_and_current_prompt(self, inspect_host):
+        inspect_host.return_value = {
+            'codex_home': 'C:/Users/example/.codex',
+            'providers': ['magpie'],
+            'catalog_models': ['opencode-go/deepseek-v4.1-flash'],
+            'profiles': ['magpie'],
+            'profile_catalogs': {'magpie': {'catalog_models': ['opencode-go/deepseek-v4.1-flash']}},
+            'profile_providers': {'magpie': ['magpie']},
+            'profile_model_providers': {'magpie': 'magpie'},
+            'cli_path': 'codex',
+            'cli_supports': {
+                'exec': True, 'profile': True, 'model': True,
+                'reasoning_effort': True, 'config_override': True, 'workdir': True,
+            },
+        }
+        child = self.root / 'retry-route-child'
+        child.mkdir()
+        first = dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--target', 'T01=codex', '--path', 'T01=src/data',
+            '--worktree', f'T01={child}', '--provider', 'T01=magpie',
+            '--model-profile', 'T01=magpie',
+            '--model', 'T01=opencode-go/deepseek-v4.1-flash'))['dispatches'][0]
+        prompt = self.root / first['prompt']
+        brief = self.root / first['brief']
+        prompt_before = prompt.read_bytes()
+        brief_before = brief.read_bytes()
+
+        inspect_host.return_value = {
+            'codex_home': 'C:/Users/example/.codex',
+            'providers': ['magpie'],
+            'catalog_models': [],
+            'profiles': ['magpie'],
+            'profile_catalogs': {'magpie': {'catalog_models': []}},
+            'profile_providers': {'magpie': ['magpie']},
+            'profile_model_providers': {'magpie': 'magpie'},
+            'cli_path': 'codex',
+            'cli_supports': {
+                'exec': True, 'profile': True, 'model': True,
+                'reasoning_effort': True, 'config_override': True, 'workdir': True,
+            },
+        }
+        with self.assertRaisesRegex(WorkflowError, 'DISPATCH_MODEL_ROUTE_UNSUPPORTED'):
+            dispatch_tasks(self.project, self.state, self.args(
+                '--task', 'T01', '--target', 'T01=codex', '--path', 'T01=src/data',
+                '--worktree', f'T01={child}', '--provider', 'T01=magpie',
+                '--model-profile', 'T01=magpie',
+                '--model', 'T01=opencode-go/missing', '--retry'))
+        data = load_dispatch(self.project, self.state)
+        previous = next(row for row in data['dispatches'] if row['id'] == first['id'])
+        self.assertEqual(previous['status'], 'adapter-ready')
+        self.assertEqual(prompt.read_bytes(), prompt_before)
+        self.assertEqual(brief.read_bytes(), brief_before)
+        history = self.root / self.state['doc_dir'] / 'sessions' / 'history'
+        self.assertTrue(list(history.glob('T01-prompt-*.md')))
+        self.assertTrue(list(history.glob('T01-brief-*.md')))
+
+    def test_retry_still_rejects_a_shared_worktree_for_another_task(self):
+        dispatch_tasks(self.project, self.state, self.args(
+            '--task', 'T01', '--target', 'T01=manual', '--path', 'T01=src/data',
+            '--worktree', f'T01={self.root}'))
+        with self.assertRaisesRegex(WorkflowError, 'DISPATCH_WORKTREE_CONFLICT'):
+            dispatch_tasks(self.project, self.state, self.args(
+                '--task', 'T02', '--target', 'T02=manual', '--path', 'T02=src/api',
+                '--worktree', f'T02={self.root}', '--retry'))
 
     def test_progress_separates_reported_accepted_and_cleaned_counts(self):
         dispatch_tasks(self.project, self.state, self.args(
