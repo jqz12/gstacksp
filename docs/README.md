@@ -9,6 +9,8 @@
 | [计划结构检查接口](reference/plan-quality.md) | 计划结构检查与验收边界 |
 | [分支、worktree 与并行任务](reference/git-topology.md) | 选择矩阵、中文编号、父子任务、集成与恢复 |
 | [主会话协调的跨会话开发模式](reference/cross-session-development.md) | `cross-session` 的 controller/worker、总体计划、批量派发、自动 managed worktree、接受后清理、进度摘要、outbox 和文档命名 |
+| [模型路由](reference/model-routing.md) | provider/profile/model/effort 参数、`model_route`、非秘密 launch plan 和四层状态边界 |
+| [Codex 宿主适配](reference/codex-host-adapter.md) | `codex exec` 启动计划、profile catalog、Desktop 刷新、能力错误和真实请求证据边界 |
 | [根 README](../README.md) | 安装范围、基本用法和项目说明 |
 
 ## 源码入口
@@ -22,5 +24,4 @@
 
 ## 锁恢复
 
-inspect-lock 只读显示 writer.lock 的 live/dead/unknown/malformed 状态；ecover-lock --evidence <报告> --reason <理由> 仅恢复已证明退出的 owner，并保存恢复备份。health --documents-only 不写默认报告目录，显式 --documents 才持久化审计。
-
+`inspect-lock` 只读显示 `writer.lock` 的 live/dead/unknown/malformed 状态；`recover-lock --evidence <报告> --reason <理由>` 仅恢复已证明退出的 owner，并保存恢复备份。`health --documents-only` 不写默认报告目录，显式 `--documents` 才持久化审计。

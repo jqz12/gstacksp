@@ -37,6 +37,10 @@ GSP 把“一个主会话管理多个独立开发会话”作为 `cross-session`
   --task T01 --task T02 `
   --target T01=codex --target T02=manual `
   --path T01=src/data --path T02=src/api `
+  --provider T01=magpie `
+  --model-profile T01=magpie `
+  --model T01=opencode-go/deepseek-v4.1-flash `
+  --reasoning-effort T01=max `
   --worktree-mode auto `
   --max-parallel 2
 ```
@@ -45,7 +49,7 @@ GSP 把“一个主会话管理多个独立开发会话”作为 `cross-session`
 
 如果宿主已经准备好目录，传入 `--worktree <path>` 或 `--worktree-mode bind`。这类目录只做 bound，GSP 取得写租约并记录绑定关系，任务接受后只释放租约，不自动删除目录、分支或宿主文件。显式绑定的目录仍需满足路径和 worktree 预检。
 
-每个批次都会产生唯一的 `Dnnn`、预分配的 `Snn` 提示、独立的 brief、可复制 prompt、平台和派发方式。Codex 目标返回 `adapter-ready`，当前主会话随后调用宿主原生的线程创建、worktree 绑定、消息发送和有界等待入口。控制面记录线程返回的身份后，子会话再按同一 `Snn` 注册。GSP Python CLI 不假装拥有 MCP 客户端，也不会在没有宿主回调时伪造线程已创建。
+每个批次都会产生唯一的 `Dnnn`、预分配的 `Snn` 提示、独立的 brief、可复制 prompt、平台和派发方式。模型参数会规范化为非敏感的 `model_route`。Codex 目标还会校验宿主能力并生成 `launch_plan`，保存 `codex exec` 的 argv、`CODEX_HOME`、stdin prompt、`started=false` 和 `request_verified=false`；计划写入 dispatch、registry 和任务 prompt。Codex 目标返回 `adapter-ready`，当前主会话随后调用宿主原生的线程创建、worktree 绑定、消息发送和有界等待入口。控制面记录线程返回的身份后，子会话再按同一 `Snn` 注册。GSP Python CLI 不假装拥有 MCP 客户端，也不会在没有宿主回调时伪造线程已创建；生成 launch plan 同样不等于已经发起模型请求。
 
 没有连接器的平台返回 `manual-required`。主会话把 `sessions/Tnn-prompt.md` 转发给用户，用户只需在对应平台粘贴一次。提示词内容与 Codex 自动发送的内容来自同一份任务记录，包含总体计划、brief、目标、允许路径、接口、测试、依赖、禁止范围和固定 report 命令。任务完成后用户带回 report 路径或报告内容，主会话仍通过 `session-report` 写入同一 registry。
 
