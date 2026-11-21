@@ -1694,6 +1694,16 @@ def parser():
     q.add_argument('--result', choices=['archived', 'released', 'removed'], required=True)
     q.add_argument('--reason', required=True)
     q.add_argument('--retry', action='store_true', help='retry lifecycle cleanup for an accepted managed worktree')
+    for name in ('model-route-health', 'host-adapter-status'):
+        q = sub.add_parser(name, help='read-only Codex route and host capability diagnostics')
+        q.add_argument('--codex-home')
+        q.add_argument('--cli-path')
+        q.add_argument('--provider')
+        q.add_argument('--model-profile')
+        q.add_argument('--model')
+        q.add_argument('--reasoning-effort')
+        q.add_argument('--desktop-visible-model', action='append', default=[],
+                       help='explicitly observed model visible in the Desktop picker; repeat as needed')
     sub.add_parser('codex-hook', help='native Codex hook protocol (stdin JSON)')
     sub.add_parser('hooks-report', help='bounded offline Codex hook audit summary for --project')
     for name in ('hooks-install','hooks-upgrade','hooks-uninstall','hooks-recover','hooks-status'):
@@ -1821,6 +1831,21 @@ def main(argv=None):
     args.argv = values[split + 1:]
     project = None
     try:
+        if args.command in ('model-route-health', 'host-adapter-status'):
+            from .host_adapter import build_cli_report
+            result = build_cli_report(
+                args.codex_home,
+                args.cli_path,
+                {
+                    'provider': args.provider,
+                    'model_profile': args.model_profile,
+                    'model': args.model,
+                    'reasoning_effort': args.reasoning_effort,
+                },
+                args.desktop_visible_model,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if args.command == 'codex-hook':
             from .codex_hooks import run
             print(json.dumps(run(),ensure_ascii=False));return 0

@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 SAFE_ROUTE_KEYS = ("provider", "model_profile", "model", "reasoning_effort")
-SUPPORTED_PROVIDER = {"inherit", "openai", "magpie", "opencode-go", "anthropic", "gemini", "custom"}
+ROUTE_PATTERNS = {
+    "provider": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"),
+    "model_profile": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"),
+    "model": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}$"),
+    "reasoning_effort": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"),
+}
 
 
 def _safe_text(value: Any, field: str) -> Optional[str]:
@@ -27,6 +32,9 @@ def _safe_text(value: Any, field: str) -> Optional[str]:
         raise ValueError(f"invalid {field}")
     if any(c.isspace() for c in value):
         raise ValueError(f"invalid {field}")
+    pattern = ROUTE_PATTERNS.get(field)
+    if pattern and not pattern.fullmatch(value):
+        raise ValueError(f"invalid {field}")
     return value
 
 
@@ -37,8 +45,6 @@ def normalize_route(route: Optional[Dict[str, Any]]) -> Dict[str, Optional[str]]
     for key in SAFE_ROUTE_KEYS:
         out[key] = _safe_text(route.get(key), key)
     out["provider"] = out["provider"] or "inherit"
-    if out["provider"] not in SUPPORTED_PROVIDER:
-        raise ValueError(f"unsupported provider: {out['provider']}")
     return out
 
 
@@ -71,33 +77,100 @@ def _catalog_metadata(home: Path, catalog_name: Optional[str]) -> Dict[str, Any]
     }
 
 
+def _toml_quoted_value(raw: str) -> Optional[str]:
+    """Decode one simple TOML string and ignore a trailing comment."""
+    value = raw.lstrip()
+    if not value or value[0] not in {'"', "'"}:
+        return None
+    quote = value[0]
+    if quote == "'":
+        end = value.find("'", 1)
+        if end < 0:
+            return None
+        decoded = value[1:end]
+    else:
+        escaped = False
+        end = -1
+        for index in range(1, len(value)):
+            char = value[index]
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                end = index
+                break
+        if end < 0:
+            return None
+        try:
+            decoded = json.loads(value[:end + 1])
+        except (TypeError, ValueError):
+            return None
+    remainder = value[end + 1:].strip()
+    if remainder and not remainder.startswith('#'):
+        return None
+    return decoded
+
+
+def _config_assignment(line: str) -> tuple[Optional[str], Optional[str]]:
+    match = re.match(r'^([A-Za-z0-9_.-]+)\s*=\s*(.*)$', line)
+    if not match:
+        return None, None
+    return match.group(1), _toml_quoted_value(match.group(2))
+
+
+def _provider_section_name(section: str) -> Optional[str]:
+    prefix = 'model_providers.'
+    if not section.startswith(prefix):
+        return None
+    raw = section[len(prefix):].strip()
+    if not raw:
+        return None
+    if raw[0] in {'"', "'"}:
+        return _toml_quoted_value(raw)
+    if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', raw):
+        return raw
+    return None
+
+
 def _config_metadata(config_path: Path) -> Dict[str, Any]:
-    """Extract known safe config metadata without returning secret values."""
+    """Stream only approved metadata; provider bodies are never retained or parsed."""
     result: Dict[str, Any] = {
         "model": None,
         "model_provider": None,
         "model_catalog_json": None,
+        "has_reasoning_effort": False,
         "providers": [],
     }
     try:
-        lines = config_path.read_text(encoding="utf-8").splitlines()
+        stream = config_path.open('r', encoding='utf-8')
+    except OSError:
+        return result
+    section = ''
+    try:
+        with stream:
+            for line in stream:
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#'):
+                    continue
+                section_match = re.match(r'^\[([^\[\]]+)\]\s*(?:#.*)?$', stripped)
+                if section_match:
+                    section = section_match.group(1).strip()
+                    provider = _provider_section_name(section)
+                    if provider and provider not in result["providers"]:
+                        result["providers"].append(provider)
+                    continue
+                if section:
+                    continue
+                key, value = _config_assignment(stripped)
+                if key == 'model_reasoning_effort':
+                    result["has_reasoning_effort"] = True
+                elif key in {'model', 'model_provider', 'model_catalog_json'} and value is not None:
+                    result[key] = value
     except (OSError, UnicodeError):
         return result
-    section = ""
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            section = stripped[1:-1]
-            if section.startswith("model_providers."):
-                name = section.split(".", 1)[1].strip('"')
-                if name and name not in result["providers"]:
-                    result["providers"].append(name)
-            continue
-        if section:
-            continue
-        match = re.match(r'^(model|model_provider|model_catalog_json)\s*=\s*(["\'])(.*?)\2\s*$', stripped)
-        if match:
-            result[match.group(1)] = match.group(3)
     return result
 
 
@@ -112,13 +185,17 @@ def inspect_codex_host(codex_home: Optional[os.PathLike[str] | str] = None,
     profile_paths = sorted(home.glob("*.config.toml"))
     profile_catalogs: Dict[str, Dict[str, Any]] = {}
     profile_providers: Dict[str, list[str]] = {}
+    profile_model_providers: Dict[str, Optional[str]] = {}
     for profile_path in profile_paths:
         profile_name = profile_path.stem.removesuffix(".config")
         profile_meta = _config_metadata(profile_path)
-        profile_catalogs[profile_name] = _catalog_metadata(
+        profile_catalog = _catalog_metadata(
             home, profile_meta.get("model_catalog_json") or catalog_name
         )
+        profile_catalog["configured_model"] = profile_meta.get("model")
+        profile_catalogs[profile_name] = profile_catalog
         profile_providers[profile_name] = sorted(profile_meta.get("providers", []))
+        profile_model_providers[profile_name] = profile_meta.get("model_provider")
     cli = Path(cli_path) if cli_path else (Path(shutil.which("codex") or "") if shutil.which("codex") else None)
     cli_supports = {"profile": False, "model": False, "reasoning_effort": False}
     if cli and cli.exists():
@@ -139,8 +216,31 @@ def inspect_codex_host(codex_home: Optional[os.PathLike[str] | str] = None,
         "profiles": sorted(profile_catalogs),
         "profile_catalogs": profile_catalogs,
         "profile_providers": profile_providers,
+        "profile_model_providers": profile_model_providers,
         "cli_path": str(cli) if cli else None,
         "cli_supports": cli_supports,
+    }
+
+
+def build_cli_report(codex_home: Optional[os.PathLike[str] | str],
+                     cli_path: Optional[os.PathLike[str] | str],
+                     route: Optional[Dict[str, Any]],
+                     desktop_visible_models: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+    """Build the JSON-safe payload for the read-only host diagnostics commands."""
+    host = inspect_codex_host(codex_home, cli_path=cli_path)
+    visible = sorted({
+        value
+        for value in (
+            _safe_text(item, "model")
+            for item in (desktop_visible_models or [])
+        )
+        if value
+    })
+    host["desktop_visible_models"] = visible
+    return {
+        "schema": 1,
+        "host": host,
+        "health": route_health(route, host),
     }
 
 
@@ -151,7 +251,10 @@ def route_health(route: Optional[Dict[str, Any]], host: Dict[str, Any]) -> Dict[
     provider = normalized.get("provider")
     profile = normalized.get("model_profile")
     profile_providers = (host.get("profile_providers") or {}).get(profile, [])
+    profile_provider = (host.get("profile_model_providers") or {}).get(profile)
     configured = (provider == "inherit"
+                  or provider == host.get("configured_model_provider")
+                  or provider == profile_provider
                   or provider in host.get("providers", [])
                   or provider in profile_providers)
     resolvable = True
@@ -159,12 +262,16 @@ def route_health(route: Optional[Dict[str, Any]], host: Dict[str, Any]) -> Dict[
     if not configured:
         reasons.append("provider_not_configured")
     catalog = set(host.get("catalog_models", []))
+    configured_model = host.get("configured_model")
     if profile:
         profile_catalog = (host.get("profile_catalogs") or {}).get(profile)
         if isinstance(profile_catalog, dict):
             catalog = set(profile_catalog.get("catalog_models", catalog))
+            configured_model = profile_catalog.get("configured_model") or configured_model
     if model:
-        resolvable = model in catalog or normalized.get("provider") == "inherit"
+        effective_default_provider = profile_provider or host.get("configured_model_provider")
+        can_use_configured_default = provider in {"inherit", effective_default_provider}
+        resolvable = model in catalog or (can_use_configured_default and model == configured_model)
         if not resolvable:
             reasons.append("model_not_in_catalog")
     if profile:
