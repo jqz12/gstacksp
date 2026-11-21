@@ -16,6 +16,9 @@ SESSION_LIMIT = 32 * 1024 * 1024
 SHARD_LIMIT = 4 * 1024 * 1024
 REPORT_SESSIONS = 1000
 REPORT_SHARDS = 10
+WAIT_GUARD_LIMIT = 2
+WAIT_GUARD_TTL = 3600
+WAIT_GUARD_ENTRIES = 128
 EVENTS = {'SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Stop','Interrupt','SessionEnd'}
 
 
@@ -147,6 +150,66 @@ def deny(reason):
     return {'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'deny','permissionDecisionReason':reason}}
 
 
+def edit_targets(root, cwd, tool, payload):
+    data=payload.get('tool_input')
+    if not isinstance(data,dict): raise WorkflowError('HOOK_EDIT_INPUT_INVALID')
+    if tool=='apply_patch': raw=patch_paths(data.get('command'))
+    else: raw=[data.get('file_path') or data.get('notebook_path')]
+    targets=[]
+    for path in raw:
+        if not isinstance(path,str) or not path: raise WorkflowError('HOOK_EDIT_PATH_REQUIRED')
+        targets.append(str((Path(cwd)/path).resolve()))
+    return targets
+
+
+def edit_task(root, cwd, targets, fallback):
+    from .git_topology import bound_task_for_path
+    owners={bound_task_for_path(root,Path(path)) for path in targets}
+    owners.discard(None)
+    if len(owners)>1: raise WorkflowError('GIT_EDIT_TARGET_CONFLICT multiple tasks claim patch targets')
+    return next(iter(owners),None) or fallback
+
+
+def wait_guard(root, payload, event, tool):
+    session=key(payload.get('session_id','missing'))
+    folder=safe_file(root,root/'.gsp/audits/codex-hooks'/session)
+    folder.mkdir(parents=True,exist_ok=True)
+    path=safe_file(root,folder/'wait-guard.json')
+    lock=safe_file(root,folder/'audit.lock')
+    now_value=time.time()
+    degraded=False
+    blocked=False
+    with audit_lock(lock):
+        try:
+            state=load(path) if path.exists() else {'schema':1,'entries':{}}
+            if state.get('schema')!=1 or not isinstance(state.get('entries'),dict):
+                raise WorkflowError('WAIT_GUARD_STATE_INVALID')
+            entries={k:v for k,v in state['entries'].items()
+                     if isinstance(v,dict) and isinstance(v.get('last_seen'),(int,float))
+                     and now_value-float(v['last_seen'])<=WAIT_GUARD_TTL}
+            if event=='PreToolUse' and tool=='write_stdin':
+                data=payload.get('tool_input')
+                if isinstance(data,dict):
+                    tool_session=data.get('session_id')
+                    chars=data.get('chars','')
+                    if isinstance(tool_session,str) and tool_session and chars=='':
+                        tool_key=key(tool_session)
+                        previous=entries.get(tool_key,{})
+                        count=int(previous.get('streak',0))+1
+                        entries[tool_key]={'streak':count,'last_seen':now_value}
+                        blocked=count>WAIT_GUARD_LIMIT
+                    elif chars!='':
+                        entries={}
+            elif event=='PreToolUse':
+                entries={}
+            if len(entries)>WAIT_GUARD_ENTRIES:
+                entries=dict(sorted(entries.items(),key=lambda item:item[1].get('last_seen',0),reverse=True)[:WAIT_GUARD_ENTRIES])
+            atomic(path,{'schema':1,'entries':entries,'updated':now_value})
+        except (OSError,ValueError,TypeError,KeyError,WorkflowError):
+            degraded=True
+    return blocked,degraded
+
+
 def handle(payload):
     if not isinstance(payload,dict) or payload.get('hook_event_name') not in EVENTS: return {}
     event=payload['hook_event_name']; tool=payload.get('tool_name')
@@ -156,15 +219,24 @@ def handle(payload):
         if root is None: return {}
         identity=load(root/'.gsp/project.json')
         if identity.get('root',str(root))!=str(root): raise WorkflowError('HOOK_PROJECT_MOVED')
-        state=None;task=None
+        state=None;task=None;absolute_paths=[]
         active=safe_file(root,root/'.gsp/active.json')
         from .git_topology import bound_task_for_path
         task = bound_task_for_path(root, Path(payload['cwd']))
+        if writing:
+            absolute_paths=edit_targets(root,payload['cwd'],tool,payload)
+            task=edit_task(root,payload['cwd'],absolute_paths,task)
         if task or active.exists():
             task=task or load(active).get('task');slug(task)
             state=load(safe_file(root,root/'.gsp/runs'/task/'state.json'))
             if state.get('id')!=task: raise WorkflowError('HOOK_TASK_MISMATCH')
         result={};outcome='observed';coverage='metadata-only'
+        guard_blocked,guard_degraded=wait_guard(root,payload,event,tool)
+        if guard_degraded:
+            result['systemMessage']='GSP wait guard state unavailable; wait coverage NOT_CHECKED.'
+        if guard_blocked:
+            result.update(deny('GSP wait guard blocked the third empty wait for this tool session. Inspect the log, process, exit code or artifact before waiting again.'))
+            outcome='denied';coverage='wait-guard'
         if event=='SessionStart':
             context='GstackSP: read gsp-workflow and shared contract. '
             if state:
@@ -172,20 +244,14 @@ def handle(payload):
                 context+='Bound documents: '+json.dumps({k:str(Project(root).document(state,k).relative_to(root)) for k in ('design','plan')},ensure_ascii=True)
             else: context+='No active task. Discuss design before implementation.'
             result={'hookSpecificOutput':{'hookEventName':event,'additionalContext':context[:1800]}}
-        if writing and state and (state.get('scope',{}).get('mode')=='frozen' or
+        if not guard_blocked and writing and state and (state.get('scope',{}).get('mode')=='frozen' or
                                   (state.get('git_topology') or {}).get('enforce') or
                                   (state.get('git_topology') or {}).get('intent') == 'cross-session'):
             try:
                 data=payload.get('tool_input')
                 if not isinstance(data,dict): raise WorkflowError('HOOK_EDIT_INPUT_INVALID')
-                paths=patch_paths(data.get('command')) if tool=='apply_patch' else [data.get('file_path') or data.get('notebook_path')]
-                absolute_paths=[]
                 project=Project(root)
-                for path in paths:
-                    if not isinstance(path,str) or not path: raise WorkflowError('HOOK_EDIT_PATH_REQUIRED')
-                    absolute=str((Path(payload['cwd'])/path).resolve())
-                    project.scope_path(state, absolute)
-                    absolute_paths.append(absolute)
+                for absolute in absolute_paths: project.scope_path(state, absolute)
                 if (state.get('git_topology') or {}).get('intent') == 'cross-session':
                     from .sessions import authorize_edit
                     token=(payload.get('gsp_session_id') or os.environ.get('GSP_SESSION_ID')
@@ -202,7 +268,7 @@ def handle(payload):
                     result=deny('GSP session edit refused: '+reason)
                 else:
                     result=deny('GSP frozen edit refused: outside scope or unparseable edit. Inspect gsp scope/check-path; no scope was changed.')
-        elif tool in ('Bash','exec_command','write_stdin'):
+        elif not guard_blocked and tool in ('Bash','exec_command','write_stdin'):
             coverage='shell-not-enforced'
         try:
             stage=state.get('status') if state else None
@@ -231,7 +297,7 @@ def report(root):
     root=Path(root).resolve()
     folder=safe_file(root,root/'.gsp/audits/codex-hooks')
     result={'schema':1,'audit_events_observed':False,'native_host_trigger':'NOT_CHECKED','coverage_state':'not_observed','sessions':0,'sessions_skipped':0,'shards_skipped':0,'events':0,'attempts':0,'results_observed':0,
-            'unknown_attempts':0,'denied':0,'replayed_events':0,'incomplete':False,
+            'unknown_attempts':0,'denied':0,'wait_guard_denied':0,'replayed_events':0,'incomplete':False,
             'assessment':'metadata only; does not prove skill compliance or business correctness',
             'coverage_gaps':['shell-not-enforced','specialized/hosted tool paths','missing-result=unknown']}
     if not folder.exists():return result
@@ -266,6 +332,8 @@ def report(root):
                             if ident in seen:result['replayed_events']+=1;continue
                             seen.add(ident)
                         result['events']+=1
+                        if row.get('coverage')=='wait-guard' and row.get('outcome')=='denied':
+                            result['wait_guard_denied']+=1
                         if event=='PreToolUse':
                             attempts[call]=row.get('outcome')
                             result['denied']+=row.get('outcome')=='denied'
