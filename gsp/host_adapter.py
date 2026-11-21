@@ -62,6 +62,15 @@ def _catalog_ids(path: Path) -> set[str]:
     return ids
 
 
+def _catalog_metadata(home: Path, catalog_name: Optional[str]) -> Dict[str, Any]:
+    catalog_path = (home / catalog_name) if catalog_name else None
+    return {
+        "model_catalog": str(catalog_path) if catalog_path else None,
+        "catalog_exists": bool(catalog_path and catalog_path.is_file()),
+        "catalog_models": sorted(_catalog_ids(catalog_path)) if catalog_path and catalog_path.is_file() else [],
+    }
+
+
 def _config_metadata(config_path: Path) -> Dict[str, Any]:
     """Extract known safe config metadata without returning secret values."""
     result: Dict[str, Any] = {"model": None, "model_catalog_json": None, "providers": []}
@@ -94,7 +103,15 @@ def inspect_codex_host(codex_home: Optional[os.PathLike[str] | str] = None,
     config = home / "config.toml"
     meta = _config_metadata(config)
     catalog_name = meta.get("model_catalog_json")
-    catalog_path = (home / catalog_name) if catalog_name else None
+    base_catalog = _catalog_metadata(home, catalog_name)
+    profile_paths = sorted(home.glob("*.config.toml"))
+    profile_catalogs: Dict[str, Dict[str, Any]] = {}
+    for profile_path in profile_paths:
+        profile_name = profile_path.stem.removesuffix(".config")
+        profile_meta = _config_metadata(profile_path)
+        profile_catalogs[profile_name] = _catalog_metadata(
+            home, profile_meta.get("model_catalog_json") or catalog_name
+        )
     cli = Path(cli_path) if cli_path else (Path(shutil.which("codex") or "") if shutil.which("codex") else None)
     cli_supports = {"profile": False, "model": False, "reasoning_effort": False}
     if cli and cli.exists():
@@ -109,11 +126,10 @@ def inspect_codex_host(codex_home: Optional[os.PathLike[str] | str] = None,
         "codex_home": str(home),
         "config_exists": config.is_file(),
         "configured_model": meta.get("model"),
-        "model_catalog": str(catalog_path) if catalog_path else None,
-        "catalog_exists": bool(catalog_path and catalog_path.is_file()),
-        "catalog_models": sorted(_catalog_ids(catalog_path)) if catalog_path and catalog_path.is_file() else [],
+        **base_catalog,
         "providers": sorted(meta.get("providers", [])),
-        "profiles": sorted(p.stem.removesuffix(".config") for p in home.glob("*.config.toml")),
+        "profiles": sorted(profile_catalogs),
+        "profile_catalogs": profile_catalogs,
         "cli_path": str(cli) if cli else None,
         "cli_supports": cli_supports,
     }
@@ -127,13 +143,17 @@ def route_health(route: Optional[Dict[str, Any]], host: Dict[str, Any]) -> Dict[
     configured = provider == "inherit" or provider in host.get("providers", []) or provider == "magpie"
     resolvable = True
     reasons: list[str] = []
+    profile = normalized.get("model_profile")
+    catalog = set(host.get("catalog_models", []))
+    if profile:
+        profile_catalog = (host.get("profile_catalogs") or {}).get(profile)
+        if isinstance(profile_catalog, dict):
+            catalog = set(profile_catalog.get("catalog_models", catalog))
     if model:
-        catalog = set(host.get("catalog_models", []))
         resolvable = model in catalog or normalized.get("provider") == "inherit"
         if not resolvable:
             reasons.append("model_not_in_catalog")
-    if normalized.get("model_profile"):
-        profile = normalized["model_profile"]
+    if profile:
         if profile not in host.get("profiles", []):
             reasons.append("profile_not_found")
             resolvable = False

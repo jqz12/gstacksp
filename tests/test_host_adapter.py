@@ -40,6 +40,30 @@ class HostAdapterTests(unittest.TestCase):
         self.assertFalse(result["request_verified"])
         self.assertEqual(result["status"], "NOT_CHECKED")
 
+    def test_profile_catalog_resolves_worker_without_claiming_desktop_visibility(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / "config.toml").write_text(
+                'model = "gpt-6.1-sol"\n'
+                '[model_providers.magpie]\n'
+                'base_url = "http://127.0.0.1:3425/v1"\n', encoding="utf-8")
+            (home / "magpie.config.toml").write_text(
+                'model = "opencode-go/qwen4-max"\n'
+                'model_provider = "magpie"\n'
+                'model_catalog_json = "magpie-models.json"\n', encoding="utf-8")
+            (home / "magpie-models.json").write_text(
+                json.dumps({"models": [{"slug": "opencode-go/qwen4-max"}]}), encoding="utf-8")
+            host = inspect_codex_host(home, cli_path=home / "missing-codex")
+            self.assertEqual(host["catalog_models"], [])
+            self.assertEqual(host["profile_catalogs"]["magpie"]["catalog_models"], ["opencode-go/qwen4-max"])
+            result = route_health(
+                {"provider": "magpie", "model_profile": "magpie", "model": "opencode-go/qwen4-max"},
+                host,
+            )
+            self.assertTrue(result["resolvable"])
+            self.assertFalse(result["desktop_visible"])
+            self.assertNotIn("model_not_in_catalog", result["reasons"])
+
     def test_route_health_reports_missing_model(self):
         result = route_health({"provider": "magpie", "model": "opencode-go/missing"}, {"providers": ["magpie"], "catalog_models": [], "profiles": []})
         self.assertFalse(result["resolvable"])
