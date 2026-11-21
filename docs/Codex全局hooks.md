@@ -46,6 +46,10 @@ python scripts/gsp.py hooks-recover
 
 直接 `apply_patch` 检查 Add/Update/Delete/Move 的所有路径；路径检查复用 GSP scope，包括流程文件例外。解析失败或越界拒绝，不自动改变范围。新增文件沿现有祖先解析物理路径；这仍不能防止检查后链接被其他进程替换。
 
+Direct-edit 的任务归属以补丁目标路径对应的 source worktree 为准。控制根 `cwd` 只用于定位项目和流程文档回退。目标属于当前任务的子 worktree 时，hook 使用父状态和子任务拓扑继续检查 scope 与 lease；目标属于其他任务、多个任务或未绑定 worktree 时拒绝。
+
+长命令或 stdout/stderr 被重定向时，记录日志路径、PID/exec session、状态/退出码来源和预期产物。相同空 `write_stdin` 最多等待两次。第三次前读取日志、检查进程、退出码或产物。Codex wait-guard 在受信 hook 收到事件时拒绝第三次空等待，并记录 `coverage=wait-guard`。等待参数变化不会重置预算。
+
 **Shell、write_stdin、特殊工具及宿主工具存在覆盖缺口。** 任意脚本、命令和 MCP 副作用不能通过路径字符串完整判断。hook 自身失败或未受信任也不能宣称保护生效。冻结不是沙箱；继续使用宿主权限、GSP `run` 证据与事后范围检测。
 
 ## 实验记录

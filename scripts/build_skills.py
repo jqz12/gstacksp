@@ -160,6 +160,9 @@ LIFECYCLE_NOTES['git'] = ('新任务按需求声明 `--intent`；大功能或跨
 LIFECYCLE_NOTES['execute'] += (' Native 会话支持绑定 worktree；当前 headless driver 不支持独立/子工作区，'
                               '会返回 DRIVER_TOPOLOGY_UNSUPPORTED。子任务提交获授权并核对后使用 observe-head --task Tnn；'
                               '集成树必须包含各子任务已验证提交，最终 run --task all 在集成工作区执行。')
+LIFECYCLE_NOTES['execute'] += (' 长命令或重定向 stdout/stderr 时必须记录日志路径、PID/exec session、状态/退出码来源和预期产物。'
+                               '相同空 write_stdin 最多等待两次；第三次前必须读取日志、检查进程、退出码或产物。'
+                               '等待时长变化不构成新观测，hook 可能以 wait-guard 拒绝第三次空等待。')
 LIFECYCLE_NOTES['health'] += (' 同时只读复核活动任务及子任务的 Git 拓扑；未选择时路由 git.topology.required，'
                              '目录缺失、分支/HEAD/基线漂移或重复占用时路由 git.topology.invalid，不修改任务状态。')
 
