@@ -3,7 +3,9 @@ from pathlib import Path, PurePosixPath
 import re
 import uuid
 
-from .runtime import WorkflowError, atomic, inside, now, read, redact
+from .runtime import (WorkflowError, _git_run, atomic, contract_hash, digest,
+                      fingerprint, git_identity, inside, integration_dependencies,
+                      now, read, redact)
 from .sessions import _save as save_registry
 from .sessions import load_registry
 from .worktree_lifecycle import cleanup_worktree, prepare_worktree
@@ -159,6 +161,201 @@ def _rollback_prepared_worktrees(project, prepared):
                 'cleanup_error': result.get('cleanup_error'),
             })
     return pending
+
+
+def _integration_task(state):
+    integrations = [task for task in state.get('tasks', [])
+                    if task.get('role') == 'integration']
+    return integrations[0] if len(integrations) == 1 else None
+
+
+def _receipt_path(project, state, receipt_id):
+    for relative in state.get('evidence', []):
+        if relative.endswith('/' + receipt_id + '/receipt.json'):
+            path = project.root / relative
+            if path.is_file():
+                return path
+    raise WorkflowError('EVIDENCE_MISSING ' + str(receipt_id))
+
+
+def _receipt_logs_valid(path, receipt):
+    for name, expected in (receipt.get('logs') or {}).items():
+        if digest(path.parent / name) != expected:
+            raise WorkflowError('EVIDENCE_TAMPERED ' + name)
+
+
+def _cleanup_record(row, cleanup_result, reason):
+    return {
+        'id': uuid.uuid4().hex,
+        'dispatch_id': row['id'],
+        'task': row['task'],
+        'result': cleanup_result.get('result'),
+        'worktree': row.get('worktree'),
+        'reason': redact(reason),
+        'attempt': cleanup_result.get('cleanup_attempts', 1),
+        'error': cleanup_result.get('cleanup_error'),
+        'cleanup_error': cleanup_result.get('cleanup_error'),
+        'at': now(),
+    }
+
+
+def _integration_attestation(project, state, receipt):
+    """Bind the passing final receipt to every child receipt and commit."""
+    integration = _integration_task(state)
+    if integration is None:
+        return None
+    target = project.workspace_root(state, task_id=integration['id'])
+    target_identity = git_identity(target)
+    tasks = _task_map(state)
+    children = []
+    for task_id in sorted(integration_dependencies(state, integration)):
+        task = tasks.get(task_id)
+        if task is None or task.get('status') != 'done':
+            raise WorkflowError('GIT_INTEGRATION_DEPENDENCY_MISSING ' + task_id)
+        receipt_id = task.get('evidence')
+        if not receipt_id:
+            raise WorkflowError('EVIDENCE_MISSING ' + task_id)
+        path = _receipt_path(project, state, receipt_id)
+        child_receipt = read(path)
+        if child_receipt.get('task') != task_id or child_receipt.get('status') != 'pass':
+            raise WorkflowError('EVIDENCE_STALE_OR_FAILED ' + task_id)
+        _receipt_logs_valid(path, child_receipt)
+        child_head = (child_receipt.get('git') or {}).get('head')
+        if not child_head:
+            raise WorkflowError('GIT_CHILD_HEAD_MISSING ' + task_id)
+        included = _git_run(target, 'merge-base', '--is-ancestor', child_head, 'HEAD')
+        if included.returncode:
+            raise WorkflowError('GIT_INTEGRATION_MISSING_CHILD ' + task_id)
+        children.append({
+            'task': task_id,
+            'receipt': receipt_id,
+            'receipt_sha256': digest(path),
+            'workspace_root': child_receipt.get('workspace_root'),
+            'fingerprint': child_receipt.get('fingerprint'),
+            'contract': child_receipt.get('contract'),
+            'head': child_head,
+        })
+    receipt_path = _receipt_path(project, state, receipt['id'])
+    return {
+        'schema': 1,
+        'at': now(),
+        'integration_task': integration['id'],
+        'workspace_root': str(target),
+        'head': target_identity.get('head'),
+        'all_receipt': receipt['id'],
+        'all_receipt_sha256': digest(receipt_path),
+        'all_fingerprint': receipt.get('fingerprint'),
+        'contract': contract_hash(project, state, project.paths(state['id'])[1]),
+        'children': children,
+        'cleanup': [],
+    }
+
+
+def attested_integration(project, state):
+    """Return a still-valid post-cleanup integration proof, or ``None``."""
+    try:
+        data = load_dispatch(project, state)
+        attestation = data.get('integration_attestation') or {}
+        integration = _integration_task(state)
+        if not integration or attestation.get('integration_task') != integration['id']:
+            return None
+        target = project.workspace_root(state, task_id=integration['id'])
+        target_identity = git_identity(target)
+        if target_identity.get('head') != attestation.get('head'):
+            return None
+        receipt_path = _receipt_path(project, state, attestation.get('all_receipt'))
+        if digest(receipt_path) != attestation.get('all_receipt_sha256'):
+            return None
+        receipt = read(receipt_path)
+        all_rows = [row for row in state.get('evidence', [])
+                    if row.endswith('/' + str(attestation.get('all_receipt')) + '/receipt.json')]
+        latest_all = None
+        for relative in state.get('evidence', []):
+            candidate = read(project.root / relative)
+            if candidate.get('task') == 'all':
+                latest_all = candidate
+        if not all_rows or not latest_all or latest_all.get('id') != attestation.get('all_receipt'):
+            return None
+        if receipt.get('status') != 'pass' or receipt.get('workspace_root') != str(target):
+            return None
+        if receipt.get('fingerprint') != attestation.get('all_fingerprint'):
+            return None
+        if receipt.get('fingerprint') != fingerprint(target):
+            return None
+        current_contract = contract_hash(project, state, project.paths(state['id'])[1])
+        tasks = _task_map(state)
+        for child in attestation.get('children', []):
+            task = tasks.get(child.get('task'))
+            if not task or task.get('status') != 'done' or task.get('evidence') != child.get('receipt'):
+                return None
+            child_path = _receipt_path(project, state, child.get('receipt'))
+            if digest(child_path) != child.get('receipt_sha256'):
+                return None
+            child_receipt = read(child_path)
+            if (child_receipt.get('task') != child.get('task')
+                    or child_receipt.get('status') != 'pass'
+                    or child_receipt.get('workspace_root') != child.get('workspace_root')
+                    or child_receipt.get('fingerprint') != child.get('fingerprint')
+                    or child_receipt.get('contract') != current_contract
+                    or (child_receipt.get('git') or {}).get('head') != child.get('head')):
+                return None
+            _receipt_logs_valid(child_path, child_receipt)
+            included = _git_run(target, 'merge-base', '--is-ancestor', child['head'], 'HEAD')
+            if included.returncode:
+                return None
+        if receipt.get('contract') != current_contract:
+            return None
+        _receipt_logs_valid(receipt_path, receipt)
+        return attestation
+    except (OSError, KeyError, TypeError, ValueError, WorkflowError):
+        return None
+
+
+def finalize_integration_cleanup(project, state, final_receipt):
+    """Record the integration proof, then remove accepted managed children."""
+    if final_receipt.get('task') != 'all' or final_receipt.get('status') != 'pass':
+        return {'attested': False, 'cleanup': []}
+    attestation = _integration_attestation(project, state, final_receipt)
+    if attestation is None:
+        return {'attested': False, 'cleanup': []}
+    data = load_dispatch(project, state)
+    data['integration_attestation'] = attestation
+    _save_dispatch(project, state, data)
+    rows = [row for row in data.get('dispatches', [])
+            if row.get('task') in {child['task'] for child in attestation['children']}
+            and row.get('status') != 'superseded']
+    latest = {}
+    for row in rows:
+        latest[row['task']] = row
+    registry = load_registry(project, state)
+    cleaned = []
+    for task_id, row in sorted(latest.items()):
+        mapping = registry.setdefault('tasks', {}).setdefault(task_id, {})
+        if mapping.get('acceptance_status') != 'accepted':
+            continue
+        if not row.get('managed_worktree') or row.get('worktree_state') in {'removed', 'released'}:
+            continue
+        cleanup_result = cleanup_worktree(project, row, 'integration regression passed')
+        row.update(cleanup_result)
+        record = _cleanup_record(row, cleanup_result, 'integration regression passed')
+        data.setdefault('cleanup', []).append(record)
+        mapping['cleanup_status'] = cleanup_result.get('result')
+        mapping['cleanup_error'] = cleanup_result.get('cleanup_error')
+        if cleanup_result.get('result') in {'removed', 'released'}:
+            row['status'] = 'cleaned'
+        else:
+            row['status'] = 'accepted'
+        row['updated_at'] = now()
+        attestation['cleanup'].append({
+            'task': task_id,
+            'result': cleanup_result.get('result'),
+            'error': cleanup_result.get('cleanup_error'),
+        })
+        cleaned.append(record)
+    data['integration_attestation'] = attestation
+    _save_dispatch(project, state, data)
+    save_registry(project, state, registry)
+    return {'attested': True, 'cleanup': cleaned}
 
 
 def render_task_prompt(state, task, dispatch):
@@ -373,6 +570,9 @@ def accept_session_task(project, state, args):
     if mapping.get('acceptance_status') == 'accepted' or row.get('status') in {'accepted', 'cleaned'}:
         cleanup = next((item for item in reversed(data.get('cleanup', []))
                         if item.get('dispatch_id') == row.get('id')), None)
+        if cleanup is None and mapping.get('cleanup_status') == 'deferred':
+            cleanup = {'result': 'deferred', 'worktree_state': 'accepted',
+                       'dispatch_id': row.get('id')}
         return {'task': state['id'], 'plan_task': task_id, 'acceptance': 'accepted',
                 'cleanup': cleanup or {'result': row.get('worktree_state')}, 'idempotent': True}
     if mapping.get('report_status') != 'DONE':
@@ -406,20 +606,23 @@ def accept_session_task(project, state, args):
 
     from .sessions import release_session_lease
     release_session_lease(project, state, reporter, args.reason)
+    if _integration_task(state) is not None:
+        mapping['cleanup_status'] = 'deferred'
+        mapping['cleanup_error'] = None
+        row['cleanup_status'] = 'deferred'
+        registry = load_registry(project, state)
+        registry.setdefault('tasks', {}).setdefault(task_id, {}).update(mapping)
+        _save_dispatch(project, state, data)
+        save_registry(project, state, registry)
+        return {
+            'task': state['id'], 'plan_task': task_id, 'acceptance': 'accepted',
+            'cleanup': {'result': 'deferred', 'worktree_state': 'accepted',
+                        'dispatch_id': row['id']},
+            'idempotent': False,
+        }
     cleanup_result = cleanup_worktree(project, row, args.reason)
     row.update(cleanup_result)
-    cleanup_record = {
-        'id': uuid.uuid4().hex,
-        'dispatch_id': row['id'],
-        'task': task_id,
-        'result': cleanup_result.get('result'),
-        'worktree': row.get('worktree'),
-        'reason': redact(args.reason),
-        'attempt': cleanup_result.get('cleanup_attempts', 1),
-        'error': cleanup_result.get('cleanup_error'),
-        'cleanup_error': cleanup_result.get('cleanup_error'),
-        'at': now(),
-    }
+    cleanup_record = _cleanup_record(row, cleanup_result, args.reason)
     data.setdefault('cleanup', []).append(cleanup_record)
     if cleanup_result.get('result') in {'removed', 'released'}:
         row['status'] = 'cleaned'

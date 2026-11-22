@@ -105,9 +105,9 @@ Codex direct-edit hook 解析 `apply_patch`、`Edit`、`Write` 和 `NotebookEdit
 
 主会话在发布前和进入等待时使用 `session-progress`。摘要必须同时展示总体进度、发布次数、独立任务数、DONE 报告数、accepted 数、已清理 worktree 数、managed worktree 数、bound worktree 数、cleanup-pending 数、运行中、阻塞、CHANGE_REQUEST、待人工转发和下一阶段任务表。总体进度只按 `accepted_tasks / planned_tasks` 计算，不能把报告、prompt 或接受记录冒充清理完成。
 
-`session-report` 会把结构化报告追加到 durable outbox。主会话或有界 watcher 使用 `session-watch` 按事件 ID 消费，重复消费保持幂等。Codex 宿主用有界 `wait_threads` 等待，不要求 controller 进程全天轮询。主会话关闭时事件留在 outbox，下一次 resume 继续消费。主会话检查报告、测试和集成结果后使用 `session-accept <run> <task> --session <Snn>`。接受入口记录 accepted、释放 worker lease，并按所有权自动处理 worktree。干净的 managed worktree 自动 remove 加 prune，bound worktree 只释放并保留目录。
+`session-report` 会把结构化报告追加到 durable outbox。主会话或有界 watcher 使用 `session-watch` 按事件 ID 消费，重复消费保持幂等。Codex 宿主用有界 `wait_threads` 等待，不要求 controller 进程全天轮询。主会话关闭时事件留在 outbox，下一次 resume 继续消费。主会话检查报告、测试和集成结果后使用 `session-accept <run> <task> --session <Snn>`。接受入口记录 accepted 并释放 worker lease；存在 integration owner 时保留 managed worktree，待最终集成回归通过并生成可复核回执后自动 remove 加 prune；没有 integration owner 时仍按原语义在 accept 后清理。bound worktree 只释放并保留目录。
 
-接受状态与清理状态分开保存。managed worktree 遇到脏目录、锁定、Git 非零退出或未知结果时保留目录和分支，进入 `cleanup-pending`，不计入 `cleaned_worktrees`。`session-clean --retry` 只用于重试 cleanup-pending 或显式恢复，重复执行必须幂等。正常路径不要求用户手动删除 GSP 创建的 worktree，也不删除分支、commit、报告或显式绑定目录。
+接受状态与清理状态分开保存。延迟清理期间 cleanup 状态为 `deferred`，不计入 `cleaned_worktrees`；最终回归通过后按子任务回执指纹与提交建立 integration 证明，再执行清理，使后续 `ready`/`status` 可在工作树已移除时复核同一批证据。managed worktree 遇到脏目录、锁定、Git 非零退出或未知结果时保留目录和分支，进入 `cleanup-pending`，不计入 `cleaned_worktrees`。`session-clean --retry` 只用于重试 cleanup-pending 或显式恢复，重复执行必须幂等。正常路径不要求用户手动删除 GSP 创建的 worktree，也不删除分支、commit、报告或显式绑定目录。
 
 子 agent 与正式子会话必须区分。子 agent 是当前主会话内的临时辅助，不拥有独立 `Snn`、worktree、report 或恢复边界。正式子会话才计入 dispatch 统计，并拥有 `Snn`、`Tnn`、brief、report、outbox 和 worktree 清理生命周期。普通单会话任务不创建这些资料，原有流程保持兼容。
 

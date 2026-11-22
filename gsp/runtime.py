@@ -554,7 +554,15 @@ class Project:
         registered = {Path(row['path']).resolve(): row for row in inventory['worktrees']}
         bindings = [(None, state['git_topology'])]
         bindings += [(t['id'], t['topology']) for t in state.get('tasks', []) if t.get('topology')]
+        attested_ids = set()
+        if any(task_id for task_id, _ in bindings):
+            from .dispatch import attested_integration
+            attestation = attested_integration(self, state)
+            if attestation:
+                attested_ids = {child['task'] for child in attestation.get('children', [])}
         for task_id, binding in bindings:
+            if task_id in attested_ids:
+                continue
             path = self.workspace_root(state, task_id=task_id, allow_head_change=allow_head_change)
             row = registered.get(path)
             if not row or row.get('prunable'):
@@ -595,6 +603,9 @@ class Project:
             raise WorkflowError('GIT_INTEGRATION_OWNER_CONFLICT only one integration owner is allowed')
         integration = integrations[0]
         target = self.workspace_root(state, task_id=integration['id'])
+        from .dispatch import attested_integration
+        if attested_integration(self, state):
+            return
         from .git_topology import probe
         for child in state['tasks']:
             if child['id'] == integration['id'] or child.get('role') == 'observer':
@@ -1315,11 +1326,14 @@ def run_check(project, state, run, args):
     if violations:
         state['status'] = 'blocked'
     project.write(state, 'check', f'{evidence_id} {status}')
+    if args.task == 'all' and status == 'pass':
+        from .dispatch import finalize_integration_cleanup
+        finalize_integration_cleanup(project, state, receipt)
     return receipt, status == 'pass'
 
 
 def evidence_for(project, state, task_id, current_fingerprint=None, current_contract=None,
-                 allow_historical=False):
+                 allow_historical=False, allow_missing_workspace=False):
     rows = [read(project.root / p) for p in state['evidence']]
     # A whole-project `all` receipt is the final regression lane, not the
     # task's own evidence.  Mixing it into this lookup makes a later
@@ -1329,11 +1343,26 @@ def evidence_for(project, state, task_id, current_fingerprint=None, current_cont
     if not rows:
         raise WorkflowError('EVIDENCE_MISSING ' + task_id)
     latest = rows[-1]
-    source_root = project.verification_root(state) if task_id == 'all' else project.workspace_root(state, task_id=task_id)
+    try:
+        source_root = (project.verification_root(state) if task_id == 'all'
+                       else project.workspace_root(state, task_id=task_id))
+    except WorkflowError:
+        if not allow_missing_workspace:
+            raise
+        source_root = (project.verification_root(state, allow_head_change=True) if task_id == 'all'
+                       else project.workspace_root(state, validate=False, task_id=task_id))
+    source_exists = source_root.is_dir()
+    if not source_exists and not allow_missing_workspace:
+        raise WorkflowError('GIT_WORKSPACE_MISSING bound source workspace does not exist')
     if latest.get('workspace_root') and Path(latest['workspace_root']).resolve() != source_root:
         raise WorkflowError('EVIDENCE_WORKSPACE_CHANGED ' + task_id)
-    verify_command_inputs(source_root,latest)
-    expected_fingerprint = current_fingerprint or fingerprint(source_root)
+    if source_exists:
+        verify_command_inputs(source_root,latest)
+    expected_fingerprint = current_fingerprint
+    if expected_fingerprint is None and not allow_historical:
+        if not source_exists:
+            raise WorkflowError('GIT_WORKSPACE_MISSING bound source workspace does not exist')
+        expected_fingerprint = fingerprint(source_root)
     if latest['status'] != 'pass' or (not allow_historical and latest['fingerprint'] != expected_fingerprint):
         raise WorkflowError('EVIDENCE_STALE_OR_FAILED ' + task_id)
     if latest.get('contract') != (current_contract or contract_hash(project, state, project.paths(state['id'])[1])):
@@ -1384,8 +1413,15 @@ def validate_delivery(project, state, doc):
         evidence_for(project, state, 'all', current_fingerprint=fp, current_contract=contract)
     except WorkflowError as exc:
         raise WorkflowError('FINAL_REGRESSION_REQUIRED ' + str(exc)) from exc
-    checks = [evidence_for(project, state, task['id'], current_contract=contract,
-                           allow_historical=not bool(task.get('topology'))) for task in state['tasks']]
+    from .dispatch import attested_integration
+    attestation = attested_integration(project, state)
+    attested_ids = ({child['task'] for child in attestation.get('children', [])}
+                    if attestation else set())
+    checks = [evidence_for(
+        project, state, task['id'], current_contract=contract,
+        allow_historical=not bool(task.get('topology')) or task['id'] in attested_ids,
+        allow_missing_workspace=task['id'] in attested_ids,
+    ) for task in state['tasks']]
     review = state.get('review') or {}
     if (not review or review.get('blocking') or review.get('fingerprint') != fp or
             review.get('sha256') != digest(doc / 'review.md') or review.get('contract') != contract):
