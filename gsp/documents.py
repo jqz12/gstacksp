@@ -153,7 +153,7 @@ class Governance:
         t=read(self.pending); self._finish(t)
         return {'recovered':True,'transaction':t['id']}
 
-    def create(self, title, brief, source, modules=(), run_id=None, folder=None):
+    def create(self, title, brief, source, modules=(), run_id=None, folder=None, number=None):
         self._ensure()
         if not title.strip() or not brief.strip() or not source.strip(): raise WorkflowError('DOCUMENT_SOURCE_REQUIRED')
         module_ids=[]
@@ -162,17 +162,28 @@ class Governance:
             if r['kind']!='module': raise WorkflowError('MODULE_REQUIRED')
             module_ids.append(r['uuid'])
         counter=self.path('.gsp/work-counter.json')
-        if counter.exists(): number=read(counter)['next']
+        if counter.exists():
+            existing=read(counter)['next']
         else:
             with closing(self._db()) as db:
                 nums=[int(r[0].split('-')[1]) for r in db.execute("SELECT number FROM entries WHERE kind='work'") if r[0]]
-            number=max(nums,default=0)+1
-        if not isinstance(number,int) or isinstance(number,bool) or number<1:raise WorkflowError('WORK_COUNTER_INVALID')
-        with closing(self._db()) as db:
-            if db.execute('SELECT 1 FROM entries WHERE number=?',('GSP-'+str(number).zfill(6),)).fetchone():
-                maximum=db.execute("SELECT MAX(CAST(substr(number,5) AS INTEGER)) FROM entries WHERE kind='work'").fetchone()[0]
-                number=max(number,(maximum or 0)+1)
-        token='GSP-'+str(number).zfill(6); wid=uuid.uuid4().hex
+            existing=max(nums,default=0)+1
+        if number:
+            if not isinstance(number,str) or not re.fullmatch(r'GSP-\d{6}', number):
+                raise WorkflowError('WORK_NUMBER_INVALID expected GSP-000000')
+            token=number
+            base=int(existing) if isinstance(existing,int) and not isinstance(existing,bool) else 0
+            next_value=max(base + 1, int(number.split('-')[1]) + 1)
+        else:
+            if not isinstance(existing,int) or isinstance(existing,bool) or existing<1:raise WorkflowError('WORK_COUNTER_INVALID')
+            number_val=existing
+            with closing(self._db()) as db:
+                if db.execute('SELECT 1 FROM entries WHERE number=?',('GSP-'+str(number_val).zfill(6),)).fetchone():
+                    maximum=db.execute("SELECT MAX(CAST(substr(number,5) AS INTEGER)) FROM entries WHERE kind='work'").fetchone()[0]
+                    number_val=max(number_val,(maximum or 0)+1)
+            token='GSP-'+str(number_val).zfill(6)
+            next_value=number_val+1
+        wid=uuid.uuid4().hex
         suffix=re.sub('[^a-z0-9]+','-',title.lower()).strip('-')[:36]
         if not suffix and run_id:
             suffix=re.sub('[^a-z0-9]+','-',str(run_id).lower()).strip('-')[:36]
@@ -184,7 +195,7 @@ class Governance:
                 'source':redact(source),'stage':'idea','folder':folder,'documents':{'brief':folder+'/brief.md'},
                 'modules':module_ids,'relations':[],'run_id':run_id,'generation':1,'created':now(),'updated':now(),'history':[]}
         changes={folder+'/record.json':record,folder+'/brief.md':'# '+title+'\n\n'+brief+'\n',
-                 '.gsp/work-counter.json':{'next':number+1}}
+                 '.gsp/work-counter.json':{'next':next_value}}
         if not self.path('docs/work/project.json').exists():
             ident=read(self.root/'.gsp/project.json')['id'] if (self.root/'.gsp/project.json').exists() else uuid.uuid4().hex
             changes['docs/work/project.json']={'schema':1,'id':ident,'created':now()}

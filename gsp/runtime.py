@@ -1082,7 +1082,8 @@ class Project:
                 record=book.stage(record['uuid'],'design','User requested execution workflow; approval still required')
                 record['run_id']=args.id;book._save(record)
             else:
-                record=book.create(args.title,args.title,args.quote or 'user requested new task',run_id=args.id)
+                explicit_number = args.id if re.fullmatch(r'GSP-\d{6}', args.id) else None
+                record=book.create(args.title,args.title,args.quote or 'user requested new task',run_id=args.id, number=explicit_number)
                 record=book.stage(record['uuid'],'design','Begin design discussion')
             doc=self.root/record['folder']
             documents={'design':record['documents']['design'],'plan':record['folder']+'/plan.md'}
@@ -2318,6 +2319,8 @@ def dispatch(project, args):
             task.setdefault('implementation', {})['status'] = 'implementation_done'
             task.setdefault('acceptance_track', {})['status'] = 'acceptance_pending'
         task['completed_at'] = now()
+        state['revalidation'] = [entry for entry in state.get('revalidation') or []
+                                 if entry['task'] != args.task]
     elif command == 'task-reopen':
         if state.get('inflight'): raise WorkflowError('EXECUTION_UNKNOWN reconcile the running command before rework')
         task = project.item(state, args.task)
