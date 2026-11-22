@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from gsp.git_topology import branch_name
 from gsp.runtime import Project, WorkflowError
 from gsp.worktree_lifecycle import (
     cleanup_worktree,
@@ -29,6 +30,7 @@ class WorktreeLifecycleTests(unittest.TestCase):
             "id": "cross-session-worktree-lifecycle",
             "number": "GSP-000021",
             "title": "跨会话 worktree 自动生命周期",
+            "tasks": [{"id": "T01", "title": "生命周期适配器", "role": "implementation"}],
             "git_topology": {
                 "workspace_root": str(self.root),
                 "branch": "main",
@@ -115,7 +117,8 @@ class WorktreeLifecycleTests(unittest.TestCase):
 
     def test_existing_branch_collision_is_rejected_before_registration(self):
         path = self.root / "collision"
-        self.git("worktree", "add", "-b", "feature/GSP-000021-T01-worktree", str(path))
+        branch = branch_name("GSP-000021", "T01", "生命周期适配器")
+        self.git("worktree", "add", "-b", branch, str(path))
 
         with self.assertRaisesRegex(WorkflowError, "WORKTREE_BRANCH_CONFLICT"):
             prepare_worktree(self.project, self.state, self.task(), self.dispatch())

@@ -75,10 +75,12 @@ def _base(project, state):
 
 
 def _automatic_location(project, state, task):
+    from .git_topology import branch_name
     number = str(state.get("number") or state.get("id") or "task")
     slug = worktree_slug(number, task)
     base_dir = project.root / ".gsp" / "worktrees" / "sessions" / number
-    return base_dir / slug, f"feature/{number}-{slug}"
+    branch = branch_name(number, task.get("id"), task.get("title") or "任务")
+    return base_dir / slug, branch
 
 
 def prepare_worktree(project, state, task, dispatch, requested_path=None, mode="auto"):
@@ -140,7 +142,7 @@ def prepare_worktree(project, state, task, dispatch, requested_path=None, mode="
         if cleanup.returncode:
             raise WorkflowError("WORKTREE_CREATE_UNVERIFIED cleanup-pending " + (cleanup.stderr or "").strip()) from exc
         raise WorkflowError("WORKTREE_CREATE_UNVERIFIED " + str(exc)) from exc
-    return {
+    dispatch_row = {
         **dispatch,
         "path": inspection["path"],
         "worktree": inspection["path"],
@@ -154,6 +156,18 @@ def prepare_worktree(project, state, task, dispatch, requested_path=None, mode="
         "created_at": now(),
         "updated_at": now(),
     }
+    try:
+        project.bind_task_topology(
+            state, task.get("id"), "worktree",
+            inspection["branch"] or branch, inspection["path"],
+            "controller-dispatch",
+        )
+    except WorkflowError as exc:
+        cleaned = cleanup_worktree(project, dispatch_row, "dispatch bind rollback", retry=True)
+        if cleaned.get("result") == "cleanup-pending":
+            raise WorkflowError("DISPATCH_BIND_ROLLBACK_CLEANUP_PENDING " + str(path)) from exc
+        raise WorkflowError("DISPATCH_BIND_FAILED " + str(exc)) from exc
+    return dispatch_row
 
 
 def _pending(dispatch, error):

@@ -311,6 +311,17 @@ def attested_integration(project, state):
         return None
 
 
+def attested_removed_tasks(project, state):
+    """Task ids covered by a valid attestation whose child worktrees are gone."""
+    attestation = attested_integration(project, state)
+    if not attestation:
+        return set()
+    return {
+        child.get('task') for child in attestation.get('children', [])
+        if child.get('workspace_root') and not Path(child['workspace_root']).is_dir()
+    }
+
+
 def finalize_integration_cleanup(project, state, final_receipt):
     """Record the integration proof, then remove accepted managed children."""
     if final_receipt.get('task') != 'all' or final_receipt.get('status') != 'pass':

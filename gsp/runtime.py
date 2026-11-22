@@ -556,10 +556,8 @@ class Project:
         bindings += [(t['id'], t['topology']) for t in state.get('tasks', []) if t.get('topology')]
         attested_ids = set()
         if any(task_id for task_id, _ in bindings):
-            from .dispatch import attested_integration
-            attestation = attested_integration(self, state)
-            if attestation:
-                attested_ids = {child['task'] for child in attestation.get('children', [])}
+            from .dispatch import attested_removed_tasks
+            attested_ids = attested_removed_tasks(self, state)
         for task_id, binding in bindings:
             if task_id in attested_ids:
                 continue
@@ -603,15 +601,16 @@ class Project:
             raise WorkflowError('GIT_INTEGRATION_OWNER_CONFLICT only one integration owner is allowed')
         integration = integrations[0]
         target = self.workspace_root(state, task_id=integration['id'])
-        from .dispatch import attested_integration
-        if attested_integration(self, state):
-            return
+        from .dispatch import attested_removed_tasks
+        removed_ids = attested_removed_tasks(self, state)
         from .git_topology import probe
         for child in state['tasks']:
             if child['id'] == integration['id'] or child.get('role') == 'observer':
                 continue
             if child['id'] not in integration_dependencies(state, integration) or child['status'] != 'done':
                 raise WorkflowError('GIT_INTEGRATION_DEPENDENCY_MISSING ' + child['id'])
+            if child['id'] in removed_ids:
+                continue
             source = self.workspace_root(state, task_id=child['id'])
             inventory = probe(source, active_tasks=[])
             if inventory.get('current', {}).get('source_changed_paths'):
@@ -683,12 +682,49 @@ class Project:
             'decision_source': None,
         }
 
+    def bind_task_topology(self, state, task_id, mode, branch, workspace_root, source, quote=None):
+        """Record one writable child's topology binding without creating Git resources."""
+        task = self.item(state, task_id)
+        if str(task.get('role') or 'implementation') not in {'implementation', 'frontend', 'backend', 'integration'}:
+            raise WorkflowError('GIT_TASK_READ_ONLY_TOPOLOGY read-only observers cannot claim a writable workspace')
+        if mode != 'worktree':
+            raise WorkflowError('GIT_TASK_WORKTREE_REQUIRED writable children need independent worktrees')
+        if not re.fullmatch(r'T\d+', task_id):
+            raise WorkflowError('GIT_PLAN_TASK_INVALID child branches require a Tnn task identity')
+        number = state.get('number')
+        task_suffix = f'T{int(task_id[1:]):02d}'
+        if branch and not re.match(r'^[^/]+/' + re.escape(number + '-' + task_suffix) + '-', branch):
+            raise WorkflowError('GIT_BRANCH_TASK_MISMATCH child branch must contain its own GSP and Tnn identity')
+        workspace = Path(workspace_root).resolve()
+        identity = git_identity(workspace)
+        parent = state.get('git_topology') or {}
+        parent_git = state.get('git') or {}
+        task['topology'] = {
+            'schema': 1,
+            'status': 'selected',
+            'requested_mode': mode,
+            'effective_mode': mode,
+            'control_root': str(self.root),
+            'workspace_root': str(workspace),
+            'base_branch': parent.get('base_branch') or parent_git.get('branch'),
+            'base_head': parent.get('base_head') or parent.get('head') or identity.get('head'),
+            'branch': branch or identity.get('branch'),
+            'base_workspace': str(self.root),
+            'decision_quote': quote,
+            'decision_source': source,
+            'selected_at': now(),
+            'created_at': now(),
+            'head': identity.get('head'),
+            'task': task_id,
+            'parent_work': number,
+        }
+        return task['topology']
+
     def select_topology(self, state, args):
         if state.get('inflight'):
             raise WorkflowError('EXECUTION_UNKNOWN inspect and recover the interrupted operation first')
         task_id = getattr(args, 'task_id', None)
         if task_id:
-            import types
             task = self.item(state, task_id)
             if str(task.get('role') or 'implementation') not in {'implementation', 'frontend', 'backend', 'integration'}:
                 raise WorkflowError('GIT_TASK_READ_ONLY_TOPOLOGY read-only observers cannot claim a writable workspace')
@@ -704,16 +740,19 @@ class Project:
             task_suffix = f'T{int(task_id[1:]):02d}'
             if args.branch and not re.match(r'^[^/]+/' + re.escape(state['number'] + '-' + task_suffix) + '-', args.branch):
                 raise WorkflowError('GIT_BRANCH_TASK_MISMATCH child branch must contain its own GSP and Tnn identity')
+            import types
+            requested_branch = args.branch or branch_name(state['number'], task_id, child['title'])
             child_args = types.SimpleNamespace(mode=args.mode, quote=args.quote,
-                branch=args.branch or branch_name(state['number'], task_id, child['title']),
+                branch=requested_branch,
                 path=args.path, task_id=None, base=getattr(args, 'base', None),
                 rebind=getattr(args, 'rebind', False), owner_state=state)
             result = self.select_topology(child, child_args)
-            task['topology'] = child['git_topology']
-            task['topology']['task'] = task_id
-            task['topology']['parent_work'] = state.get('number')
-            if args.mode == 'branch':
-                state['git'] = git_identity(self.root)
+            task['topology'] = self.bind_task_topology(
+                state, task_id, args.mode,
+                result['git_topology'].get('branch') or requested_branch,
+                result['git_topology'].get('workspace_root'),
+                'caller-attributed-user', quote=args.quote,
+            )
             return {'task': state['id'], 'plan_task': task_id, 'number': state.get('number'),
                     'topology': task['topology']}
         from .git_topology import branch_name, probe, validate_branch_name
@@ -1413,10 +1452,8 @@ def validate_delivery(project, state, doc):
         evidence_for(project, state, 'all', current_fingerprint=fp, current_contract=contract)
     except WorkflowError as exc:
         raise WorkflowError('FINAL_REGRESSION_REQUIRED ' + str(exc)) from exc
-    from .dispatch import attested_integration
-    attestation = attested_integration(project, state)
-    attested_ids = ({child['task'] for child in attestation.get('children', [])}
-                    if attestation else set())
+    from .dispatch import attested_removed_tasks
+    attested_ids = attested_removed_tasks(project, state)
     checks = [evidence_for(
         project, state, task['id'], current_contract=contract,
         allow_historical=not bool(task.get('topology')) or task['id'] in attested_ids,
