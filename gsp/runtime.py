@@ -1353,6 +1353,8 @@ def evidence_for(project, state, task_id, current_fingerprint=None, current_cont
 
 def validate_delivery(project, state, doc):
     """One validation path for the controller and the delivery command."""
+    if state.get('revalidation'):
+        raise WorkflowError('REVALIDATION_PENDING ' + ', '.join(entry['task'] for entry in state['revalidation']))
     parallel = validate_parallel_bindings(state)
     if not parallel['valid']:
         raise WorkflowError(parallel['blocking'][0]['code'] + ' ' + str(parallel['blocking']))
@@ -1571,7 +1573,7 @@ def parser():
     n.add_argument('--size', choices=['small', 'large'], default='small', help='use large for cross-module or substantial single tasks')
     n.add_argument('--legacy-layout',action='store_true',help='compatibility: separated spec/plan layout')
     n.add_argument('--work',help='continue a saved idea by UUID or number')
-    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'run', 'scope', 'check-path', 'review', 'ready', 'close', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'observe-head', 'recover-run', 'documents-adopt', 'acceptance-enable', 'acceptance-record', 'topology', 'topology-select', 'external-link'):
+    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'revalidate', 'run', 'scope', 'check-path', 'review', 'ready', 'close', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'observe-head', 'recover-run', 'documents-adopt', 'acceptance-enable', 'acceptance-record', 'topology', 'topology-select', 'external-link'):
         q = sub.add_parser(name); q.add_argument('id')
         if name == 'documents-adopt':
             q.add_argument('--spec', required=True); q.add_argument('--plan', required=True); q.add_argument('--reason', required=True)
@@ -2029,7 +2031,7 @@ def dispatch(project, args):
         elif args.supersedes or args.reason or args.source:
             raise WorkflowError('LEARNING_TEXT_REQUIRED')
         return book.query(args.query,args.history), True
-    state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'run', 'review', 'ready', 'close'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path, allow_closed=command == 'close', recovery=command == 'recover-run' or (command == 'topology-select' and getattr(args, 'rebind', False)))
+    state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'revalidate', 'run', 'review', 'ready', 'close'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path, allow_closed=command == 'close', recovery=command == 'recover-run' or (command == 'topology-select' and getattr(args, 'rebind', False)))
     if command == 'topology':
         return project.topology_report(state), True
     if command == 'topology-select':
@@ -2255,6 +2257,10 @@ def dispatch(project, args):
             affected |= additional
         for item in state['tasks']:
             if item['id'] not in affected: continue
+            if item['status'] == 'done':
+                queue = state.setdefault('revalidation', [])
+                if item['id'] not in {entry['task'] for entry in queue}:
+                    queue.append({'task': item['id'], 'reason': args.reason, 'event': 'task-reopen', 'at': now()})
             item.setdefault('history', []).append({'at': now(), 'status': item['status'],
                 'evidence': item.get('evidence'), 'reason': args.reason, 'reopened_from': task['id']})
             item['status'] = 'pending' if item['id'] == task['id'] else 'needs-verification'
@@ -2371,8 +2377,61 @@ def dispatch(project, args):
         state['last_recovery'] = {'execution': state.pop('inflight'), 'outcome': args.outcome, 'report': str(file), 'sha256': digest(file), 'at': now()}
         state['status'] = 'needs-verification'
         state['verification_epoch'] = state.get('verification_epoch', 0) + 1
+        queue = state.setdefault('revalidation', [])
+        queued = {entry['task'] for entry in queue}
+        for item in state['tasks']:
+            if item['status'] == 'done' and item['id'] not in queued:
+                queue.append({'task': item['id'], 'reason': 'unknown execution quarantined', 'event': 'recover-run', 'at': now()})
         state['review'] = None
         invalidate_delivery(doc, '未知或失败执行已调查，旧证据不能用于新的交付。')
+    elif command == 'revalidate':
+        if state.get('inflight'): raise WorkflowError('EXECUTION_UNKNOWN reconcile the running command before revalidating')
+        if state.get('controller_required') and state['status'] != 'execute':
+            state['status'] = 'execute'
+            project.write(state, 'revalidate', 'resume execution for pending revalidation')
+        results = []
+        while True:
+            state = read(run / 'state.json')
+            queue = list(state.get('revalidation') or [])
+            if not queue: break
+            done_ids = {item['id'] for item in state['tasks'] if item['status'] == 'done'}
+            ready_entries = [entry for entry in queue
+                             if all(dep in done_ids for dep in project.item(state, entry['task'])['depends'])]
+            if not ready_entries:
+                raise WorkflowError('REVALIDATION_DEPENDENCY_BLOCKED ' + ', '.join(entry['task'] for entry in queue))
+            entry = ready_entries[0]
+            task_id = entry['task']
+            task = project.item(state, task_id)
+            if task['status'] == 'done':
+                try:
+                    evidence_for(project, state, task_id)
+                except WorkflowError:
+                    task['status'] = 'needs-verification'
+                    project.write(state, 'revalidation', task_id + ' evidence stale')
+                    continue
+            else:
+                if task['status'] != 'running':
+                    dispatch(project, argparse.Namespace(command='task-start', id=state['id'], task=task_id))
+                receipts = [read(project.root / path) for path in state.get('evidence', [])]
+                rows = [row for row in receipts if row.get('task') == task_id]
+                if not rows:
+                    raise WorkflowError('REVALIDATION_COMMAND_MISSING ' + task_id)
+                receipt = rows[-1]
+                run_args = argparse.Namespace(command='run', id=state['id'], task=task_id,
+                                              kind=receipt.get('kind', 'tests'), timeout=300, scan_timeout=120,
+                                              argv=list(receipt['argv']))
+                result, ok = dispatch(project, run_args)
+                results.append({'task': task_id, 'status': result.get('status') if isinstance(result, dict) else None})
+                if not ok:
+                    state = read(run / 'state.json')
+                    return {'task': state['id'], 'revalidation': 'stopped', 'failed': task_id,
+                            'remaining': [item['task'] for item in state.get('revalidation') or []]}, False
+                dispatch(project, argparse.Namespace(command='task-done', id=state['id'], task=task_id))
+            state = read(run / 'state.json')
+            state['revalidation'] = [item for item in state.get('revalidation') or [] if item['task'] != task_id]
+            project.write(state, 'revalidation', task_id + ' revalidated')
+        state = read(run / 'state.json')
+        return {'task': state['id'], 'revalidation': 'empty', 'results': results}, True
     elif command == 'save':
         checkpoint = {'schema': 1, 'at': now(), 'project_id': state['project_id'], 'root': str(project.root), 'git': git_identity(project.workspace_root(state)),
                       'fingerprint': fingerprint(project.workspace_root(state)), 'design': digest(project.document(state, 'design')), 'plan': digest(project.document(state, 'plan')) if project.document(state,'plan').exists() else None}
