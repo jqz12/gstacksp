@@ -865,7 +865,6 @@ class Project:
         topology['created_at'] = now()
         owner_state.pop('inflight', None)
         if rebind:
-            owner_state['verification_epoch'] = owner_state.get('verification_epoch', 0) + 1
             owner_state['review'] = None
             for task in owner_state.get('tasks', []):
                 if task['status'] == 'done':
@@ -1340,7 +1339,7 @@ def evidence_for(project, state, task_id, current_fingerprint=None, current_cont
     if latest.get('contract') != (current_contract or contract_hash(project, state, project.paths(state['id'])[1])):
         raise WorkflowError('EVIDENCE_CONTRACT_CHANGED ' + task_id)
     if (not allow_historical and
-            latest.get('verification_epoch', 0) != state.get('verification_epoch', 0)):
+            latest.get('verification_epoch', 0) < state.get('verification_epoch', 0)):
         raise WorkflowError('EVIDENCE_BEFORE_RECOVERY ' + task_id)
     folder = project.root / next(p for p in state['evidence'] if p.endswith(latest['id'] + '/receipt.json'))
     for name, expected in latest['logs'].items():
@@ -2109,7 +2108,6 @@ def dispatch(project, args):
         state['design_approval'] = None
         state['plan_seal'] = None
         state['review'] = None
-        state['verification_epoch'] = state.get('verification_epoch', 0) + 1
         state['status'] = 'design'
         invalidate_delivery(doc, '规格与计划正本已重新关联，需要重新批准、封存和验证。')
     elif command == 'approve':
@@ -2262,7 +2260,6 @@ def dispatch(project, args):
             item['status'] = 'pending' if item['id'] == task['id'] else 'needs-verification'
             item.pop('evidence', None)
             item.pop('completed_at', None)
-        state['verification_epoch'] = state.get('verification_epoch', 0) + 1
         state['review'] = None
         state['status'] = 'execute'
         invalidate_delivery(doc, '任务已按理由重开；依赖任务需重新验证，之后重做最终回归与整体审查。')

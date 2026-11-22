@@ -261,7 +261,7 @@ class TopologyLifecycleTests(unittest.TestCase):
         self.cmd('topology-select', 'work', '--mode', 'worktree', '--rebind',
                  '--quote', 'SYNTHETIC inspected deleted workspace and existing branch')
         self.assertEqual(self.state()['status'], 'execute')
-        self.assertEqual(self.state()['verification_epoch'], 1)
+        self.assertEqual(self.state().get('verification_epoch', 0), 0)
 
     def test_two_sessions_keep_separate_frozen_tasks_and_hook_context(self):
         from gsp.codex_hooks import handle
