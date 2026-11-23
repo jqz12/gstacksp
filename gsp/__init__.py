@@ -1,4 +1,4 @@
 """GstackSP local workflow runtime (Python standard library only)."""
-__version__ = '0.9.6'
+__version__ = '0.9.8'
 
 
