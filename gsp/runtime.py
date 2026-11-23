@@ -111,19 +111,44 @@ def inside(root, path):
         return False
 
 
-def git_identity(root):
-    def git(*args):
-        r = subprocess.run(['git', *args], cwd=root, capture_output=True, text=True,
-                           encoding='utf-8', errors='replace', timeout=15,
-                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-        return r.stdout.strip() if r.returncode == 0 else None
+def head_branch(root, gitdir):
+    """Read the checked-out branch from HEAD; None when detached or unknown."""
+    if not gitdir:
+        return None
+    path = Path(gitdir)
+    if not path.is_absolute():
+        path = Path(root) / path
     try:
-        top = git('rev-parse', '--show-toplevel')
-        return {'root': str(Path(top).resolve()) if top else None,
-                'branch': git('branch', '--show-current') if top else None,
-                'head': git('rev-parse', 'HEAD') if top else None}
-    except (OSError, subprocess.TimeoutExpired):
+        text = (path / 'HEAD').read_text(encoding='utf-8', errors='replace').strip()
+    except OSError:
+        return None
+    if text.startswith('ref: '):
+        ref = text[5:].strip()
+        if ref.startswith('refs/heads/'):
+            return ref[len('refs/heads/'):]
+        return None
+    return None
+
+
+def git_identity(root):
+    def call(*args):
+        try:
+            return subprocess.run(['git', *args], cwd=root, capture_output=True, text=True,
+                                  encoding='utf-8', errors='replace', timeout=15,
+                                  creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+    probe = call('rev-parse', '--show-toplevel', '--git-common-dir', '--git-dir', '--verify', 'HEAD')
+    if probe is None:
         return {'root': None, 'branch': None, 'head': None}
+    lines = [line.strip() for line in probe.stdout.splitlines() if line.strip()]
+    top = lines[0] if lines else None
+    if not top:
+        return {'root': None, 'branch': None, 'head': None}
+    gitdir = lines[2] if len(lines) >= 3 else None
+    head = lines[3] if probe.returncode == 0 and len(lines) >= 4 else None
+    branch = head_branch(top, gitdir)
+    return {'root': str(Path(top).resolve()), 'branch': branch, 'head': head}
 
 
 def _git_run(root, *args):
@@ -545,12 +570,12 @@ class Project:
     def validate_topology(self, state, allow_head_change=False):
         """Read-only validation shared by health, status and execution."""
         if not topology_selected(state):
-            return
-        self.validate_claims(state)
+            return None
         from .git_topology import probe
-        inventory = probe(self.root, active_tasks=[])
+        inventory = probe(self.root, include_branches=False, include_status=False)
         if not inventory.get('worktrees'):
             raise WorkflowError('GIT_PROBE_FAILED cannot verify registered worktrees')
+        self.validate_claims(state, inventory.get('active_tasks'))
         registered = {Path(row['path']).resolve(): row for row in inventory['worktrees']}
         bindings = [(None, state['git_topology'])]
         bindings += [(t['id'], t['topology']) for t in state.get('tasks', []) if t.get('topology')]
@@ -561,28 +586,37 @@ class Project:
         for task_id, binding in bindings:
             if task_id in attested_ids:
                 continue
-            path = self.workspace_root(state, task_id=task_id, allow_head_change=allow_head_change)
+            path = self.workspace_root(state, task_id=task_id, allow_head_change=allow_head_change,
+                                       validate=False)
+            if not path.is_dir():
+                raise WorkflowError('GIT_WORKSPACE_MISSING bound source workspace does not exist')
             row = registered.get(path)
             if not row or row.get('prunable'):
                 raise WorkflowError('GIT_WORKSPACE_UNREGISTERED ' + str(path))
+            expected_branch = binding.get('branch')
+            if expected_branch and row.get('branch') != expected_branch:
+                raise WorkflowError('GIT_WORKSPACE_MISMATCH bound branch differs from the recorded topology')
             expected_head = binding.get('head') if task_id else state.get('git', {}).get('head')
             if not allow_head_change and expected_head and row.get('head') != expected_head:
                 raise WorkflowError('HEAD_CHANGED inspect commit and observe-head' + (' --task ' + task_id if task_id else ''))
-            if binding.get('base_head'):
+            if binding.get('base_head') and row.get('head') != binding['base_head']:
                 ancestor = _git_run(path, 'merge-base', '--is-ancestor', binding['base_head'], 'HEAD')
                 if ancestor.returncode:
                     raise WorkflowError('GIT_BASE_MISMATCH bound base is not an ancestor of the workspace HEAD')
+        return inventory
 
     def verification_root(self, state, allow_head_change=False):
         integrations = [t for t in state.get('tasks', []) if t.get('role') == 'integration']
         return self.workspace_root(state, task_id=integrations[0]['id'] if len(integrations) == 1 else None,
                                    allow_head_change=allow_head_change)
 
-    def validate_claims(self, state):
+    def validate_claims(self, state, active_tasks=None):
         if not topology_selected(state):
             return
         from .git_topology import _active_summaries
-        claims = [r for r in _active_summaries(self.root, None) if r.get('claiming')]
+        if active_tasks is None:
+            active_tasks = _active_summaries(self.root, None)
+        claims = [r for r in active_tasks if r.get('claiming')]
         owned = [r for r in claims if r['id'] == state['id'] or r.get('parent') == state['id']]
         for left in owned:
             for right in claims:
@@ -947,9 +981,17 @@ class Project:
         # Git identity follows the task's bound source workspace.  In
         # worktree mode the control root remains on its own branch while the
         # task is executed in the child worktree.
+        inventory = None
         if not (release_scope or recovery) and topology_selected(state):
-            self.validate_topology(state, allow_head_change=allow_head_change)
-        current = git_identity(self.workspace_root(state, validate=False))
+            inventory = self.validate_topology(state, allow_head_change=allow_head_change)
+        workspace = self.workspace_root(state, validate=False)
+        current = None
+        if inventory:
+            row = inventory.get('current') or {}
+            if row.get('root') and Path(row['root']).resolve() == workspace:
+                current = {'root': row.get('root'), 'branch': row.get('branch'), 'head': row.get('head')}
+        if current is None:
+            current = git_identity(workspace)
         before = state.get('git', {})
         first_repository = (allow_head_change and not any(before.get(k) for k in ('root','branch','head'))
                             and current.get('root') == str(self.root))

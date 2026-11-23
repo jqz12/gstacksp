@@ -11,12 +11,18 @@ class HiddenProcessTests(unittest.TestCase):
         from pathlib import Path
         from types import SimpleNamespace
         from gsp.runtime import git_identity
-        with patch('gsp.runtime.subprocess.run', side_effect=[SimpleNamespace(returncode=0, stdout=str(Path.cwd())), SimpleNamespace(returncode=0, stdout='main'), SimpleNamespace(returncode=0, stdout='fixture-head')]) as launch:
-            self.assertEqual(git_identity(Path.cwd())['head'], 'fixture-head')
-            import os, subprocess
-            expected = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            self.assertTrue(all(c.kwargs['creationflags'] == expected for c in launch.call_args_list))
-            self.assertEqual(launch.call_count, 3)
+        with tempfile.TemporaryDirectory(prefix='gsp-hidden-git-') as folder:
+            root = Path(folder).resolve()
+            (root / '.git').mkdir()
+            (root / '.git' / 'HEAD').write_text('ref: refs/heads/main\n', encoding='utf-8')
+            output = f'{root}\n.git\n.git\nfixture-head\n'
+            with patch('gsp.runtime.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout=output)) as launch:
+                identity = git_identity(root)
+                import os, subprocess
+                expected = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                self.assertTrue(all(c.kwargs['creationflags'] == expected for c in launch.call_args_list))
+                self.assertEqual(launch.call_count, 1)
+            self.assertEqual(identity, {'root': str(root), 'branch': 'main', 'head': 'fixture-head'})
 
     def test_windows_children_keep_existing_flags_and_add_no_window(self):
         with patch('process_helpers.os.name', 'nt'), patch.object(process_helpers.subprocess, 'CREATE_NO_WINDOW', 0x08000000, create=True):

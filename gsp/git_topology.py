@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import Iterable
 
-from .runtime import WorkflowError, parallel_required, topology_selected
+from .runtime import WorkflowError, head_branch, parallel_required, topology_selected
 
 
 _KINDS = {'feature', 'fix', 'docs', 'test', 'refactor', 'chore', 'research'}
@@ -43,9 +43,9 @@ def _output(root: Path, *args: str) -> str | None:
     return result.stdout.strip()
 
 
-def _changed_paths(raw: str) -> list[str]:
+def _changed_paths(records) -> list[str]:
     paths: set[str] = set()
-    records = iter(raw.split('\0'))
+    records = iter(records)
     for record in records:
         if not record:
             continue
@@ -57,6 +57,21 @@ def _changed_paths(raw: str) -> list[str]:
             if source:
                 paths.add(source)
     return sorted(paths)
+
+
+def _split_branch_header(raw: str) -> tuple[str | None, list[str]]:
+    """Separate the `--branch` header from porcelain path records."""
+    records = raw.split('\0')
+    if records and records[0].startswith('## '):
+        text = records[0][3:]
+        if text.startswith('No commits yet on '):
+            branch = text[len('No commits yet on '):].split('...')[0].strip() or None
+        elif text.startswith('HEAD (no branch)'):
+            branch = None
+        else:
+            branch = text.split('...')[0].strip().split(' ')[0] or None
+        return branch, records[1:]
+    return None, records
 
 
 def _is_workflow_path(path: str) -> bool:
@@ -158,10 +173,11 @@ def bound_task_for_path(root: Path, path: Path) -> str | None:
     return owners.pop()
 
 
-def probe(root: Path, active_tasks: Iterable[dict] | None = None) -> dict:
+def probe(root: Path, active_tasks: Iterable[dict] | None = None, include_branches: bool = True,
+          include_status: bool = True) -> dict:
     root = Path(root).resolve()
     try:
-        return _probe(root, active_tasks)
+        return _probe(root, active_tasks, include_branches, include_status)
     except (OSError, subprocess.TimeoutExpired, WorkflowError) as exc:
         code = 'GIT_UNAVAILABLE' if isinstance(exc, FileNotFoundError) else 'GIT_PROBE_FAILED'
         return {'schema': 1, 'status': 'blocked', 'current': {'root': str(root)},
@@ -169,11 +185,13 @@ def probe(root: Path, active_tasks: Iterable[dict] | None = None) -> dict:
                 'risks': [{'code': code, 'severity': 'blocking', 'detail': str(exc)}]}
 
 
-def _probe(root: Path, active_tasks: Iterable[dict] | None = None) -> dict:
+def _probe(root: Path, active_tasks: Iterable[dict] | None = None, include_branches: bool = True,
+           include_status: bool = True) -> dict:
     """Return a read-only, machine-readable Git topology inventory."""
     root = Path(root).resolve()
-    identity = _run(root, 'rev-parse', '--show-toplevel', '--git-common-dir')
-    identity_lines = identity.stdout.splitlines() if identity.returncode == 0 else []
+    identity = _run(root, 'rev-parse', '--show-toplevel', '--git-common-dir', '--git-dir',
+                    '--verify', 'HEAD')
+    identity_lines = identity.stdout.splitlines()
     top = identity_lines[0].strip() if identity_lines else None
     if not top:
         git_marker = any((p / '.git').exists() for p in (root, *root.parents))
@@ -189,13 +207,13 @@ def _probe(root: Path, active_tasks: Iterable[dict] | None = None) -> dict:
             'risks': [{'code': 'GIT_NOT_REPOSITORY', 'severity': 'blocking', 'detail': 'Git repository is not available'}],
         }
 
-    branch_result = _run(root, 'branch', '--show-current')
-    if branch_result.returncode:
-        raise WorkflowError('GIT_PROBE_FAILED ' + branch_result.stderr.strip())
-    branch = branch_result.stdout.strip() or None
-    head = _output(root, 'rev-parse', '--verify', 'HEAD')
-    status = _run(root, 'status', '--porcelain=v1', '-z', '--untracked-files=all')
-    if status.returncode != 0:
+    gitdir = identity_lines[2].strip() if len(identity_lines) >= 3 else None
+    head = identity_lines[3].strip() if identity.returncode == 0 and len(identity_lines) >= 4 else None
+    branch = head_branch(top, gitdir)
+    status = (_run(root, 'status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all')
+              if include_status else None)
+    status_records: list[str] = []
+    if status is not None and status.returncode != 0:
         return {
             'schema': 1,
             'status': 'unknown',
@@ -206,7 +224,9 @@ def _probe(root: Path, active_tasks: Iterable[dict] | None = None) -> dict:
             'risks': [{'code': 'GIT_PROBE_FAILED', 'severity': 'blocking', 'detail': status.stderr.strip() or 'git status failed'}],
         }
 
-    changed = _changed_paths(status.stdout)
+    if status is not None:
+        _, status_records = _split_branch_header(status.stdout)
+    changed = _changed_paths(status_records)
     workflow_changed = sorted(path for path in changed if _is_workflow_path(path))
     source_changed = sorted(path for path in changed if path not in workflow_changed)
     worktree_raw = _run(root, 'worktree', 'list', '--porcelain', '-z')
@@ -215,11 +235,14 @@ def _probe(root: Path, active_tasks: Iterable[dict] | None = None) -> dict:
     worktrees = _parse_worktrees(worktree_raw.stdout)
     if not worktrees:
         raise WorkflowError('GIT_PROBE_FAILED empty worktree inventory')
-    refs = _run(root, 'for-each-ref', '--format=%(refname:short)%09%(objectname)', 'refs/heads/')
-    if refs.returncode:
-        raise WorkflowError('GIT_PROBE_FAILED ' + refs.stderr.strip())
-    branches = [{'name': line.split('\t')[0], 'head': line.split('\t')[1]}
-                for line in refs.stdout.splitlines() if '\t' in line]
+    if include_branches:
+        refs = _run(root, 'for-each-ref', '--format=%(refname:short)%09%(objectname)', 'refs/heads/')
+        if refs.returncode:
+            raise WorkflowError('GIT_PROBE_FAILED ' + refs.stderr.strip())
+        branches = [{'name': line.split('\t')[0], 'head': line.split('\t')[1]}
+                    for line in refs.stdout.splitlines() if '\t' in line]
+    else:
+        branches = []
     active = _active_summaries(root, active_tasks)
     risks: list[dict] = []
     if not head:

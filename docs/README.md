@@ -18,6 +18,18 @@
 - `gsp/`：运行时与状态处理代码。
 - `tests/`：自动化测试。
 
+## 测试入口
+
+| 命令 | 用途 |
+|---|---|
+| `python -m unittest discover -s tests -v` | 串行基准，保留完整测试口径 |
+| `python scripts/run_tests.py --jobs 4` | 按模块分片并行全量；单一汇总，失败分片单独回显 |
+| `python scripts/run_tests.py --jobs 4 --tier fast` | 纯单元快测层，不含子进程/CLI 测试 |
+
+`tests/tiers.json` 维护三件事：`fast` 快测清单、`serial` 不能与其它分片竞争的
+锁/PID 模块（先单独运行）、`weights` 本机实测耗时（仅用于分片装箱均衡）。
+并行入口不改变测试集合、统计口径或证据要求；串行 discover 始终可用。
+
 任务记录、审计、研究和构建产物由各开发工作区本地保存，不随公开发布版本提供。
 
 ## 锁恢复

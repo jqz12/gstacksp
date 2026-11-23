@@ -54,9 +54,17 @@ Git 项目的新任务先盘点分支和 worktree，再记录一次工作位置�
 ```powershell
 python scripts/build_skills.py
 python -m unittest discover -s tests -v
+python scripts/run_tests.py --jobs 4
+python scripts/run_tests.py --jobs 4 --tier fast
 python scripts/validate_skills.py
 python scripts/package.py
 ```
+
+`python -m unittest discover -s tests -v` 仍是串行基准口径；`scripts/run_tests.py`
+只改变执行方式：按模块分片并行、输出唯一的 `Ran N tests` 汇总，测试集合与失败判定不变。
+`--tier fast` 是纯单元快测层（不含子进程/CLI 测试，约 50 个用例）；`tests/tiers.json`
+同时记录不能与其它分片竞争的锁/PID 模块，它们会先单独运行。分片权重来自本机实测耗时，
+只影响负载均衡，不影响覆盖。
 
 `scripts/build_skills.py` 是生成技能的维护源；路由 `gsp-workflow` 和共同契约手工维护。可选技能通过当前宿主/项目已有工具完成工作，未集成第三方浏览器守护进程、模型服务或部署账户。
 
