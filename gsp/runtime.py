@@ -1415,7 +1415,7 @@ def run_check(project, state, run, args):
 
 
 def evidence_for(project, state, task_id, current_fingerprint=None, current_contract=None,
-                 allow_historical=False, allow_missing_workspace=False):
+                 allow_historical=False, allow_missing_workspace=False, defer_no_tests=False):
     rows = [read(project.root / p) for p in state['evidence']]
     # A whole-project `all` receipt is the final regression lane, not the
     # task's own evidence.  Mixing it into this lookup makes a later
@@ -1457,7 +1457,7 @@ def evidence_for(project, state, task_id, current_fingerprint=None, current_cont
         if digest(folder.parent / name) != expected:
             raise WorkflowError('EVIDENCE_TAMPERED ' + name)
     no_tests = all(t.get('no_tests_reason') for t in state['tasks']) if task_id == 'all' else project.item(state, task_id).get('no_tests_reason')
-    if latest['kind'] == 'check' and not no_tests:
+    if latest['kind'] == 'check' and not no_tests and not defer_no_tests:
         raise WorkflowError('TESTS_REQUIRED supply an explicit task-specific no-tests reason for non-test changes')
     return latest
 
@@ -1699,7 +1699,10 @@ def parser():
             q.add_argument('task'); q.add_argument('--title', required=True); q.add_argument('--acceptance', required=True); q.add_argument('--depends', default=''); q.add_argument('--no-tests-reason')
             q.add_argument('--role', choices=['implementation', 'frontend', 'backend', 'integration'], default='implementation')
             q.add_argument('--agent'); q.add_argument('--session'); q.add_argument('--parent-task')
-        elif name in ('task-start', 'task-done'): q.add_argument('task')
+        elif name in ('task-start', 'task-done'):
+            q.add_argument('task')
+            if name == 'task-done':
+                q.add_argument('--no-tests-reason')
         elif name == 'task-reopen': q.add_argument('task'); q.add_argument('--reason', required=True)
         elif name == 'run':
             q.add_argument('--task', required=True); q.add_argument('--kind', choices=['tests', 'check'], default='tests'); q.add_argument('--timeout', type=int, default=300); q.add_argument('--scan-timeout', type=int, default=120)
@@ -2355,7 +2358,25 @@ def dispatch(project, args):
     elif command == 'task-done':
         task = project.item(state, args.task)
         if task['status'] != 'running': raise WorkflowError('TASK_NOT_RUNNING')
-        task['evidence'] = evidence_for(project, state, args.task)['id']
+        latest = evidence_for(project, state, args.task, defer_no_tests=True)
+        supplied = getattr(args, 'no_tests_reason', None)
+        if latest['kind'] == 'tests':
+            if supplied is not None:
+                raise WorkflowError('NO_TESTS_REASON_CONFLICT tests evidence is already recorded')
+        else:
+            reason = supplied if supplied is not None else task.get('no_tests_reason')
+            reason = (reason or '').strip()
+            if supplied is not None and not reason:
+                raise WorkflowError('NO_TESTS_REASON_INVALID reason must be 8..300 characters')
+            if not reason:
+                raise WorkflowError('TESTS_REQUIRED supply an explicit --no-tests-reason for a check-only task')
+            if not 8 <= len(reason) <= 300:
+                raise WorkflowError('NO_TESTS_REASON_INVALID reason must be 8..300 characters')
+            task['no_tests_reason'] = redact(reason)
+            task.setdefault('history', []).append(
+                {'status': 'done', 'source': 'task-done',
+                 'no_tests_reason': task['no_tests_reason'], 'at': now()})
+        task['evidence'] = latest['id']
         task['status'] = 'done'
         if 'acceptance_cards' in task:
             task.setdefault('implementation', {})['status'] = 'implementation_done'
@@ -2411,7 +2432,11 @@ def dispatch(project, args):
         for task, row in zip(state['tasks'], checks):
             receipt = project.root / next(p for p in state['evidence'] if p.endswith(row['id'] + '/receipt.json'))
             link = os.path.relpath(receipt, doc).replace('\\', '/')
-            text += f'| {task["id"]} | {row["kind"]}: {row["status"]} (lane: {row["task"]}) | {row["tests_ran"]} | [receipt]({link}) |\n'
+            count = row['tests_ran'] if row['tests_ran'] is not None else '-'
+            text += f'| {task["id"]} | {row["kind"]}: {row["status"]} (lane: {row["task"]}) | {count} | [receipt]({link}) |\n'
+        for task in state['tasks']:
+            if task.get('no_tests_reason'):
+                text += f'\n- {task["id"]} 无自动化测试：{task["no_tests_reason"]}'
         text += f"\n自主决定：[decisions.md](decisions.md)。规格：[design]({project.document_link(state, 'design', doc)})。计划：[plan]({project.document_link(state, 'plan', doc)})。\n"
         if not (doc/'decisions.md').exists(): atomic(doc/'decisions.md','# 决策记录\n\n本任务无额外决定记录。\n')
         backlog_link = os.path.relpath(backlog['file'], doc).replace('\\', '/')

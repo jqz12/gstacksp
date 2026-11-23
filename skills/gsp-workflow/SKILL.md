@@ -17,7 +17,7 @@ description: Use when starting a development task in a project using GstackSP, o
    Git 拓扑是首次实现前的必经交接：先运行 `<gsp> topology <id>`，向用户展示当前分支、HEAD、全部 worktree、脏状态和已有任务绑定，再用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 记录一次选择。默认阻止 main/master 或 detached HEAD 直接写入；只有明确原地覆盖才可继续。状态中的 GSP 编号、T 任务号、branch、commit SHA、Issue/PR、control_root 和 workspace_root 各自独立，不能互相替代。
 4. 设计确认后依次使用 `gsp-writing-plans`、`gsp-execute`；计划评审 `gsp-autoplan` 按复杂度使用。测试、调试、审查在执行中调用。UI 按需调用 `gsp-browse`、`gsp-qa` 及已安装视觉扩展。
    阶段交接核对[实际产物与接口文档](references/artifact-fidelity.md)，读取完整阶段正文，不能以本入口摘要代替方法；计划自查后使用 `plan-check` 和 `seal-plan --check-structure`。
-5. 所有任务完成后只做一次整体 `gsp-review`，由 `gsp-verify` 确认证据，`gsp-ship` 准备交付。有精确外部操作授权则执行对应动作，不重复问。保存恢复用 `gsp-context-save`。
+5. 所有任务完成后先跑一次最终 `run --task all`，再做一次整体 `gsp-review`，由 `gsp-verify` 确认证据，`gsp-ship` 准备交付。同一输入不重复全量回归，只有测试入口或集合改变、或有回执记录的抖动才重跑并保留每次回执。有精确外部操作授权则执行对应动作，不重复问。保存恢复用 `gsp-context-save`。
 
 每个阶段按需读取项目根 `TODOS.md`，延期问题必须有归宿，必做问题不能靠延期解除阻塞。维护规则见 [待办生命周期](references/backlog.md)。
 
