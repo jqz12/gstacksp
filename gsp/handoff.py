@@ -51,10 +51,20 @@ def _checks(project, state, target):
             return [_gate('PLAN_NOT_SEALED', str(exc), 'plan-check then seal-plan', current)]
         if state.get('scope', {}).get('mode') not in ('frozen', 'off'):
             return [_gate('SCOPE_UNDECIDED', 'scope must be frozen or explicitly off', 'choose scope once', current)]
-        from .runtime import topology_required, topology_selected
+        from .runtime import parallel_required, topology_required, topology_selected, validate_parallel_bindings
         if topology_required(state) and not topology_selected(state):
             return [_gate('GIT_TOPOLOGY_REQUIRED', 'the task has no effective Git topology selection',
                           'run topology and topology-select once before implementation', current)]
+        if parallel_required(state):
+            parallel = validate_parallel_bindings(state)
+            ownership_codes = {'GIT_INTEGRATION_REQUIRED', 'GIT_INTEGRATION_OWNER_CONFLICT',
+                               'GIT_INTEGRATION_DEPENDENCY_MISSING'}
+            ownership = [item for item in parallel['blocking'] if item['code'] in ownership_codes]
+            if ownership:
+                first = ownership[0]
+                detail = '; '.join(item.get('detail', item['code']) for item in ownership)
+                return [_gate(first['code'], detail,
+                              '补齐唯一 integration 任务并声明全部子任务依赖后再进入 execute', current)]
     elif target == 'review':
         pending = [t['id'] for t in state.get('tasks', []) if t.get('status') != 'done']
         if pending:

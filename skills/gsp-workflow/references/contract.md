@@ -39,7 +39,7 @@
 
 Git 生命周期由 health route、workflow 和按需 `gsp-git` 共同承接：health 只读分类，gsp-git 处理分支/归属/提交准备，workflow 接收短 handoff。新任务第一次实现前先运行 `<gsp> topology <id>`，展示当前分支、HEAD、所有 worktree、脏状态和活动任务绑定，再用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 记录一次选择。默认阻止 main/master 和 detached HEAD 直接写入；原地实现必须有明确用户覆盖原话。新分支建议使用 `feature/GSP-<编号>[-Tnn]-<中文主题>` 等类型前缀，提交使用 Conventional Commit 并在正文包含任务编号；AI 协作提交按当前宿主默认署名 trailer 执行（Claude Code 使用其默认 `Co-Authored-By`，Codex 依其配置），项目不另造 trailer；旧分支保留历史语义。状态中的 GSP 编号、T 任务号、branch、commit SHA、Issue/PR、control_root 和 workspace_root 是独立身份；Issue/PR 没有真实对象时留空。commit、push、merge、delete-branch 各自需要精确授权，任务批准不自动授予这些动作。
 
-并行和全栈任务使用 `task-add --role frontend|backend|integration`，通过 `topology-select <id> --task Tnn` 为每个可写任务绑定独立 branch/worktree；控制根只保存一份 `.gsp` 账本，源码命令和 fingerprint 使用绑定的 `workspace_root`。共享可写 worktree、重复 branch、缺少 integration owner、子任务未完成或集成 base 已漂移时阻止 `ready`。资源不足可以顺序复用已释放 workspace，但不能退回未记录的主分支写入。
+并行和全栈任务使用 `task-add --role frontend|backend|integration`，通过 `topology-select <id> --task Tnn` 为每个可写任务绑定独立 branch/worktree；控制根只保存一份 `.gsp` 账本，源码命令和 fingerprint 使用绑定的 `workspace_root`。计划封存后新增 frontend/backend 必须用 `--owned-by <integration>` 声明归属并进入依赖图；新增 integration 必须用 `--depends` 传递覆盖现有全部可写任务。共享可写 worktree、重复 branch、缺少 integration owner、子任务未完成或集成 base 已漂移时阻止进入 `execute`/`ready`。资源不足可以顺序复用已释放 workspace，但不能退回未记录的主分支写入。
 
 任务创建时按实际形态声明 `--intent`，大功能或跨模块单任务用 `--size large`。同一单任务换会话只复核现有绑定，不额外制造集成任务。`--base` 指定派生基线；位置变化使用 `topology-select --rebind`，使旧验证失效并保留历史。子任务实际提交核对后使用 `observe-head --task Tnn`；集成 HEAD 必须包含所有子任务已验证的干净提交，当前不自动证明 cherry-pick/squash 的来源。最终 `run --task all`、审查和交付针对唯一集成工作区。多工作区由 Native 执行；headless driver 当前拒绝绑定 worktree，不能在控制根执行后冒称子工作区已验证。真正非 Git 项目保留原工作流，损坏 Git 和探测失败不能降级成该例外。
 
@@ -47,7 +47,7 @@ Git 生命周期由 health route、workflow 和按需 `gsp-git` 共同承接：h
 
 冻结 `scope <id> --path <目录> --quote "真实选择或无人值守授权及推荐理由"`；原地不冻结为 `--off`。只允许本项目已有目录，符号链接按真实路径核验。解除同样使用 `--off`。任务结束不自动解除，保持记录，换任务发现旧任务冻结应明确处理。
 
-任务状态关联的规格/计划以及 review/decisions/delivery 五份流程文档允许维护，不受源码目录冻结约束；它们的批准和证据仍按各自哈希校验。ready 保留 active 与冻结范围；用户确认交付完成后用 `close <id> --reason "关闭依据"` 关闭档案并释放该任务边界。运行时元数据只通过 CLI 更新。
+任务状态关联的规格/计划以及 review/decisions/delivery 五份流程文档允许维护，不受源码目录冻结约束；它们的批准和证据仍按各自哈希校验。ready 保留 active 与冻结范围；用户确认交付完成后用 `close <id> --reason "关闭依据"` 关闭档案并释放该任务边界。`blocked` 不是终态：`unblock <id> --reason "恢复依据"` 回到阻塞前阶段继续，`close <id> --abandoned --reason "放弃依据"` 以 cancelled 档案明确放弃；普通 `close` 仍只用于 ready 交付。绑定 worktree 已丢失时 `unblock` 仍要求先 `topology-select --rebind` 恢复真实工作区，`close --abandoned` 按恢复语义跳过拓扑装载，允许直接丢弃。运行时元数据只通过 CLI 更新。
 
 根待办文件同属流程文档，可在冻结源码目录之外维护；它仍计入项目指纹，更新后须重新验证，不意味着扩大源码修改授权。
 

@@ -1047,7 +1047,7 @@ class Project:
 
     def write(self, state, event, detail=''):
         run, doc = self.paths(state['id'])
-        if (run / 'state.json').exists() and read(run / 'state.json')['status'] == 'ready' and state['status'] != 'ready':
+        if (run / 'state.json').exists() and read(run / 'state.json')['status'] == 'ready' and state['status'] not in ('ready', 'closed'):
             invalidate_delivery(doc, f'任务进入 {state["status"]} 阶段；原交付报告仅保留为历史记录。')
         state['updated'] = now()
         atomic(run / 'state.json', state)
@@ -1689,7 +1689,7 @@ def parser():
     n.add_argument('--size', choices=['small', 'large'], default='small', help='use large for cross-module or substantial single tasks')
     n.add_argument('--legacy-layout',action='store_true',help='compatibility: separated spec/plan layout')
     n.add_argument('--work',help='continue a saved idea by UUID or number')
-    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'revalidate', 'run', 'scope', 'check-path', 'review', 'ready', 'close', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'observe-head', 'recover-run', 'documents-adopt', 'acceptance-enable', 'acceptance-record', 'topology', 'topology-select', 'external-link'):
+    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'revalidate', 'run', 'scope', 'check-path', 'review', 'ready', 'close', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'unblock', 'observe-head', 'recover-run', 'documents-adopt', 'acceptance-enable', 'acceptance-record', 'topology', 'topology-select', 'external-link'):
         q = sub.add_parser(name); q.add_argument('id')
         if name == 'documents-adopt':
             q.add_argument('--spec', required=True); q.add_argument('--plan', required=True); q.add_argument('--reason', required=True)
@@ -1698,6 +1698,7 @@ def parser():
         elif name == 'task-add':
             q.add_argument('task'); q.add_argument('--title', required=True); q.add_argument('--acceptance', required=True); q.add_argument('--depends', default=''); q.add_argument('--no-tests-reason')
             q.add_argument('--role', choices=['implementation', 'frontend', 'backend', 'integration'], default='implementation')
+            q.add_argument('--owned-by', help='the unique integration task that owns this frontend/backend task')
             q.add_argument('--agent'); q.add_argument('--session'); q.add_argument('--parent-task')
         elif name in ('task-start', 'task-done'):
             q.add_argument('task')
@@ -1715,10 +1716,13 @@ def parser():
             q.add_argument('action', choices=['commit', 'push', 'create-pr', 'merge', 'delete-branch', 'publish', 'spend', 'send']); q.add_argument('--scope', required=True)
             if name == 'authorize': q.add_argument('--quote', required=True)
         elif name == 'block': q.add_argument('--reason', required=True)
+        elif name == 'unblock': q.add_argument('--reason', required=True)
         elif name == 'observe-head':
             q.add_argument('--reason', required=True)
             q.add_argument('--task', dest='task_id', help='observe a child branch commit after inspection')
-        elif name == 'close': q.add_argument('--reason', required=True)
+        elif name == 'close':
+            q.add_argument('--reason', required=True)
+            q.add_argument('--abandoned', action='store_true', help='close a blocked task explicitly as abandoned')
         elif name == 'recover-run': q.add_argument('--evidence', required=True); q.add_argument('--outcome', choices=['not-run', 'failed'], required=True)
         elif name == 'acceptance-record': q.add_argument('task'); q.add_argument('--card', required=True)
         elif name == 'topology-select':
@@ -2150,7 +2154,7 @@ def dispatch(project, args):
         elif args.supersedes or args.reason or args.source:
             raise WorkflowError('LEARNING_TEXT_REQUIRED')
         return book.query(args.query,args.history), True
-    state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'revalidate', 'run', 'review', 'ready', 'close'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path, allow_closed=command == 'close', recovery=command == 'recover-run' or (command == 'topology-select' and getattr(args, 'rebind', False)))
+    state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'revalidate', 'run', 'review', 'ready'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path, allow_closed=command == 'close', recovery=command == 'recover-run' or (command == 'topology-select' and getattr(args, 'rebind', False)) or (command == 'close' and getattr(args, 'abandoned', False)))
     if command == 'topology':
         return project.topology_report(state), True
     if command == 'topology-select':
@@ -2247,16 +2251,28 @@ def dispatch(project, args):
         from .documents import Governance
         book = Governance(project.root)
         record = book.get(state['work_uuid'])
-        if state.get('status') != 'ready' and record.get('stage') != 'closed':
-            raise WorkflowError('CLOSE_REQUIRES_READY close is only valid after ready or an explicitly closed archive')
-        if record.get('stage') != 'closed':
-            book.stage(record['uuid'], 'closed', args.reason)
+        abandoned = bool(getattr(args, 'abandoned', False))
+        if abandoned:
+            if state.get('status') != 'blocked':
+                raise WorkflowError('CLOSE_ABANDON_REQUIRES_BLOCKED close --abandoned is only valid for a blocked task')
+            if record.get('stage') == 'delivered':
+                raise WorkflowError('CLOSE_ABANDON_NOT_ALLOWED delivered work cannot be abandoned')
+            if record.get('stage') not in {'cancelled', 'closed'}:
+                book.stage(record['uuid'], 'cancelled', args.reason)
+            state['close_kind'] = 'abandoned'
+        else:
+            if state.get('status') != 'ready' and record.get('stage') != 'closed':
+                raise WorkflowError('CLOSE_REQUIRES_READY close is only valid after ready or an explicitly closed archive')
+            if record.get('stage') != 'closed':
+                book.stage(record['uuid'], 'closed', args.reason)
+            state['close_kind'] = 'normal'
         active = project.meta / 'active.json'
         if active.exists() and read(active).get('task') == state['id']:
             active.unlink()
         state['scope'] = {'mode': 'off', 'path': None, 'quote': args.reason, 'at': now()}
         state['closed_at'] = now()
         state['close_reason'] = redact(args.reason)
+        state['status'] = 'closed'
         project.write(state, command, args.reason)
         return {'task': state['id'], 'status': 'closed', 'event': 'close', 'active_released': True}, True
     elif command == 'task-add':
@@ -2275,11 +2291,42 @@ def dispatch(project, args):
         parent_task = getattr(args, 'parent_task', None)
         if parent_task and parent_task not in existing:
             raise WorkflowError('PARENT_TASK_INVALID parent task must name an existing task')
-        state['tasks'].append({'id': args.task, 'title': args.title, 'acceptance': args.acceptance, 'depends': depends,
-                               'status': 'pending', 'no_tests_reason': args.no_tests_reason,
-                               'role': getattr(args, 'role', 'implementation'),
-                               'agent': getattr(args, 'agent', None), 'session': getattr(args, 'session', None),
-                               'parent_task': parent_task, 'topology': {}})
+        role = getattr(args, 'role', 'implementation')
+        owned_by = getattr(args, 'owned_by', None)
+        integrations = [task for task in state['tasks'] if task.get('role') == 'integration']
+        if len(integrations) > 1:
+            raise WorkflowError('GIT_INTEGRATION_OWNER_CONFLICT only one integration task may own the parent merge point')
+        if role == 'integration' and integrations:
+            raise WorkflowError('GIT_INTEGRATION_OWNER_CONFLICT only one integration task may own the parent merge point')
+        if owned_by and role not in {'frontend', 'backend'}:
+            raise WorkflowError('INTEGRATION_OWNER_INVALID --owned-by is only valid for frontend or backend tasks')
+        owner = integrations[0] if integrations else None
+        if role in {'frontend', 'backend'}:
+            if not owner and state.get('plan_seal'):
+                raise WorkflowError('INTEGRATION_REQUIRED_FOR_LATE_TASK add --role integration with --depends covering current tasks first')
+            if owner:
+                if not owned_by:
+                    raise WorkflowError('INTEGRATION_OWNER_REQUIRED use --owned-by ' + owner['id'])
+                if owned_by != owner['id']:
+                    raise WorkflowError('INTEGRATION_OWNER_INVALID --owned-by must name the unique integration task ' + owner['id'])
+                if owner.get('status') == 'done':
+                    raise WorkflowError('INTEGRATION_REOPEN_REQUIRED task-reopen ' + state['id'] + ' ' + owner['id'] + ' --reason "new dependent task"')
+        row = {'id': args.task, 'title': args.title, 'acceptance': args.acceptance, 'depends': depends,
+               'status': 'pending', 'no_tests_reason': args.no_tests_reason, 'role': role,
+               'agent': getattr(args, 'agent', None), 'session': getattr(args, 'session', None),
+               'parent_task': parent_task, 'topology': {}}
+        if owned_by:
+            row['owned_by'] = owned_by
+        if role == 'integration':
+            covered = integration_dependencies({'tasks': state['tasks'] + [row]}, row)
+            required = {task['id'] for task in state['tasks']
+                        if task.get('role') not in {'observer', 'integration'}}
+            missing = sorted(required - covered)
+            if missing:
+                raise WorkflowError('INTEGRATION_COVERAGE_REQUIRED missing: ' + ', '.join(missing))
+        state['tasks'].append(row)
+        if owned_by:
+            owner['depends'] = list(dict.fromkeys(list(owner.get('depends') or []) + [args.task]))
         state['plan_seal'] = None
         state['status'] = 'plan'
     elif command == 'acceptance-enable':
@@ -2460,7 +2507,17 @@ def dispatch(project, args):
         if not match: raise WorkflowError('AUTHORIZATION_MISSING action and scope must match actual user instruction')
         return match, True
     elif command == 'block':
+        state['blocked_from'] = state.get('status')
         state['status'] = 'blocked'; state['blocked_reason'] = args.reason
+    elif command == 'unblock':
+        if state.get('status') != 'blocked':
+            raise WorkflowError('UNBLOCK_REQUIRES_BLOCKED')
+        target = state.get('blocked_from')
+        if target not in {'design', 'plan', 'execute', 'review', 'needs-verification'}:
+            target = 'plan'
+        state['status'] = target
+        state['unblocked_at'] = now()
+        state['unblock_reason'] = redact(args.reason)
     elif command == 'observe-head':
         task_id = getattr(args, 'task_id', None)
         if task_id:
@@ -2603,6 +2660,10 @@ def dispatch(project, args):
             pending.append({'kind': 'git_topology', 'reason': '当前任务尚未选择原地、分支或 worktree', 'command': f"topology {state['id']} && topology-select {state['id']} --mode <in-place|branch|worktree> --quote \"用户原话\""})
         if state.get('inflight'):
             pending.append({'kind': 'recovery', 'reason': '上次命令结果未知，先调查并恢复', 'command': f"recover-run {state['id']} --evidence <报告路径> --outcome failed"})
+        if state.get('status') == 'blocked':
+            pending.append({'kind': 'blocked', 'reason': state.get('blocked_reason') or '任务已被阻塞',
+                            'command': (f'unblock {state["id"]} --reason "<恢复依据>" | '
+                                        f'close {state["id"]} --abandoned --reason "<放弃依据>"')})
         next_skill = {'design': 'gsp-brainstorming', 'plan': 'gsp-writing-plans', 'execute': 'gsp-execute',
                       'checking': 'gsp-verify', 'review': 'gsp-review', 'ready': 'gsp-ship',
                       'needs-verification': 'gsp-verify', 'blocked': 'gsp-workflow'}.get(state.get('status'), 'gsp-workflow')

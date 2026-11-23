@@ -297,9 +297,10 @@ class TopologyLifecycleTests(unittest.TestCase):
     def test_fullstack_uses_integration_tree_and_checks_child_commits(self):
         self.setup_git()
         self.prepare(intent='full-stack')
-        self.cmd('task-add', 'work', 'T02', '--title', '前端', '--role', 'frontend', '--acceptance', 'UI checks')
         self.cmd('task-add', 'work', 'T03', '--title', '集成', '--role', 'integration',
-                 '--acceptance', 'Integration checks', '--depends', 'T01,T02')
+                 '--acceptance', 'Integration checks', '--depends', 'T01')
+        self.cmd('task-add', 'work', 'T02', '--title', '前端', '--role', 'frontend',
+                 '--owned-by', 'T03', '--acceptance', 'UI checks')
         self.cmd('seal-plan', 'work')
         self.cmd('topology-select', 'work', '--mode', 'in-place', '--quote', 'SYNTHETIC control only')
         for task in ('T01', 'T02', 'T03'):
@@ -318,7 +319,7 @@ class TopologyLifecycleTests(unittest.TestCase):
         integration = self.project.workspace_root(self.state(), task_id='T03')
         with self.assertRaisesRegex(WorkflowError, 'GIT_INTEGRATION_'):
             self.check('T03')
-        children = self.state()['tasks'][:2]
+        children = [task for task in self.state()['tasks'] if task.get('role') != 'integration']
         for child in children:
             self.git('merge', '--no-edit', child['topology']['branch'], cwd=integration)
         self.cmd('observe-head', 'work', '--task', 'T03', '--reason', 'SYNTHETIC inspected merged commits')

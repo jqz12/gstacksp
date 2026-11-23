@@ -18,10 +18,11 @@ description: Use when starting a development task in a project using GstackSP, o
 4. 设计确认后依次使用 `gsp-writing-plans`、`gsp-execute`；计划评审 `gsp-autoplan` 按复杂度使用。测试、调试、审查在执行中调用。UI 按需调用 `gsp-browse`、`gsp-qa` 及已安装视觉扩展。
    阶段交接核对[实际产物与接口文档](references/artifact-fidelity.md)，读取完整阶段正文，不能以本入口摘要代替方法；计划自查后使用 `plan-check` 和 `seal-plan --check-structure`。
 5. 所有任务完成后先跑一次最终 `run --task all`，再做一次整体 `gsp-review`，由 `gsp-verify` 确认证据，`gsp-ship` 准备交付。同一输入不重复全量回归，只有测试入口或集合改变、或有回执记录的抖动才重跑并保留每次回执。有精确外部操作授权则执行对应动作，不重复问。保存恢复用 `gsp-context-save`。
+6. 任务进入 `blocked` 时不是终态：用 `<gsp> unblock <id> --reason "..."` 恢复阻塞前阶段继续执行，或用 `<gsp> close <id> --abandoned --reason "..."` 明确放弃并把档案归档为 cancelled；普通 `close` 仍只用于 ready 交付。绑定 worktree 已丢失时 `unblock` 仍要求先 `topology-select --rebind` 恢复，`close --abandoned` 可直接按恢复语义丢弃该工作区。
 
 每个阶段按需读取项目根 `TODOS.md`，延期问题必须有归宿，必做问题不能靠延期解除阻塞。维护规则见 [待办生命周期](references/backlog.md)。
 
-并行或全栈任务使用 `task-add --role frontend|backend|integration` 和 `topology-select --task Tnn`；每个可写任务一任务一 branch/worktree，控制根只保留一份账本。前后端各自验证后由唯一 integration owner 在集成 worktree 汇合；缺集成任务、共享写目录或旧 base 时阻止 ready。Issue/PR 只有真实对象才登记。
+并行或全栈任务使用 `task-add --role frontend|backend|integration` 和 `topology-select --task Tnn`；每个可写任务一任务一 branch/worktree，控制根只保留一份账本。计划封存后新增 frontend/backend 必须用 `--owned-by <integration>` 声明归属；新增 integration 的 `--depends` 必须传递覆盖现有全部可写任务。前后端各自验证后由唯一 integration owner 在集成 worktree 汇合；缺集成任务、共享写目录或旧 base 时阻止进入 execute/ready。Issue/PR 只有真实对象才登记。
 
 用户明确要求后台无人值守时读 [持久驱动器](references/driver.md)：当前提供 Codex headless 适配器，设计确认和冻结选择后配置检查命令并启动；普通 unattended 标志本身不会创建后台进程。
 
