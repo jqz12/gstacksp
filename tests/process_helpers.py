@@ -3,6 +3,34 @@ import os
 import subprocess
 
 
+class temporary_env:
+    _missing = object()
+
+    def __init__(self, values):
+        self.values = dict(values)
+        self.previous = {}
+
+    def start(self):
+        for key in self.values:
+            self.previous[key] = os.environ.get(key, self._missing)
+        os.environ.update(self.values)
+        return self
+
+    def stop(self):
+        for key, value in self.previous.items():
+            if value is self._missing:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self.previous.clear()
+
+    def __enter__(self):
+        return self.start()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.stop()
+
+
 def options(kwargs):
     kwargs = dict(kwargs)
     if os.name == 'nt':

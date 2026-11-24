@@ -1,15 +1,14 @@
 """Install-scope health checks must not hide one broken install with another."""
 import hashlib
 import json
-import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gsp.runtime import health
+from process_helpers import temporary_env
 
 
 class HealthScopesTests(unittest.TestCase):
@@ -19,7 +18,7 @@ class HealthScopesTests(unittest.TestCase):
         root = Path(self.temp.name)
         self.project, self.home = root / 'project', root / 'home'
         self.project.mkdir(); self.home.mkdir()
-        self.env = patch.dict(os.environ, {'CODEX_HOME': str(self.home / '.codex')})
+        self.env = temporary_env({'CODEX_HOME': str(self.home / '.codex')})
         self.env.start(); self.addCleanup(self.env.stop)
 
     def global_install(self):

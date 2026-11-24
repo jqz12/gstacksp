@@ -1,6 +1,9 @@
 import unittest
+import os
 import subprocess
+import sys
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import process_helpers
@@ -36,6 +39,34 @@ class HiddenProcessTests(unittest.TestCase):
         with patch('process_helpers.os.name', 'posix'), patch.object(process_helpers.subprocess, 'run') as launch:
             process_helpers.run(['fixture'])
             self.assertNotIn('creationflags', launch.call_args.kwargs)
+
+    def test_environment_override_preserves_unrelated_empty_windows_value(self):
+        script = f'''
+import subprocess
+import sys
+
+sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})
+from process_helpers import temporary_env
+
+def probe():
+    inner = "import os; print('present' if 'GSP_EMPTY_ENV_PROBE' in os.environ else 'missing')"
+    result = subprocess.run([sys.executable, "-c", inner], capture_output=True, text=True)
+    if result.returncode:
+        raise SystemExit(result.stderr)
+    return result.stdout.strip()
+
+before = probe()
+with temporary_env({{"CODEX_HOME": "fixture-profile"}}):
+    during = probe()
+after = probe()
+print(",".join((before, during, after)))
+'''
+        env = dict(os.environ, GSP_EMPTY_ENV_PROBE='')
+        result = subprocess.run(
+            [sys.executable, '-c', script], env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'present,present,present')
 
     def test_commit_number_warning_is_non_blocking(self):
         from pathlib import Path

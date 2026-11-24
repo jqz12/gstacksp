@@ -1,7 +1,6 @@
 """Health reports GitHub user-install updates without mutating installations."""
 import hashlib
 import json
-import os
 from pathlib import Path
 import sys
 import tempfile
@@ -11,6 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gsp.runtime import WorkflowError, _github_user_upgrade, health
 from gsp.user_install import UserInstall
+from process_helpers import temporary_env
 
 
 class HealthUpdateTests(unittest.TestCase):
@@ -31,7 +31,7 @@ class HealthUpdateTests(unittest.TestCase):
             'source': 'E:/GstackSP', 'version': '0.8.10',
             'files': {'skills/gsp-workflow/SKILL.md': hashlib.sha256(skill.read_bytes()).hexdigest()},
         }), encoding='utf-8')
-        self.env = patch.dict(os.environ, {'CODEX_HOME': str(self.profile)})
+        self.env = temporary_env({'CODEX_HOME': str(self.profile)})
         self.env.start(); self.addCleanup(self.env.stop)
 
     def result(self, **values):
