@@ -32,6 +32,14 @@
 
 收口时同一输入只跑一次最终回归（`run --task all`），随后做一次整体审查；只有测试入口或测试集合确实改变、或有已记录的抖动时，才重复运行并保留每次回执。
 
+## 构建与临时产物
+
+- `run` 为每次执行设置隔离的 TMP/TEMP/TMPDIR，并只回收本次新增的 `temp_roots` 条目；回执记录 `hygiene`。
+- 可选 `.gsp/build-policy.json` 调整临时根、失败保留上限、构建预算和 profile 期望；缺省即使用内置默认。
+- managed worktree 使用 `.gsp/build/<编号>/<slug>` 作为构建根，收尾时随 worktree 回收。
+- 计划缺少“产物与临时文件生命周期”时 `plan-check` 报 `HYGIENE_SECTION_MISSING`（large 任务封计划失败）；未解释残留让 `ready` 报 `HYGIENE_LEFTOVER`。
+- 收尾用 `topology-clean`（默认 dry-run）和 `close --cleanup` 收敛 worktree/分支；`close --reconcile` 归一已删除 workspace 的遗留状态。
+
 任务记录、审计、研究和构建产物由各开发工作区本地保存，不随公开发布版本提供。
 
 ## 锁恢复

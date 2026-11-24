@@ -33,7 +33,7 @@ def _field(text, names):
     return any(_meaningful(match[1]) for match in re.finditer(pattern, text, re.M | re.I))
 
 
-def _section(text, names):
+def _section_body(text, names):
     pattern = r'^(#{1,6})[ \t]+(?:' + '|'.join(names) + r')[ \t]*[:：]?[ \t]*$'
     for match in re.finditer(pattern, text, re.M | re.I):
         rest = text[match.end():]
@@ -42,19 +42,52 @@ def _section(text, names):
         body = re.sub(r'^#{1,6}[ \t]+[^\n]*$', '', body, flags=re.M)
         body = re.sub(r'^[ \t]*(?:[-*_][ \t]*){3,}$', '', body, flags=re.M)
         if _meaningful(body):
-            return True
-    return False
+            return body
+    return None
 
 
-def check_plan(text: str, task_ids: list[str]) -> dict:
+def _section(text, names):
+    return _section_body(text, names) is not None
+
+
+HYGIENE_TRIGGER = re.compile(
+    r'(?i)\b(?:tests?|pytest|unittest|build|target|temp|temporary|worktree|incremental)\b'
+    r'|CARGO_TARGET_DIR|临时目录|临时文件|构建产物|工作树|缓存')
+HYGIENE_SECTION_NAMES = ['产物与临时文件生命周期', 'Product & Lifecycle',
+                         'Artifacts and Lifecycle']
+HYGIENE_FIELDS = [
+    ['产物位置', '位置', 'Artifact location', 'Location', 'Output location'],
+    ['回收责任', '清理责任', '回收', 'Cleanup owner', 'Owner', 'Ownership',
+     'Reclaim responsibility', 'Cleanup'],
+    ['保留与上限', '保留上限', '上限', 'Retention limits', 'Retention & limits',
+     'Retention', 'Limits', 'Budget'],
+    ['验收方式', '验收', 'Verification', 'Acceptance', 'Checks'],
+]
+
+
+def hygiene_needed(text: str) -> bool:
+    """Plans that can create build or temporary output need a lifecycle section."""
+    return bool(HYGIENE_TRIGGER.search(_prose(text)))
+
+
+def hygiene_section(text: str) -> bool:
+    """Require a real lifecycle section with all four declared fields."""
+    body = _section_body(_prose(text), HYGIENE_SECTION_NAMES)
+    if body is None:
+        return False
+    return all(_field(body, names) for names in HYGIENE_FIELDS)
+
+
+def check_plan(text: str, task_ids: list[str], hygiene_blocking: bool = False) -> dict:
     """Check explicit SP-style structure; no claims about signatures or coverage."""
     text = _prose(text)
     headings = list(re.finditer(r'^(#{2,6})[ \t]+(?:(?:Task|任务)[ \t]+)?([\w-]+)(?:[ \t]*[:：]|[ \t]+)[^\n]*$', text, re.M | re.I))
     task_headings = [m for m in headings if m[2] in task_ids]
     header = text[:task_headings[0].start()] if task_headings else text
     findings = []
-    def missing(code, detail, task=None):
-        findings.append({'code': code, 'task': task, 'detail': detail})
+    def missing(code, detail, task=None, severity='blocking'):
+        findings.append({'code': code, 'task': task, 'detail': detail,
+                         'severity': severity})
     for code, labels in [('GOAL', ['Goal', '目标']), ('ARCHITECTURE', ['Architecture', '架构']),
                          ('TECH_STACK', ['Tech Stack', '技术栈']), ('SPEC', ['Spec', '规格'])]:
         if not _field(header, labels):
@@ -91,7 +124,13 @@ def check_plan(text: str, task_ids: list[str]) -> dict:
             missing('INTERFACES_MISSING', 'Missing task Interfaces label', task)
         if not re.search(r'^[ \t]*-[ \t]+\[[ xX]\][ \t]+\S', block, re.M):
             missing('STEPS_MISSING', 'Missing checkbox steps', task)
-    return {'schema': 1, 'structural_ok': not findings, 'findings': findings,
+    if hygiene_needed(text) and not hygiene_section(text):
+        missing('HYGIENE_SECTION_MISSING',
+                'Testing, build or worktree plans need 产物位置/回收责任/保留与上限/验收方式',
+                severity='blocking' if hygiene_blocking else 'warning')
+    return {'schema': 1,
+            'structural_ok': not any(row['severity'] == 'blocking' for row in findings),
+            'findings': findings,
             'semantic_review': 'NOT_CHECKED'}
 
 
@@ -105,5 +144,7 @@ def inspect_plan(project, task_id: str) -> dict:
         raw = stream.read(MAX_PLAN_BYTES + 1)
     if len(raw) > MAX_PLAN_BYTES:
         raise WorkflowError('PLAN_TOO_LARGE limit is 1 MiB')
-    result = check_plan(raw.decode('utf-8-sig'), [task['id'] for task in state['tasks']])
+    size = (state.get('git_topology') or {}).get('size') or state.get('size')
+    result = check_plan(raw.decode('utf-8-sig'), [task['id'] for task in state['tasks']],
+                        hygiene_blocking=size == 'large')
     return {**result, 'task': task_id, 'plan': path.relative_to(project.root).as_posix()}

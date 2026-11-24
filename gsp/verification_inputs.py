@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 
-from .runtime import WorkflowError, inside, read, sha
+from .runtime import WorkflowError, inside, read, sha, visible_git_marker
 
 BUILD_DIRS={'target','build','dist','out','.next','.cache','.mypy_cache','.ruff_cache'}
 HISTORY=('docs/work/','docs/superpowers/','docs/gsp/')
@@ -18,7 +18,7 @@ def scan(root, deadline=None, progress=None):
     root=Path(root).resolve()
     deadline=deadline if deadline is not None else time.monotonic()+120
     started=time.monotonic();last=started;count=0;total=0
-    git_marker=any((p/'.git').exists() for p in [root,*root.parents])
+    git_marker=visible_git_marker(root)
     def tick(force=False):
         nonlocal last
         clock=time.monotonic()

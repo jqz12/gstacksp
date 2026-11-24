@@ -65,6 +65,18 @@ Codex direct-edit hook 解析 `apply_patch`、`Edit`、`Write` 和 `NotebookEdit
 
 需要脱离当前会话运行时使用 [持久驱动器](driver.md)。`unattended` 仅记录授权；`drive-start` 才创建独立控制进程。当前 Codex worker 按计划实施，控制器运行真实检查、修复、审查和交付准备；不自动执行外部发布。不可把状态未知改成成功、重置计数或让会话与后台同时写项目。
 
+## 构建与临时产物
+
+这是防复发约束，不是历史清理入口。计划涉及 tests/test/build/target/temp/worktree/incremental 或 `CARGO_TARGET_DIR` 时必须有“产物与临时文件生命周期”小节，写清产物位置、回收责任、保留与上限、验收方式；`plan-check` 缺失时报 `HYGIENE_SECTION_MISSING`，`size=large` 的 `seal-plan --check-structure` 失败。反模式包括每任务自建构建目录而不声明回收、测试 helper 用 pid+序号 建目录且无 RAII、无限放大 debug/PDB、把临时目录留在源码树且不登记生命周期。
+
+`run` 默认为每次执行创建 `.gsp/tmp/runs/<evidence-id>/` 并设置 TMP/TEMP/TMPDIR，结束后删除；按 `.gsp/build-policy.json` 的 `temp_roots`（Cargo 项目默认 `target/tmp`）只回收本次新增条目。成功全部回收；失败最多保留 `retain_on_failure.max_entries`（默认 1）与 `max_bytes`（默认 50 MiB）；符号链接、Git 跟踪文件和根外路径只记录不删除；枚举超过 20,000 条标记 `truncated` 且不删除。回执 `hygiene` 记录 disabled/created/removed/retained/retained_bytes/truncated/over_budget/errors。`temp_isolation:false` 必须显式配置并在回执标注。
+
+managed worktree 的构建根是 `<project>/.gsp/build/<编号>/<slug>`；brief 和 Tnn-prompt 写入 `CARGO_TARGET_DIR` 与 `BUILD_ROOT`。worktree 回收时删除自己的构建根，活动 dispatch 引用或删除失败则保留并记录。`worktree_build:"off"` 才退回 worktree 自带目录。
+
+`ready` 校验最新 `all` 回执：未解释的 `hygiene.retained`/`errors`/`truncated` 阻塞为 `HYGIENE_LEFTOVER`，写入 decision 才放行并在 delivery 列出理由；失败运行在上限内的保留不阻塞。delivery 同时记录 `git_clean` 与 `branch_merged`，不隐藏未提交或未合并。
+
+收尾用 `topology-clean <id> [task]`（默认 dry-run，`--apply` 只删除已合并+干净+无活动租约的 worktree 与已合并分支），以及 `close --cleanup`；`close` 发现绑定 worktree 有未提交改动时默认拒绝，`--allow-dirty` 必须配合明确理由。workspace 已删除的遗留 ready/closed 用 `close --reconcile` 归一，`status`/`resume` 返回 `workspace_missing=true` 而不是永久失败。`topology`/`new` 输出 `residue`，让残留对新任务可见。
+
 ## 验证和审查
 
 有行为变更时优先先写会失败的有效测试，再最小实现、测试和重构；纯文档或无合适自动测试的任务记录具体理由与替代验证。测试命令从项目实际配置选择。

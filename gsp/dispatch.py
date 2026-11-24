@@ -376,6 +376,7 @@ def render_task_prompt(state, task, dispatch):
     brief_path = dispatch.get('brief') or f"{state.get('doc_dir', 'docs/work')}/sessions/{task['id']}-brief.md"
     interfaces = task.get('interfaces') or ['遵循总体 plan.md 中的公共接口约束']
     tests = task.get('tests') or [str(task.get('acceptance') or '完成任务验收并提交 report')]
+    build_env = dispatch.get('build_env') or {}
     return '\n'.join([
         f"# {task['id']} 子会话启动提示词", '',
         f"- GSP：{state.get('number') or state['id']}",
@@ -386,7 +387,8 @@ def render_task_prompt(state, task, dispatch):
         f"- 平台目标：{dispatch.get('platform')}",
         f"- 派发方式：{dispatch.get('dispatch_mode')}",
         f"- branch：{dispatch.get('branch') or '由宿主绑定'}",
-        f"- worktree：{dispatch.get('worktree') or '由宿主绑定'}", '',
+        f"- worktree：{dispatch.get('worktree') or '由宿主绑定'}",
+        f"- 构建根：{dispatch.get('build_root') or '—（worktree 自带构建目录）'}", '',
         '## 必读文件', '',
         f'- 总体计划：{plan_path}',
         f'- 本任务 brief：{brief_path}', '',
@@ -400,6 +402,11 @@ def render_task_prompt(state, task, dispatch):
         *[f'- {item}' for item in tests], '',
         '## 依赖', '',
         *[f'- {item}' for item in dependencies], '',
+        '## 构建环境', '',
+        *([f'- {key}={value}' for key, value in build_env.items()] or
+          ['- 无托管构建根；不得把临时构建目录长期留在 worktree 内。']),
+        '- 构建产物与临时文件必须落在上述构建根或运行隔离目录，收尾时必须回收。',
+        '',
         '## 禁止范围', '',
         '- 不修改总体 plan、父状态或其他任务的文件。',
         '- 不扩大到未声明的路径、公共契约、凭据或外部动作。', '',

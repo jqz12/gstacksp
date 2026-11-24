@@ -9,7 +9,8 @@ import sys
 import time
 import uuid
 
-from .runtime import Project, WorkflowError, atomic, inside, now, read, slug
+from .runtime import (Project, WorkflowError, atomic, find_project_root, inside,
+                      now, read, slug)
 
 INPUT_LIMIT = 1024 * 1024
 SESSION_LIMIT = 32 * 1024 * 1024
@@ -138,12 +139,10 @@ def patch_paths(command):
 
 def locate(cwd):
     if not isinstance(cwd,str) or not Path(cwd).is_absolute(): return None
-    cwd=Path(cwd).resolve()
-    for root in [cwd,*cwd.parents]:
-        if (root/'.gsp/project.json').is_file():
-            safe_file(root,root/'.gsp/project.json')
-            return root
-    return None
+    root=find_project_root(Path(cwd))
+    if root is not None:
+        safe_file(root,root/'.gsp/project.json')
+    return root
 
 
 def deny(reason):

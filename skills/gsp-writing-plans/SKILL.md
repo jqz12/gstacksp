@@ -13,7 +13,7 @@ Use the [output and handoff contract](../gsp-workflow/references/output-handoff.
 
 ### GSP stage integration
 
-计划还需保留全局约束、既有实现与复用、关键失败路径及对应测试（Review Focus）；验收→任务→验证应能逐项追溯。按需将测试矩阵内嵌 plan.md，不机械增设独立文件。先读人看的项目待办原文和 todo-list；纳入事项引用 ID，并用 todo-link <待办ID> --run <需求ID> --task <任务ID> 记录关联，关联不代表完成。批准延期的真实问题按共同规则登记，不能只留在计划正文。
+计划还需保留全局约束、既有实现与复用、关键失败路径及对应测试（Review Focus）；验收→任务→验证应能逐项追溯。按需将测试矩阵内嵌 plan.md，不机械增设独立文件。计划提到 tests/test/build/target/temp/worktree/incremental 或 CARGO_TARGET_DIR 时，必须写“产物与临时文件生命周期”小节，含产物位置、回收责任、保留与上限、验收方式；缺失时 plan-check 报 HYGIENE_SECTION_MISSING，size=large 的 seal-plan --check-structure 失败。反模式：每任务自建 CARGO_TARGET_DIR 而不声明回收；测试 helper 用 pid+序号 建目录且无 RAII；为调试无限放大 debug/PDB；把临时目录留在源码树或 target/ 下且不登记生命周期。先读人看的项目待办原文和 todo-list；纳入事项引用 ID，并用 todo-link <待办ID> --run <需求ID> --task <任务ID> 记录关联，关联不代表完成。批准延期的真实问题按共同规则登记，不能只留在计划正文。
 
 ## 跨会话开发（仅 `intent=cross-session`）
 

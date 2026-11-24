@@ -14,7 +14,8 @@ import subprocess
 from pathlib import Path
 from typing import Iterable
 
-from .runtime import WorkflowError, head_branch, parallel_required, topology_selected
+from .runtime import (WorkflowError, head_branch, parallel_required,
+                      topology_selected, visible_git_marker)
 
 
 _KINDS = {'feature', 'fix', 'docs', 'test', 'refactor', 'chore', 'research'}
@@ -194,7 +195,7 @@ def _probe(root: Path, active_tasks: Iterable[dict] | None = None, include_branc
     identity_lines = identity.stdout.splitlines()
     top = identity_lines[0].strip() if identity_lines else None
     if not top:
-        git_marker = any((p / '.git').exists() for p in (root, *root.parents))
+        git_marker = visible_git_marker(root)
         if git_marker or 'not a git repository' not in identity.stderr.lower():
             raise WorkflowError('GIT_PROBE_FAILED ' + identity.stderr.strip())
         return {
@@ -322,6 +323,65 @@ def recommend(inventory: dict, context: dict) -> dict:
     if blocking:
         reasons.append('存在阻塞风险，选择前必须先处理或明确覆盖')
     return {'mode': mode, 'reasons': reasons, 'blocking': blocking}
+
+
+def _binding_index(root):
+    """Map bound workspace to (run, status, task id) for residue reporting."""
+    from .runtime import read
+    index = {}
+    for file in (Path(root) / '.gsp' / 'runs').glob('*/state.json'):
+        try:
+            state = read(file)
+        except (WorkflowError, OSError):
+            continue
+        bindings = [(state.get('id'), state.get('status'), None, state.get('git_topology') or {})]
+        bindings += [(state.get('id'), task.get('status'), task.get('id'), task.get('topology') or {})
+                     for task in state.get('tasks', []) if task.get('topology')]
+        for run_id, status, task_id, binding in bindings:
+            workspace = binding.get('workspace_root')
+            if not workspace:
+                continue
+            key = os.path.normcase(str(Path(workspace).resolve()))
+            index[key] = {'run': run_id, 'status': status, 'task': task_id}
+    return index
+
+
+def residue(root, states=None):
+    """Read-only list of clean, merged worktrees whose run already finished."""
+    root = Path(root).resolve()
+    try:
+        inventory = _probe(root, active_tasks=[], include_branches=False, include_status=False)
+    except (OSError, subprocess.TimeoutExpired, WorkflowError):
+        return {'count': 0, 'worktrees': [], 'command': None}
+    if inventory.get('status') == 'not-a-repository':
+        return {'count': 0, 'worktrees': [], 'command': None}
+    main_head = inventory.get('current', {}).get('head')
+    bindings = states if states is not None else _binding_index(root)
+    rows = []
+    for worktree in inventory.get('worktrees', []):
+        path = Path(worktree.get('path') or '').resolve()
+        if not path or path == root or not path.is_dir():
+            continue
+        binding = bindings.get(os.path.normcase(str(path))) or {}
+        branch = worktree.get('branch')
+        head = worktree.get('head')
+        dirty = _run(path, 'status', '--porcelain', '-uall')
+        clean = dirty.returncode == 0 and not dirty.stdout.strip()
+        merged = bool(head and main_head and
+                      _run(root, 'merge-base', '--is-ancestor', head, main_head).returncode == 0)
+        rows.append({
+            'run': binding.get('run'),
+            'task': binding.get('task'),
+            'run_status': binding.get('status'),
+            'path': str(path),
+            'branch': branch,
+            'merged': merged,
+            'clean': clean,
+        })
+    stale = [row for row in rows if row['merged'] and row['clean']
+             and row['run_status'] in {'ready', 'closed'}]
+    return {'count': len(stale), 'worktrees': rows,
+            'command': 'python scripts/gsp.py --project <root> topology-clean <id> --apply' if stale else None}
 
 
 def _topic_slug(title: str) -> str:

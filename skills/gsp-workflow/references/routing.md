@@ -43,6 +43,9 @@
 - 质量报告中的 `FAIL` 表示已执行的必需检查失败，`BLOCKED` 表示必需检查无法启动或质量栈缺失；具体去向以 `gsp/routing.py` 的 `quality.failure` 和 `quality.not-checked` 为准。没有声明配置时只给候选命令并标记 `NOT_CHECKED`，不能把工具存在或文件特征当成通过。
 - `gsp-verify` 发现证据过期时重新验证，不修改旧收据。
 - `gsp-ship` 准备交付，不自动启动另一个需求；推送、合并、发布和删除分支需要各自精确授权。
+- 计划出现构建/测试/临时目录/worktree 关键词但缺“产物与临时文件生命周期”时，`plan-check` 报 `HYGIENE_SECTION_MISSING`，回到 `gsp-writing-plans` 补齐；`size=large` 不能封存。
+- 运行回执出现未解释的 `hygiene.retained`/`truncated`/`errors` 时先按 `gsp-systematic-debugging` 回溯门禁并登记缺陷，再回到 `gsp-execute`；`ready` 会报 `HYGIENE_LEFTOVER`。
+- 交付后出现已合并、干净、无租约的 worktree 残留时走 `topology-clean`（先 dry-run 再 `--apply`）；`close --cleanup` 收本任务，`close --reconcile` 处理 workspace 已删除的遗留状态。
 
 ## 观测语义
 

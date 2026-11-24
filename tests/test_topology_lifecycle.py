@@ -100,8 +100,9 @@ class TopologyLifecycleTests(unittest.TestCase):
         self.assertEqual(receipt['workspace_root'], binding['workspace_root'])
         self.cmd('resume', 'work')
         self.git('worktree', 'remove', '--force', binding['workspace_root'])
-        with self.assertRaisesRegex(WorkflowError, 'GIT_WORKSPACE_MISSING'):
-            self.cmd('resume', 'work')
+        result = self.cmd('resume', 'work')
+        self.assertTrue(result['workspace_missing'])
+        self.assertIn('close work --reconcile', result['pending_decisions'][0]['command'])
 
     def test_new_branch_cannot_displace_another_live_task(self):
         self.setup_git()
@@ -177,8 +178,9 @@ class TopologyLifecycleTests(unittest.TestCase):
         self.assertTrue(report['blocking'])
         self.assertIn('GIT_WORKSPACE_MISSING', [r['code'] for r in report['findings']])
         self.assertEqual(state_file.read_bytes(), before)
-        with self.assertRaisesRegex(WorkflowError, 'GIT_WORKSPACE_MISSING'):
-            self.cmd('status', 'work')
+        status = self.cmd('status', 'work')
+        self.assertTrue(status['workspace_missing'])
+        self.assertEqual(state_file.read_bytes(), before)
 
     def test_broken_git_cannot_be_adopted_as_non_git(self):
         from gsp.git_topology import probe

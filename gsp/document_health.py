@@ -27,7 +27,7 @@ def _git_unknown(exc):
 
 def git_route(root):
     """Read-only Git classification and compact next-skill handoff."""
-    from .runtime import Project
+    from .runtime import Project, visible_git_marker
     from .git_topology import bound_task_for_path
     context_path = Path(root).resolve()
     try:
@@ -43,7 +43,7 @@ def git_route(root):
     try:
         probe = run('rev-parse', '--show-toplevel')
         if probe.returncode != 0:
-            if any((p / '.git').exists() for p in (root, *root.parents)) or 'not a git repository' not in probe.stderr.lower():
+            if visible_git_marker(root) or 'not a git repository' not in probe.stderr.lower():
                 raise WorkflowError('GIT_PROBE_FAILED ' + probe.stderr.strip())
             route = route_for('repository_missing')
             return {'status':'not-a-repository','route_id':route.route_id,'findings':[{'code':'GIT_REPOSITORY_MISSING','severity':'blocking','detail':'Git repository is not available'}],

@@ -3,6 +3,7 @@
 from pathlib import Path
 import re
 from .runtime import WorkflowError, _git_run, git_identity, inside, now
+from .build_policy import load_policy, remove_tree, tree_size
 
 
 TERMINAL_STATES = {"removed", "released"}
@@ -83,6 +84,45 @@ def _automatic_location(project, state, task):
     return base_dir / slug, branch
 
 
+def build_root(project, state, slug):
+    """Return the GSP-owned build directory for one managed worktree."""
+    policy = load_policy(project.root)
+    if policy['worktree_build'] == 'off':
+        return None
+    number = str(state.get('number') or state.get('id') or 'task')
+    return (Path(project.root) / '.gsp' / 'build' / number / slug).resolve()
+
+
+def build_environment(project, state, task):
+    """Describe the build root and environment handed to a worker."""
+    number = str(state.get('number') or state.get('id') or 'task')
+    slug = worktree_slug(number, task)
+    root = build_root(project, state, slug)
+    if root is None:
+        return {'build_root': None, 'build_env': {}, 'build_mode': 'worktree'}
+    relative = root.relative_to(Path(project.root).resolve()).as_posix()
+    return {'build_root': relative,
+            'build_env': {'CARGO_TARGET_DIR': str(root), 'BUILD_ROOT': str(root)},
+            'build_mode': 'managed'}
+
+
+def _build_root_referenced(project, relative, exclude_id):
+    if not relative:
+        return False
+    from .runtime import read
+    for file in Path(project.meta).glob('runs/*/sessions/dispatch.json'):
+        try:
+            data = read(file)
+        except (WorkflowError, OSError):
+            continue
+        for row in data.get('dispatches', []):
+            if row.get('id') == exclude_id or row.get('status') in {'superseded', 'cleaned'}:
+                continue
+            if row.get('build_root') == relative:
+                return True
+    return False
+
+
 def prepare_worktree(project, state, task, dispatch, requested_path=None, mode="auto"):
     """Create or bind one child worktree before publishing a dispatch."""
     if requested_path is not None or mode == "bind":
@@ -117,6 +157,9 @@ def prepare_worktree(project, state, task, dispatch, requested_path=None, mode="
             "worktree_state": "bound",
             "cleanup_attempts": 0,
             "cleanup_error": None,
+            "build_root": None,
+            "build_env": {},
+            "build_mode": "bound",
             "created_at": now(),
             "updated_at": now(),
         }
@@ -156,6 +199,7 @@ def prepare_worktree(project, state, task, dispatch, requested_path=None, mode="
         "created_at": now(),
         "updated_at": now(),
     }
+    dispatch_row.update(build_environment(project, state, task))
     try:
         project.bind_task_topology(
             state, task.get("id"), "worktree",
@@ -201,13 +245,25 @@ def cleanup_worktree(project, dispatch, reason, retry=False):
         return _pending(dispatch, _command_error("WORKTREE_PATH_MISSING"))
     path = Path(raw_path).resolve()
     if not path.exists():
+        _remove_build_root(project, dispatch)
         result = {**dispatch, "worktree_state": "removed", "result": "removed", "updated_at": now(), "idempotent": True}
         return result
     status = _git_run(path, "status", "--porcelain", "-uall")
     if status.returncode:
         return _pending(dispatch, _command_error("WORKTREE_STATUS_FAILED", status))
     if status.stdout.strip():
-        return _pending(dispatch, _command_error("WORKTREE_DIRTY", status, status.stdout.strip()))
+        pending = _pending(dispatch, _command_error("WORKTREE_DIRTY", status, status.stdout.strip()))
+        build = _build_path(project, dispatch)
+        if build is not None and build.exists():
+            pending["pending_build_bytes"] = tree_size(build)
+        return pending
+    build = _build_path(project, dispatch)
+    if build is not None and build.exists() and not _build_root_referenced(
+            project, dispatch.get("build_root"), dispatch.get("id")):
+        try:
+            remove_tree(build, project.root)
+        except OSError as exc:
+            return _pending(dispatch, _command_error("BUILD_ROOT_REMOVE_FAILED", detail=str(exc)))
     removed = _git_run(project.root, "worktree", "remove", str(path))
     if removed.returncode:
         return _pending(dispatch, _command_error("WORKTREE_REMOVE_FAILED", removed))
@@ -224,5 +280,25 @@ def cleanup_worktree(project, dispatch, reason, retry=False):
     if prune.returncode:
         result["cleanup_error"] = _command_error("WORKTREE_PRUNE_FAILED", prune)
     return result
+
+
+def _build_path(project, dispatch):
+    relative = dispatch.get("build_root")
+    if not relative:
+        return None
+    return Path(project.root) / relative
+
+
+def _remove_build_root(project, dispatch):
+    relative = dispatch.get("build_root")
+    build = _build_path(project, dispatch)
+    if build is None or not build.exists():
+        return
+    if _build_root_referenced(project, relative, dispatch.get("id")):
+        return
+    try:
+        remove_tree(build, project.root)
+    except OSError:
+        pass
 
 

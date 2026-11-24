@@ -13,7 +13,7 @@ Use the [output and handoff contract](../gsp-workflow/references/output-handoff.
 
 ### GSP stage integration
 
-交付前读取 todo-list 和人读待办原文；人工历史内容也要核对，不能只看机器计数。核实关联任务与问题验收，再用 todo-done 带实际版本关闭；没有版本时如实留空，不捏造。完成证据和历史在 .gsp/backlog/records.json，正文只显示完成版本/日期。人工移到 Completed 或改动已完成正文不算验证通过；先核对关闭再跑最终 all 回归，待办与执行记录变化都会使旧证据过期。
+交付前读取 todo-list 和人读待办原文；人工历史内容也要核对，不能只看机器计数。核实关联任务与问题验收，再用 todo-done 带实际版本关闭；没有版本时如实留空，不捏造。完成证据和历史在 .gsp/backlog/records.json，正文只显示完成版本/日期。人工移到 Completed 或改动已完成正文不算验证通过；先核对关闭再跑最终 all 回归，待办与执行记录变化都会使旧证据过期。最终 all 回执 hygiene 有未解释的 retained/truncated/errors 时 ready 报 HYGIENE_LEFTOVER；失败运行在上限内的保留不阻塞，但必须检查是否被误当长久缓存。ready 记录 git_clean/branch_merged，未提交或未合并必须在交付里明示。
 
 ## 跨会话开发（仅 `intent=cross-session`）
 

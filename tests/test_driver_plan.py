@@ -39,7 +39,7 @@ class DriverPlanTests(unittest.TestCase):
         self.assertEqual(result['phase'],'plan')
         folder=Path(job['result']).parent
         self.assertFalse((folder/'accepted.json').exists())
-        rejected=json.loads((folder/'rejected.json').read_text())
+        rejected=json.loads((folder/'rejected.json').read_text(encoding='utf-8'))
         self.assertFalse(rejected['quality']['structural_ok'])
         self.assertEqual(rejected['quality']['semantic_review'],'NOT_CHECKED')
         self.assertIsNone(self.driver.load()['pending'])

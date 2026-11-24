@@ -306,11 +306,19 @@ def write_brief(project, state, args):
     if not args.title.strip() or not args.objective.strip():
         raise WorkflowError("SESSION_BRIEF_REQUIRED")
     _, human = _paths(project, state)
+    build = {"build_root": None, "build_env": {}}
+    if owner.get("worktree") and inside(Path(project.root) / ".gsp" / "worktrees",
+                                       Path(owner["worktree"])):
+        from .worktree_lifecycle import build_environment
+        build = build_environment(project, state, task)
     lines = [
         f"# {task['id']} Brief — {args.title.strip()}", "",
         f"- GSP：{state.get('number') or state['id']}", f"- 任务：{task['id']}",
         f"- 发出会话：{author['id']}", f"- 执行会话：{owner['id']}",
-        f"- worktree：{owner.get('worktree') or '—'}", "",
+        f"- worktree：{owner.get('worktree') or '—'}",
+        f"- 构建根：{build.get('build_root') or '—'}",
+        *[f"- {key}={value}" for key, value in (build.get("build_env") or {}).items()],
+        "",
         "## 目标", "", args.objective.strip(), "",
         "## 允许路径", "",
     ]
