@@ -153,7 +153,8 @@ LIFECYCLE_NOTES = {
     'health': '自动检测同时扫描项目级和用户级安装，并分别核对清单；全局正常不能掩盖项目损坏。文档治理使用 `<gsp> health --documents-only`；同时检查安装时用 `--documents`。默认报告保存在目标项目 docs/gsp/reports/document-governance/<唯一运行ID>/report.md 与 report.json；用户明确指定集中目录时传 --report-dir，不把开发者本机目录当产品默认。读取报告检查分类、绑定、断链、重复、孤立、未追踪和差异。报告同时包含assets元数据清单、根目录产物候选、Git忽略状态和有界Python字面量输出候选；先读asset_scan的范围、截断和未检查项，其他语言与动态生成路径由执行者核对。程序未检查语义与代码符合性，按需要复核并将依据写到独立复核材料，不能冒称程序已验证。旧项目先盘点和迁移预览，未知分类、未入链或重复副本不等于可删除。只出报告，不自动删文件、迁移或改全局配置。新建资料按统一职责，旧布局是待整理过渡或有依据例外。安装扫描仍不证明真实宿主行为；新环境另做实际技能触发检查。文档规则与命令见 [治理契约](../gsp-workflow/references/document-governance.md)。',
 }
 
-LIFECYCLE_NOTES['git'] = ('新任务按需求声明 `--intent`；大功能或跨模块单任务使用 `new --size large`，推荐独立 worktree。'
+LIFECYCLE_NOTES['git'] = ('新任务按需求声明 `--intent`；大功能或跨模块单任务可用 `new --size large` 记录风险，但规模不单独强制 worktree。'
+                         '并行写者、独立验证或保护现有改动才优先隔离；工作位置与构建缓存是两个独立决定。'
                          '同一任务换会话先复核和复用绑定；仅一个可写任务不额外要求 integration。'
                          '`--base` 明确派生提交，改变绑定须显式 `topology-select --rebind` 并重新验证；'
                          'Git 创建或切换中断后先调查，再 recover-run，不自动清理。')
@@ -163,6 +164,12 @@ LIFECYCLE_NOTES['execute'] += (' Native 会话支持绑定 worktree；当前 hea
 LIFECYCLE_NOTES['execute'] += (' 长命令或重定向 stdout/stderr 时必须记录日志路径、PID/exec session、状态/退出码来源和预期产物。'
                                '相同空 write_stdin 最多等待两次；第三次前必须读取日志、检查进程、退出码或产物。'
                                '等待时长变化不构成新观测，hook 可能以 wait-guard 拒绝第三次空等待。')
+LIFECYCLE_NOTES['execute'] += (' 原生 run 持续写脱敏 stdout/stderr、command-progress.json 和终态 command-result.json；'
+                               '长命令用 run-status <id> --evidence <id> 查看心跳、日志、截断和进程身份，'
+                               '该结果 validation=NOT_CHECKED，不是交付证明。status --brief 只读账本，同样不证明当前可交付。')
+LIFECYCLE_NOTES['verify'] += (' 证据按任务和命令入口选择有效集合，不取最后一张回执；适用失败必须由同一入口后续成功解除，'
+                              '输入、契约、epoch、workspace、入口或日志摘要变化会失效。observe-head 在 HEAD 与验证输入均未变时是 no-op，'
+                              '不重写 review/ready/证据；真实变化仍进入 needs-verification。')
 LIFECYCLE_NOTES['health'] += (' 同时只读复核活动任务及子任务的 Git 拓扑；未选择时路由 git.topology.required，'
                              '目录缺失、分支/HEAD/基线漂移或重复占用时路由 git.topology.invalid，不修改任务状态。')
 

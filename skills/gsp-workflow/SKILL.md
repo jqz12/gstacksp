@@ -15,10 +15,15 @@ description: Use when starting a development task in a project using GstackSP, o
 2. 新需求读 `gsp-brainstorming`。明确的小改可用短设计；已充分批准的方案继续执行，无需重新批准相同内容。建立任务用 `<gsp> init`、`<gsp> new <id> --title "标题"`。
 3. 在首次写实现前落实工作位置和冻结选择。未指定冻结时问一次并给推荐；明确的小修改可原地冻结。无人值守须有用户实际授权，按推荐记录，不假造用户答复。
    Git 拓扑是首次实现前的必经交接：先运行 `<gsp> topology <id>`，向用户展示当前分支、HEAD、全部 worktree、脏状态和已有任务绑定，再用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 记录一次选择。默认阻止 main/master 或 detached HEAD 直接写入；只有明确原地覆盖才可继续。状态中的 GSP 编号、T 任务号、branch、commit SHA、Issue/PR、control_root 和 workspace_root 各自独立，不能互相替代。
+   工作位置和构建缓存是两个独立决定：`size=large` 只提示风险，不单独强制 worktree；并行写者、独立验证或保护现有改动才优先隔离。即使使用 worktree，也不能让多个写者无租约地共写同一个可写 target。
 4. 设计确认后依次使用 `gsp-writing-plans`、`gsp-execute`；计划评审 `gsp-autoplan` 按复杂度使用。测试、调试、审查在执行中调用。UI 按需调用 `gsp-browse`、`gsp-qa` 及已安装视觉扩展。
    阶段交接核对[实际产物与接口文档](references/artifact-fidelity.md)，读取完整阶段正文，不能以本入口摘要代替方法；计划自查后使用 `plan-check` 和 `seal-plan --check-structure`。计划涉及测试、构建、target/temp、worktree 或 CARGO_TARGET_DIR 时必须有“产物与临时文件生命周期”小节（产物位置、回收责任、保留与上限、验收方式），否则大型任务封计划失败。
 5. 所有任务完成后先跑一次最终 `run --task all`，再做一次整体 `gsp-review`，由 `gsp-verify` 确认证据，`gsp-ship` 准备交付。同一输入不重复全量回归，只有测试入口或集合改变、或有回执记录的抖动才重跑并保留每次回执。有精确外部操作授权则执行对应动作，不重复问。保存恢复用 `gsp-context-save`。
 6. 任务进入 `blocked` 时不是终态：用 `<gsp> unblock <id> --reason "..."` 恢复阻塞前阶段继续执行，或用 `<gsp> close <id> --abandoned --reason "..."` 明确放弃并把档案归档为 cancelled；普通 `close` 仍只用于 ready 交付。绑定 worktree 已丢失时 `unblock` 仍要求先 `topology-select --rebind` 恢复，`close --abandoned` 可直接按恢复语义丢弃该工作区。交付后 `close --cleanup` 收敛本任务 worktree/分支/构建根；其他残留先 `topology-clean` 预览再 `--apply`，任务结束只保留主仓。
+
+原生 `run` 持续排空 stdout/stderr，写入脱敏的 `stdout.txt`、`stderr.txt`、`command-progress.json` 和终态 `command-result.json`。长命令用 `<gsp> run-status <id> --evidence <id> [--wait 0..30]` 查看心跳、日志路径、截断和进程身份；它返回 `validation=NOT_CHECKED`，不是交付证明。相同空等待最多两次，第三次前必须查看日志、进程、退出码或产物。`status --brief` 同样只读账本，不运行 Git，也不声称当前可交付。
+
+任务完成按有效证据集合判断，而不是最后一张回执：`tests` 与 `check` 按命令入口分组，适用失败必须由同一入口的后续成功解除；输入、契约、epoch、workspace 或入口变化会使旧成功失效。`observe-head` 在 HEAD 和验证输入均未变时是真正 no-op；真实内容、绑定或入口变化仍进入 `needs-verification`。
 
 构建与临时产物由流程接管：`run` 把 TMP/TEMP/TMPDIR 指向本次运行的隔离目录并只回收本次新增的临时根条目；managed worktree 使用 `.gsp/build/<编号>/<slug>` 作为 CARGO_TARGET_DIR/BUILD_ROOT；回执记录 `hygiene`。未解释的 retained/truncated/errors 在 ready 报 `HYGIENE_LEFTOVER`，只有显式 decision 才能放行；残留即缺陷，登记根待办并回溯门禁，不把清理变成例行工作。详见 [共同契约](references/contract.md) 的“构建与临时产物”一节。
 

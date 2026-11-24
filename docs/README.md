@@ -8,6 +8,10 @@
 |---|---|
 | [计划结构检查接口](reference/plan-quality.md) | 计划结构检查与验收边界 |
 | [分支、worktree 与并行任务](reference/git-topology.md) | 选择矩阵、中文编号、父子任务、集成与恢复 |
+| [构建上下文与独占缓存](reference/build-context.md) | 构建根、环境注入、兼容键、租约和恢复 |
+| [有效证据选择与失败屏障](reference/evidence-selection.md) | tests/check 入口分组、适用失败、失效原因和错误码 |
+| [单命令验证上下文与控制面开销](reference/validation-context.md) | 命令内去重、最终复核、性能预算和 `status --brief` |
+| [命令执行进度、日志与恢复](reference/command-progress.md) | 流式日志、心跳、10 MiB 上限、`run-status` 与恢复边界 |
 | [主会话协调的跨会话开发模式](reference/cross-session-development.md) | `cross-session` 的 controller/worker、总体计划、批量派发、自动 managed worktree、接受后清理、进度摘要、outbox 和文档命名 |
 | [根 README](../README.md) | 安装范围、基本用法和项目说明 |
 
@@ -31,6 +35,8 @@
 并行入口不改变测试集合、统计口径或证据要求；串行 discover 始终可用。
 
 收口时同一输入只跑一次最终回归（`run --task all`），随后做一次整体审查；只有测试入口或测试集合确实改变、或有已记录的抖动时，才重复运行并保留每次回执。
+
+长命令可通过 `<gsp> run-status <id> --evidence <id>` 查看心跳、日志路径、截断标记和进程身份，不取得项目写锁。`run-status` 与 `<gsp> status <id> --brief` 都明确是非权威观测；交付判断仍使用有效证据集合、最终 `all` 回归、整体审查和 `ready` 门禁。
 
 ## 构建与临时产物
 

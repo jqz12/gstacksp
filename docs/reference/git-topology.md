@@ -8,8 +8,10 @@
 
 | 情况 | 推荐 | 约束 |
 |---|---|---|
-| 单会话、一个小任务、当前目录干净 | 独立分支，复用目录 | 用户可以明确选择原地 |
-| 大功能、跨模块修改 | 独立分支和 worktree | AI 从需求识别规模，建立任务时声明 `--size large` |
+| 单会话、一个小任务、当前干净且分支已归属本任务 | 原地复用目录 | 需要用户明确选择；不机械创建 worktree |
+| 大功能、跨模块修改，但串行且无独立验证需求 | 独立分支，复用干净目录 | `--size large` 只提示风险，不单独强制 worktree |
+| 需要独立验证 | 独立 worktree | 建立任务时声明 `--independent-verification` |
+| 需要保护现有改动 | 从明确基线建立 worktree | 声明 `--protect-existing`；不迁移、stash 或覆盖现场 |
 | 多个串行任务 | 每个工作项独立分支，依次复用目录 | 先关闭前任务、释放绑定，再换任务 |
 | 多会话分别开发不同任务 | 每个可写任务独立分支和 worktree | 会话名称不能代替隔离 |
 | 同一任务换会话继续 | 复核并复用已有工作区 | 不因换会话制造子任务或集成任务 |
@@ -19,7 +21,9 @@
 | main/master | 推荐新分支 | 只有用户明确选择原地并记录理由才允许 |
 | detached HEAD | 建立命名分支或 worktree | 不允许原地实现 |
 
-当前 intent 支持 `single-task`、`serial-multi-task`、`parallel-multi-task`、`cross-session`、`full-stack`。AI 必须结合范围声明 intent 和 `--size small|large` 并说明理由；大单任务也会推荐 worktree。`cross-session` 只有一个可写任务时不要求额外集成任务；真正并行或全栈才需要子工作区图。
+当前 intent 支持 `single-task`、`serial-multi-task`、`parallel-multi-task`、`cross-session`、`full-stack`。AI 必须结合范围声明 intent、`--size small|large`，并在需要时声明 `--independent-verification` 或 `--protect-existing`。工作位置与构建缓存是两个独立决定：即使使用 worktree，也不默认让多个写者共用同一个可写 target。`cross-session` 只有一个可写任务时不要求额外集成任务；真正并行或全栈才需要子工作区图。
+
+推荐优先级：脏工作区、独立验证或保护现有改动优先选择 worktree；并行、跨会话和全栈协作需要独立 worktree；main/master/detached HEAD 先建立任务分支；干净且已归属本任务的串行分支可以原地继续。规模大只增加提示，不单独把原地改成 worktree。最终仍由用户明确选择并记录原话。
 
 `cross-session` 还需要任务级 session registry。主会话/controller 维护唯一的 `plan.md` 和公共裁决；子会话/worker 读取 brief、在自己的 worktree 中实现并回传 report。`Snn` 是会话身份，`Tnn` 是计划任务身份。controller lease、同一 worktree 的 write lease 和 `claimed_paths` 共同阻止第二个会话在同一 room 中覆盖已提交文件；已接线的 direct-edit hook 会在 Edit/Write/apply_patch 前拒绝未登记或未声明的路径。完整文档见[主会话协调的跨会话开发模式](cross-session-development.md)。
 

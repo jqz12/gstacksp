@@ -3,9 +3,9 @@ from pathlib import Path, PurePosixPath
 import re
 import uuid
 
-from .runtime import (WorkflowError, _git_run, atomic, contract_hash, digest,
-                      fingerprint, git_identity, inside, integration_dependencies,
-                      now, read, redact)
+from .runtime import (WorkflowError, _git_run, atomic, cached_value, contract_hash,
+                      digest, fingerprint, git_identity, inside, is_ancestor,
+                      integration_dependencies, now, read, redact)
 from .sessions import _save as save_registry
 from .sessions import load_registry
 from .worktree_lifecycle import cleanup_worktree, prepare_worktree
@@ -223,7 +223,7 @@ def _integration_attestation(project, state, receipt):
         child_head = (child_receipt.get('git') or {}).get('head')
         if not child_head:
             raise WorkflowError('GIT_CHILD_HEAD_MISSING ' + task_id)
-        included = _git_run(target, 'merge-base', '--is-ancestor', child_head, 'HEAD')
+        included = is_ancestor(target, child_head, 'HEAD')
         if included.returncode:
             raise WorkflowError('GIT_INTEGRATION_MISSING_CHILD ' + task_id)
         children.append({
@@ -300,7 +300,7 @@ def attested_integration(project, state):
                     or (child_receipt.get('git') or {}).get('head') != child.get('head')):
                 return None
             _receipt_logs_valid(child_path, child_receipt)
-            included = _git_run(target, 'merge-base', '--is-ancestor', child['head'], 'HEAD')
+            included = is_ancestor(target, child['head'], 'HEAD')
             if included.returncode:
                 return None
         if receipt.get('contract') != current_contract:
@@ -313,13 +313,21 @@ def attested_integration(project, state):
 
 def attested_removed_tasks(project, state):
     """Task ids covered by a valid attestation whose child worktrees are gone."""
-    attestation = attested_integration(project, state)
-    if not attestation:
-        return set()
-    return {
-        child.get('task') for child in attestation.get('children', [])
-        if child.get('workspace_root') and not Path(child['workspace_root']).is_dir()
-    }
+    key = (state.get('id'), tuple(state.get('evidence') or []),
+           int(state.get('verification_epoch') or 0),
+           tuple((task.get('id'), task.get('status'), task.get('evidence'))
+                 for task in state.get('tasks') or []))
+
+    def load():
+        attestation = attested_integration(project, state)
+        if not attestation:
+            return set()
+        return {
+            child.get('task') for child in attestation.get('children', [])
+            if child.get('workspace_root') and not Path(child['workspace_root']).is_dir()
+        }
+
+    return cached_value('attested_removed', key, load)
 
 
 def finalize_integration_cleanup(project, state, final_receipt):

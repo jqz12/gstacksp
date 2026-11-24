@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import Iterable
 
-from .runtime import (WorkflowError, head_branch, parallel_required,
+from .runtime import (WorkflowError, cached_value, head_branch, parallel_required,
                       topology_selected, visible_git_marker)
 
 
@@ -175,19 +175,27 @@ def bound_task_for_path(root: Path, path: Path) -> str | None:
 
 
 def probe(root: Path, active_tasks: Iterable[dict] | None = None, include_branches: bool = True,
-          include_status: bool = True) -> dict:
+          include_status: bool = True, include_worktrees: bool = True) -> dict:
     root = Path(root).resolve()
-    try:
-        return _probe(root, active_tasks, include_branches, include_status)
-    except (OSError, subprocess.TimeoutExpired, WorkflowError) as exc:
-        code = 'GIT_UNAVAILABLE' if isinstance(exc, FileNotFoundError) else 'GIT_PROBE_FAILED'
-        return {'schema': 1, 'status': 'blocked', 'current': {'root': str(root)},
-                'branches': [], 'worktrees': [], 'active_tasks': [],
-                'risks': [{'code': code, 'severity': 'blocking', 'detail': str(exc)}]}
+    active = list(active_tasks) if active_tasks is not None else None
+    key = (str(root),
+           json.dumps(active, sort_keys=True, ensure_ascii=False, default=str) if active is not None else None,
+           bool(include_branches), bool(include_status), bool(include_worktrees))
+
+    def load():
+        try:
+            return _probe(root, active, include_branches, include_status, include_worktrees)
+        except (OSError, subprocess.TimeoutExpired, WorkflowError) as exc:
+            code = 'GIT_UNAVAILABLE' if isinstance(exc, FileNotFoundError) else 'GIT_PROBE_FAILED'
+            return {'schema': 1, 'status': 'blocked', 'current': {'root': str(root)},
+                    'branches': [], 'worktrees': [], 'active_tasks': [],
+                    'risks': [{'code': code, 'severity': 'blocking', 'detail': str(exc)}]}
+
+    return cached_value('git_probe', key, load)
 
 
 def _probe(root: Path, active_tasks: Iterable[dict] | None = None, include_branches: bool = True,
-           include_status: bool = True) -> dict:
+           include_status: bool = True, include_worktrees: bool = True) -> dict:
     """Return a read-only, machine-readable Git topology inventory."""
     root = Path(root).resolve()
     identity = _run(root, 'rev-parse', '--show-toplevel', '--git-common-dir', '--git-dir',
@@ -230,12 +238,15 @@ def _probe(root: Path, active_tasks: Iterable[dict] | None = None, include_branc
     changed = _changed_paths(status_records)
     workflow_changed = sorted(path for path in changed if _is_workflow_path(path))
     source_changed = sorted(path for path in changed if path not in workflow_changed)
-    worktree_raw = _run(root, 'worktree', 'list', '--porcelain', '-z')
-    if worktree_raw.returncode:
-        raise WorkflowError('GIT_PROBE_FAILED ' + worktree_raw.stderr.strip())
-    worktrees = _parse_worktrees(worktree_raw.stdout)
-    if not worktrees:
-        raise WorkflowError('GIT_PROBE_FAILED empty worktree inventory')
+    if include_worktrees:
+        worktree_raw = _run(root, 'worktree', 'list', '--porcelain', '-z')
+        if worktree_raw.returncode:
+            raise WorkflowError('GIT_PROBE_FAILED ' + worktree_raw.stderr.strip())
+        worktrees = _parse_worktrees(worktree_raw.stdout)
+        if not worktrees:
+            raise WorkflowError('GIT_PROBE_FAILED empty worktree inventory')
+    else:
+        worktrees = []
     if include_branches:
         refs = _run(root, 'for-each-ref', '--format=%(refname:short)%09%(objectname)', 'refs/heads/')
         if refs.returncode:
@@ -302,23 +313,40 @@ def recommend(inventory: dict, context: dict) -> dict:
     if inventory.get('status') == 'not-a-repository':
         return {'mode': None, 'reasons': ['当前目录不是 Git 仓库'], 'blocking': risks}
     intent = str(context.get('intent') or 'single-task')
+    independent = context.get('independent_verification') is True
+    protect = context.get('protect_existing') is True
     changed = inventory.get('current', {}).get('source_changed_paths')
     if changed is None:
         changed = inventory.get('current', {}).get('changed_paths') or []
     branch = inventory.get('current', {}).get('branch')
+    number = str(context.get('number') or '')
+    owned = context.get('owns_branch')
+    if owned is None:
+        owned = bool(number and branch and re.search(re.escape(number), str(branch)))
     reasons: list[str] = []
     if changed:
         mode = 'worktree'
         reasons.append('当前工作区有脏改动，保留现场并使用干净 worktree')
-    elif intent in _INTENT_WORKTREE or context.get('size') == 'large':
+    elif independent:
         mode = 'worktree'
-        reasons.append('任务规模较大，或包含跨会话、并行、全栈协作，需要独立 worktree')
+        reasons.append('需要独立验证，使用独立 worktree 隔离验证环境')
+    elif protect:
+        mode = 'worktree'
+        reasons.append('需要保护现有改动，使用干净 worktree 避免覆盖现场')
+    elif intent in _INTENT_WORKTREE:
+        mode = 'worktree'
+        reasons.append('任务包含并行、跨会话或全栈协作，需要独立 worktree')
     elif branch in (None, 'main', 'master'):
         mode = 'branch'
         reasons.append('当前位于主分支或未命名 HEAD，先建立带 GSP 编号的任务分支')
+    elif owned:
+        mode = 'in-place'
+        reasons.append('当前工作区干净且分支已归属于本任务，可在原地继续')
     else:
         mode = 'branch'
         reasons.append('当前工作区干净，使用独立任务分支即可保持低负担隔离')
+    if context.get('size') == 'large':
+        reasons.append('任务规模较大但不单独要求 worktree；需要独立验证时显式声明')
     blocking = [risk for risk in risks if risk.get('severity') == 'blocking']
     if blocking:
         reasons.append('存在阻塞风险，选择前必须先处理或明确覆盖')

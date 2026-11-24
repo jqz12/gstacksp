@@ -113,6 +113,21 @@ class GitTopologyCliTests(unittest.TestCase):
         links = self.state()['external_links']
         self.assertEqual(links, [{'kind': 'issue', 'value': '#123'}, {'kind': 'pr', 'value': '#456'}])
 
+    def test_new_records_explicit_isolation_context(self):
+        self.cli('new', 'isolated', '--title', '独立验证任务', '--independent-verification',
+                 '--protect-existing')
+        state = json.loads((self.project / '.gsp/runs/isolated/state.json').read_text(encoding='utf-8'))
+        topology = state['git_topology']
+        self.assertTrue(topology['independent_verification'])
+        self.assertTrue(topology['protect_existing'])
+        self.assertEqual(topology['recommended_mode'], 'worktree')
+
+    def test_new_large_serial_task_does_not_record_worktree_recommendation(self):
+        self.cli('new', 'large-serial', '--title', '大型串行任务', '--size', 'large',
+                 '--intent', 'serial-multi-task')
+        state = json.loads((self.project / '.gsp/runs/large-serial/state.json').read_text(encoding='utf-8'))
+        self.assertEqual(state['git_topology']['recommended_mode'], 'branch')
+
 
 if __name__ == '__main__':
     unittest.main()

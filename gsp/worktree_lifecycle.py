@@ -99,11 +99,16 @@ def build_environment(project, state, task):
     slug = worktree_slug(number, task)
     root = build_root(project, state, slug)
     if root is None:
-        return {'build_root': None, 'build_env': {}, 'build_mode': 'worktree'}
+        return {'build_root': None, 'build_env': {}, 'build_mode': 'worktree',
+                'build_context': {'schema': 1, 'mode': 'off', 'root': None,
+                                  'env': {}, 'provenance': 'worktree'}}
     relative = root.relative_to(Path(project.root).resolve()).as_posix()
-    return {'build_root': relative,
-            'build_env': {'CARGO_TARGET_DIR': str(root), 'BUILD_ROOT': str(root)},
-            'build_mode': 'managed'}
+    from .build_context import compatibility_key
+    environment = {'CARGO_TARGET_DIR': str(root), 'BUILD_ROOT': str(root)}
+    return {'build_root': relative, 'build_env': environment, 'build_mode': 'managed',
+            'build_context': {'schema': 1, 'mode': 'isolated', 'root': str(root),
+                              'env': environment, 'provenance': 'worktree',
+                              'compatibility_key': compatibility_key(project)}}
 
 
 def _build_root_referenced(project, relative, exclude_id):
