@@ -19,6 +19,7 @@ DEFAULT_POLICY = {
     'temp_roots': [],
     'retain_on_failure': {'max_entries': 1, 'max_bytes': 50 * 1024 * 1024},
     'worktree_build': 'managed',
+    'build_cache': {'mode': 'isolated', 'root': None, 'context': {}},
     'limits': {'max_build_bytes': 0, 'max_temp_entries': 0},
     'profile_expectations': {'debug': None, 'incremental_for_tests': None},
 }
@@ -83,6 +84,15 @@ def _validate(policy):
         _invalid('retain_on_failure.max_bytes must be an integer >= 0')
     if policy.get('worktree_build') not in {'managed', 'off'}:
         _invalid('worktree_build must be "managed" or "off"')
+    cache = policy.get('build_cache')
+    if not isinstance(cache, dict):
+        _invalid('build_cache must be an object')
+    if cache.get('mode') not in {'isolated', 'reuse-exclusive', 'off'}:
+        _invalid('build_cache.mode must be isolated, reuse-exclusive or off')
+    if cache.get('root') is not None and not isinstance(cache.get('root'), str):
+        _invalid('build_cache.root must be an absolute path string or null')
+    if not isinstance(cache.get('context'), dict):
+        _invalid('build_cache.context must be an object')
     limits = policy.get('limits')
     if not isinstance(limits, dict):
         _invalid('limits must be an object')

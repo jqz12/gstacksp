@@ -32,10 +32,19 @@ except ImportError:  # pragma: no cover - POSIX
     _msvcrt = None
 
 from . import __version__
+from .validation_context import (ValidationContext, activate, current_context,
+                                 deactivate, invalidate)
 
 
 class WorkflowError(Exception):
     pass
+
+
+def cached_value(namespace, key, loader):
+    context = current_context()
+    if context is None:
+        return loader()
+    return context.get(namespace, key, loader)
 
 
 def now():
@@ -47,7 +56,8 @@ def sha(data):
 
 
 def digest(path):
-    return sha(Path(path).read_bytes())
+    path = Path(path)
+    return cached_value('digest', str(path.resolve()), lambda: sha(path.read_bytes()))
 
 
 def archive_delivery(doc):
@@ -92,6 +102,7 @@ def atomic(path, value):
         # Windows readers/AV may briefly hold the destination without delete sharing.
         # Retry publication only; never repeat the operation that produced the value.
         retry_access(lambda: os.replace(tmp, path))
+        invalidate('write:' + str(path))
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -165,7 +176,7 @@ def head_branch(root, gitdir):
     return None
 
 
-def git_identity(root):
+def _git_identity_uncached(root):
     def call(*args):
         try:
             return subprocess.run(['git', *args], cwd=root, capture_output=True, text=True,
@@ -186,13 +197,38 @@ def git_identity(root):
     return {'root': str(Path(top).resolve()), 'branch': branch, 'head': head}
 
 
+def git_identity(root):
+    root = Path(root).resolve()
+    return cached_value('git_identity', str(root),
+                        lambda: _git_identity_uncached(root))
+
+
+_GIT_MUTATIONS = {'add', 'am', 'branch', 'checkout', 'cherry-pick', 'clean',
+                  'commit', 'fetch', 'merge', 'mv', 'pull', 'push', 'rebase',
+                  'reset', 'restore', 'revert', 'rm', 'stash', 'switch', 'tag',
+                  'worktree'}
+
+
 def _git_run(root, *args):
     """Run one bounded local Git command without invoking a shell."""
-    return subprocess.run(
+    result = subprocess.run(
         ['git', *args], cwd=Path(root), capture_output=True, text=True,
         encoding='utf-8', errors='replace', timeout=30,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
     )
+    if any(str(arg) in _GIT_MUTATIONS for arg in args):
+        invalidate('git:' + ' '.join(str(arg) for arg in args[:2]))
+    return result
+
+
+def is_ancestor(root, ancestor, descendant):
+    """Cache one read-only ancestry probe inside the active command phase."""
+    if not ancestor or not descendant:
+        return None
+    key = (str(Path(root).resolve()), str(ancestor), str(descendant))
+    return cached_value('ancestor', key,
+                        lambda: _git_run(root, 'merge-base', '--is-ancestor',
+                                         ancestor, descendant))
 
 
 def topology_required(state):
@@ -344,7 +380,9 @@ def snapshot(root, deadline=None, progress=None):
 
 
 def fingerprint(root):
-    return sha(json.dumps(snapshot(root), sort_keys=True).encode())
+    root = Path(root).resolve()
+    return cached_value('fingerprint', str(root),
+                        lambda: sha(json.dumps(snapshot(root), sort_keys=True).encode()))
 
 
 def redact(text):
@@ -589,7 +627,10 @@ class Project:
         # path.  A workspace must be a real Git worktree only after the task
         # has opted into the topology contract or a child topology is bound.
         topology_enforced = bool(topology.get('enforce') or topology.get('effective_mode') in {'in-place', 'branch', 'worktree'})
-        if validate and topology_enforced:
+        if not (validate and topology_enforced):
+            return path
+
+        def load():
             if not path.is_dir():
                 raise WorkflowError('GIT_WORKSPACE_MISSING bound source workspace does not exist')
             identity = git_identity(path)
@@ -600,7 +641,11 @@ class Project:
                 raise WorkflowError('GIT_WORKSPACE_MISMATCH bound branch differs from the recorded topology')
             if task_id and not allow_head_change and topology.get('head') and topology['head'] != identity.get('head'):
                 raise WorkflowError('HEAD_CHANGED inspect child commit, then observe-head --task ' + task_id)
-        return path
+            return path
+
+        key = (str(path), topology.get('branch') or '', topology.get('head') or '',
+               bool(allow_head_change), task_id or '')
+        return cached_value('workspace_root', key, load)
 
     def validate_topology(self, state, allow_head_change=False):
         """Read-only validation shared by health, status and execution."""
@@ -634,8 +679,9 @@ class Project:
             expected_head = binding.get('head') if task_id else state.get('git', {}).get('head')
             if not allow_head_change and expected_head and row.get('head') != expected_head:
                 raise WorkflowError('HEAD_CHANGED inspect commit and observe-head' + (' --task ' + task_id if task_id else ''))
-            if binding.get('base_head') and row.get('head') != binding['base_head']:
-                ancestor = _git_run(path, 'merge-base', '--is-ancestor', binding['base_head'], 'HEAD')
+            if (binding.get('base_head') and
+                    (allow_head_change or not expected_head)):
+                ancestor = is_ancestor(path, binding['base_head'], 'HEAD')
                 if ancestor.returncode:
                     raise WorkflowError('GIT_BASE_MISMATCH bound base is not an ancestor of the workspace HEAD')
         return inventory
@@ -662,14 +708,16 @@ class Project:
                 if left.get('branch') and left['branch'] == right.get('branch'):
                     raise WorkflowError('GIT_BRANCH_CONFLICT ' + left['id'] + ' / ' + right['id'])
 
-    def validate_integration(self, state):
+    def validate_integration(self, state, allow_head_change=False, context=None,
+                             verify_evidence=True):
         integrations = [t for t in state.get('tasks', []) if t.get('role') == 'integration']
         if not integrations:
             return
         if len(integrations) != 1:
             raise WorkflowError('GIT_INTEGRATION_OWNER_CONFLICT only one integration owner is allowed')
         integration = integrations[0]
-        target = self.workspace_root(state, task_id=integration['id'])
+        target = self.workspace_root(state, task_id=integration['id'],
+                                     allow_head_change=allow_head_change)
         from .dispatch import attested_removed_tasks
         removed_ids = attested_removed_tasks(self, state)
         from .git_topology import probe
@@ -680,15 +728,20 @@ class Project:
                 raise WorkflowError('GIT_INTEGRATION_DEPENDENCY_MISSING ' + child['id'])
             if child['id'] in removed_ids:
                 continue
-            source = self.workspace_root(state, task_id=child['id'])
-            inventory = probe(source, active_tasks=[])
+            source = self.workspace_root(state, task_id=child['id'],
+                                         allow_head_change=allow_head_change)
+            inventory = probe(source, active_tasks=[], include_branches=False,
+                              include_status=True, include_worktrees=False)
             if inventory.get('current', {}).get('source_changed_paths'):
                 raise WorkflowError('GIT_CHILD_UNCOMMITTED ' + child['id'] + ': commit verified output before integration')
             if inventory.get('status') == 'blocked':
                 raise WorkflowError('GIT_CHILD_INVALID ' + child['id'])
-            evidence_for(self, state, child['id'])
-            child_head = git_identity(source).get('head')
-            included = _git_run(target, 'merge-base', '--is-ancestor', child_head, 'HEAD')
+            if verify_evidence:
+                evidence_for(self, state, child['id'],
+                             allow_head_change=allow_head_change, context=context)
+            child_head = (inventory.get('current', {}).get('head') or
+                          git_identity(source).get('head'))
+            included = is_ancestor(target, child_head, 'HEAD')
             if included.returncode:
                 raise WorkflowError('GIT_INTEGRATION_MISSING_CHILD ' + child['id'] + ': integrate the verified child commit before checks')
 
@@ -699,6 +752,8 @@ class Project:
             'title': state.get('title', ''),
             'intent': topology.get('intent', 'single-task'),
             'size': topology.get('size', 'small'),
+            'independent_verification': topology.get('independent_verification', False),
+            'protect_existing': topology.get('protect_existing', False),
         }
 
     def topology_report(self, state):
@@ -1006,7 +1061,8 @@ class Project:
         self.write(state, 'topology-failed', code + ' ' + redact(detail))
         raise WorkflowError(code + ' ' + detail.strip())
 
-    def state(self, task_id, execution=False, allow_head_change=False, release_scope=False, allow_closed=False, recovery=False):
+    def state(self, task_id, execution=False, allow_head_change=False, release_scope=False,
+              allow_closed=False, recovery=False, context=None, defer_delivery=False):
         if (self.meta/'document-transaction.json').exists() or (self.meta/'document-migration.json').exists():
             raise WorkflowError('DOCUMENT_TRANSACTION_PENDING recover document operations first')
         run, doc = self.paths(task_id)
@@ -1036,12 +1092,13 @@ class Project:
         if not (allow_head_change or release_scope or recovery) and current.get('head') != before.get('head'):
             raise WorkflowError('HEAD_CHANGED inspect actual changes, then observe-head with evidence and reason')
         stale = False
-        if state['status'] == 'ready' and not recovery:
+        if state['status'] == 'ready' and not recovery and not defer_delivery:
             try:
                 stale = state.get('delivery_fingerprint') != fingerprint(self.verification_root(state, allow_head_change=allow_head_change))
                 self.valid_design(state, doc)
                 self.valid_plan(state, doc)
-                validate_delivery(self, state, doc)
+                validate_delivery(self, state, doc, allow_head_change=allow_head_change,
+                                  context=context)
             except (WorkflowError, OSError):
                 stale = True
         if stale:
@@ -1059,6 +1116,39 @@ class Project:
             if state.get('scope', {}).get('mode') == 'pending':
                 raise WorkflowError('SCOPE_PENDING ask once whether to freeze this task')
         return state, run, doc
+
+    def ledger_state(self, task_id):
+        """Read the recorded ledger after the cheap project identity check."""
+        slug(task_id)
+        state_file = self.meta / 'runs' / task_id / 'state.json'
+        if not state_file.is_file():
+            raise WorkflowError('INVALID_STATE ' + str(state_file))
+        state = read(state_file)
+        ident = self.identity()
+        if state.get('project_id') != ident['id'] or state.get('root') != str(self.root):
+            raise WorkflowError('PROJECT_MISMATCH refusing cross-project continuation')
+        return state
+
+    def brief_state(self, task_id):
+        """Read the recorded ledger only; never claim current validation."""
+        state = self.ledger_state(task_id)
+        inflight = state.get('inflight')
+        return {
+            'task': state.get('id'),
+            'number': state.get('number'),
+            'recorded_status': state.get('status'),
+            'validation': 'NOT_CHECKED',
+            'not_authoritative': True,
+            'brief': True,
+            'updated': state.get('updated'),
+            'tasks': [{'id': task.get('id'), 'status': task.get('status')}
+                      for task in state.get('tasks') or []],
+            'inflight': ({'id': inflight.get('id'), 'task': inflight.get('task'),
+                          'phase': inflight.get('phase'), 'at': inflight.get('at')}
+                         if isinstance(inflight, dict) else None),
+            'evidence_count': len(state.get('evidence') or []),
+            'validation_note': 'ledger snapshot only; run status without --brief for authoritative checks',
+        }
 
     def valid_design(self, state, doc):
         if not state.get('design_approval') or state['design_approval']['sha256'] != digest(self.document(state, 'design')):
@@ -1179,6 +1269,8 @@ class Project:
             'title': args.title,
             'intent': getattr(args, 'intent', 'single-task'),
             'size': getattr(args, 'size', 'small'),
+            'independent_verification': bool(getattr(args, 'independent_verification', False)),
+            'protect_existing': bool(getattr(args, 'protect_existing', False)),
         }
         git_recommendation = recommend(git_inventory, git_context)
         # Git-backed modern work items opt into the hard topology gate.  A
@@ -1192,6 +1284,8 @@ class Project:
             'enforce': topology_enforce,
             'intent': git_context['intent'],
             'size': git_context['size'],
+            'independent_verification': git_context['independent_verification'],
+            'protect_existing': git_context['protect_existing'],
             'recommended_mode': git_recommendation.get('mode'),
             'recommended_reasons': git_recommendation.get('reasons', []),
             'requested_mode': None,
@@ -1291,8 +1385,11 @@ def test_count(output):
 
 
 def contract_hash(project, state, doc):
-    return sha(json.dumps({'design': digest(project.document(state, 'design')), 'plan': digest(project.document(state, 'plan')),
-                           'tasks': project.task_definition_hash(state)}, sort_keys=True).encode())
+    key = (str(Path(doc).resolve()), project.task_definition_hash(state))
+    return cached_value('contract', key, lambda: sha(json.dumps(
+        {'design': digest(project.document(state, 'design')),
+         'plan': digest(project.document(state, 'plan')),
+         'tasks': key[1]}, sort_keys=True).encode()))
 
 
 def command_input_hashes(root, argv):
@@ -1313,6 +1410,159 @@ def verify_command_inputs(root, receipt):
         path=Path(root)/rel
         if not inside(root,path) or not path.is_file() or path.is_symlink() or digest(path)!=expected:
             raise WorkflowError('COMMAND_INPUT_CHANGED '+rel)
+
+
+def _path_key(value):
+    if value is None:
+        return None
+    try:
+        return os.path.normcase(str(Path(value).resolve()))
+    except OSError:
+        return os.path.normcase(str(value))
+
+
+def evidence_entry(row):
+    """Stable identity for one command entry; verdicts never cross entries."""
+    payload = {'kind': row.get('kind'), 'argv': [str(arg) for arg in row.get('argv') or []]}
+    return sha(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode())
+
+
+def select_evidence(rows, query):
+    """Select the effective pass per entry without hiding applicable failures.
+
+    Rows are ordered oldest to newest by the caller. A failure blocks its own
+    entry until a later pass for the same entry appears; passes from another
+    kind or command entry cannot clear it. Invalid rows remain in the ledger
+    but are reported instead of silently reused.
+    """
+    query = dict(query or {})
+    task = query.get('task')
+    expected_workspace = _path_key(query.get('workspace_root'))
+    contract = query.get('contract')
+    fingerprint = query.get('fingerprint')
+    epoch = int(query.get('verification_epoch') or 0)
+    expected_entry = query.get('entry')
+    requested_kind = query.get('kind')
+    allow_historical = bool(query.get('allow_historical'))
+    invalid_by_id = dict(query.get('command_inputs_invalid') or {})
+    groups = {'tests': {}, 'check': {}}
+    invalid = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        if task is not None and row.get('task') != task:
+            continue
+        kind = row.get('kind')
+        if kind not in groups:
+            invalid.append({'id': row.get('id'), 'task': row.get('task'), 'kind': kind,
+                            'entry': None, 'reason': 'unsupported-kind',
+                            'detail': None, 'at': row.get('at')})
+            continue
+        if requested_kind and kind != requested_kind:
+            continue
+        entry = evidence_entry(row)
+        reason = None
+        detail = None
+        if (expected_workspace and row.get('workspace_root') and
+                _path_key(row.get('workspace_root')) != expected_workspace):
+            reason = 'workspace-changed'
+            detail = str(row.get('workspace_root'))
+        elif contract is not None and row.get('contract') != contract:
+            reason = 'contract-changed'
+        elif (not allow_historical and fingerprint is not None and
+              row.get('fingerprint') != fingerprint):
+            reason = 'input-changed'
+        elif (not allow_historical and
+              int(row.get('verification_epoch') or 0) < epoch):
+            reason = 'before-recovery'
+        elif expected_entry and entry != expected_entry:
+            reason = 'entry-changed'
+        elif row.get('id') in invalid_by_id:
+            reason = 'command-input-changed'
+            detail = str(invalid_by_id[row.get('id')])
+        if reason:
+            invalid.append({'id': row.get('id'), 'task': row.get('task'), 'kind': kind,
+                            'entry': entry, 'reason': reason, 'detail': detail,
+                            'at': row.get('at')})
+            continue
+        groups[kind].setdefault(entry, []).append((index, row))
+    effective = {'tests': [], 'check': []}
+    entries = {'tests': {}, 'check': {}}
+    blocking = []
+    for kind in ('tests', 'check'):
+        passes = []
+        for entry, items in groups[kind].items():
+            index, row = items[-1]
+            entries[kind][entry] = row
+            if row.get('status') == 'pass':
+                passes.append((index, row))
+            else:
+                blocking.append({'index': index, 'id': row.get('id'), 'task': row.get('task'),
+                                 'kind': kind, 'entry': entry, 'status': row.get('status'),
+                                 'at': row.get('at')})
+        effective[kind] = [row for _, row in sorted(passes, key=lambda item: item[0])]
+    blocking.sort(key=lambda row: row['index'])
+    for row in blocking:
+        row.pop('index', None)
+    return {'tests': effective['tests'], 'check': effective['check'],
+            'entries': entries, 'blocking_failures': blocking,
+            'invalid_reasons': invalid}
+
+
+def _evidence_folder(project, state, receipt):
+    relative = next((path for path in state['evidence']
+                     if path.endswith('/' + receipt['id'] + '/receipt.json')), None)
+    if not relative:
+        raise WorkflowError('EVIDENCE_PATH_UNKNOWN ' + str(receipt.get('id')))
+    return project.root / relative
+
+
+def _raise_selection_error(task_id, selection):
+    reasons = {row['reason'] for row in selection['invalid_reasons']}
+    if 'workspace-changed' in reasons:
+        raise WorkflowError('EVIDENCE_WORKSPACE_CHANGED ' + task_id)
+    if 'contract-changed' in reasons:
+        raise WorkflowError('EVIDENCE_CONTRACT_CHANGED ' + task_id)
+    if 'before-recovery' in reasons:
+        raise WorkflowError('EVIDENCE_BEFORE_RECOVERY ' + task_id)
+    if 'command-input-changed' in reasons:
+        detail = next(row.get('detail') for row in selection['invalid_reasons']
+                      if row['reason'] == 'command-input-changed')
+        raise WorkflowError('COMMAND_INPUT_CHANGED ' + (detail or task_id))
+    if 'entry-changed' in reasons:
+        raise WorkflowError('EVIDENCE_ENTRY_CHANGED ' + task_id)
+    raise WorkflowError('EVIDENCE_STALE_OR_FAILED ' + task_id)
+
+
+def head_observation_change(previous, current, validation):
+    """Classify one observe-head observation without trusting tree hashes alone."""
+    previous = dict(previous or {})
+    current = dict(current or {})
+    validation = dict(validation or {})
+    binding_changed = any(previous.get(key) != current.get(key)
+                          for key in ('root', 'branch', 'base_head'))
+    head_changed = previous.get('head') != current.get('head')
+    identity_changed = binding_changed or head_changed
+    checks = dict(validation.get('checks') or {})
+    failed = sorted(name for name, ok in checks.items() if not ok)
+    verification_changed = bool(binding_changed or failed or
+                                validation.get('inputs_changed') or
+                                validation.get('verification_changed'))
+    if not identity_changed and not verification_changed:
+        reason = 'no-change'
+    elif identity_changed and not verification_changed:
+        reason = 'identity-changed-content-preserved'
+    elif binding_changed:
+        reason = 'binding-changed' + (' ' + ','.join(failed) if failed else '')
+    else:
+        reason = 'verification-changed' + (' ' + ','.join(failed) if failed else '')
+    return {
+        'identity_changed': identity_changed,
+        'verification_changed': verification_changed,
+        'preserve_content_evidence': not verification_changed,
+        'reason': reason,
+        'details': dict(validation.get('details') or {}),
+    }
 
 
 def run_check(project, state, run, args):
@@ -1343,7 +1593,10 @@ def run_check(project, state, run, args):
     deadline = start + args.timeout
     from .build_policy import (isolation_env, load_policy, reclaim_new_entries,
                                remove_tree, snapshot_names, tree_size)
+    from .build_context import build_lease, command_environment, resolve_context
     policy = load_policy(project.root)
+    build_context = resolve_context(project, state, args.task, argv, os.environ,
+                                    source_root=source_root)
     evidence_id = uuid.uuid4().hex
     folder = run / 'evidence' / evidence_id
     folder.mkdir(parents=True, exist_ok=False)
@@ -1378,29 +1631,63 @@ def run_check(project, state, run, args):
         state['status']='needs-verification'
         project.write(state,'scan-failed',evidence_id)
         raise
-    state['inflight']['phase']='command'
-    project.write(state,'command-start',evidence_id)
+    command_started = False
+    lease_context = build_lease(project, build_context, evidence_id)
     try:
+        lease = lease_context.__enter__()
+    except WorkflowError:
+        state.pop('inflight', None)
+        state['status'] = 'needs-verification'
+        project.write(state, 'command-blocked', evidence_id)
+        raise
+    try:
+        state['inflight']['phase']='command'
+        project.write(state,'command-start',evidence_id)
+        command_started = True
         runner = getattr(args, 'runner', None)
-        windows_flags = (subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == 'nt' else 0
         remaining=deadline-time.monotonic()
         if remaining<=0:
             atomic(folder/'scan-error.json',{'phase':'pre-command','error':'SCAN_TIMEOUT','command_started':False,'at':now()})
             state.pop('inflight',None);state['status']='needs-verification'
             project.write(state,'scan-failed',evidence_id)
             raise WorkflowError('SCAN_TIMEOUT budget expired before command launch')
-        command_env = dict(os.environ, **isolation_env(isolation)) if isolation else None
-        result = (runner(argv, remaining) if runner else
-                  subprocess.run(argv, cwd=source_root, capture_output=True, text=True,
-                                 encoding='utf-8', errors='replace', timeout=remaining,
-                                 creationflags=windows_flags, env=command_env))
-        stdout, stderr, code = result.stdout, result.stderr, result.returncode
+        command_env = command_environment(os.environ, build_context,
+                                          isolation_env(isolation) if isolation else {})
+        interruption = None
+        process_identity = None
+        log_integrity = None
+        if runner:
+            result = runner(argv, remaining)
+            stdout, stderr, code = result.stdout, result.stderr, result.returncode
+        else:
+            from .command_execution import execute_command
+            execution = execute_command(
+                argv, source_root, command_env, remaining, folder,
+                {'task': args.task, 'argv': [redact(a) for a in argv],
+                 'build_context': {key: build_context.get(key) for key in
+                                   ('mode', 'root', 'provenance', 'compatibility_key')}},
+                on_started=lease.attach if lease is not None else None)
+            code = execution['returncode']
+            launch_error = execution['launch_error']
+            interruption = execution.get('interruption')
+            process_identity = execution.get('process_identity')
+            log_integrity = execution.get('log_integrity')
+            stdout = Path(execution['stdout_path']).read_text(encoding='utf-8', errors='replace')
+            stderr = Path(execution['stderr_path']).read_text(encoding='utf-8', errors='replace')
     except (OSError, subprocess.TimeoutExpired) as exc:
         stdout, stderr, code = '', str(exc), None
         launch_error = type(exc).__name__
-    atomic(folder/'command-result.json',{'exit':code,'launch_error':launch_error,'at':now()})
+    finally:
+        lease_context.__exit__(None, None, None)
+    # A tested command may commit, rewrite generated files or change the build
+    # environment. Never reuse pre-command identity or digest values.
+    invalidate('command-finished')
+    if runner:
+        atomic(folder/'command-result.json',{'exit':code,'launch_error':launch_error,'at':now()})
     hygiene = {'temp_isolation_dir': str(isolation) if isolation else None,
                'disabled': not policy['temp_isolation'],
+               'build_mode': build_context.get('mode'),
+               'build_root': build_context.get('root'),
                'created': 0, 'removed': 0, 'retained': 0, 'retained_bytes': 0,
                'truncated': False, 'over_budget': False, 'errors': []}
     command_succeeded = code == 0 and launch_error is None
@@ -1460,20 +1747,28 @@ def run_check(project, state, run, args):
         status = 'test-count-unknown'
     elif args.kind == 'tests' and re.search(r'(?im)^FAILED\b|^\(fail\)|^#\s*fail\s+[1-9]|\b[1-9]\d*\s+failed\b', stdout + '\n' + stderr):
         status = 'failed-output'
+    log_truncated = bool((log_integrity or {}).get('stdout', {}).get('truncated') or
+                         (log_integrity or {}).get('stderr', {}).get('truncated'))
+    if log_truncated and status == 'pass':
+        status = 'log-truncated'
     if violations:
         status = 'scope-violation'
     command_inputs_changed=command_input_hashes(source_root,argv)!=command_inputs
     if (before != after or command_inputs_changed) and status == 'pass':
         status = 'inputs-changed'
-    atomic(folder / 'stdout.txt', redact(stdout))
-    atomic(folder / 'stderr.txt', redact(stderr))
+    if runner:
+        atomic(folder / 'stdout.txt', redact(stdout))
+        atomic(folder / 'stderr.txt', redact(stderr))
     receipt = {'schema': 1, 'id': evidence_id, 'task': args.task, 'kind': args.kind, 'at': now(),
                'argv': [redact(a) for a in argv], 'exit': code, 'launch_error': launch_error,
+               'interruption': interruption, 'process_identity': process_identity,
+               'log_integrity': log_integrity,
                'duration_s': round(time.monotonic() - start, 3), 'status': status, 'tests_ran': count, 'test_summary':summary,
                'fingerprint': sha(json.dumps(after, sort_keys=True).encode()), 'changed_paths': changes, 'scope_violations': violations, 'command_inputs':command_inputs,
                'contract': contract_hash(project, state, project.paths(state['id'])[1]),
                'workspace_root': str(source_root), 'git': git_identity(source_root),
                'verification_epoch': state.get('verification_epoch', 0),
+               'build_context': build_context,
                'hygiene': hygiene,
                'logs': {name: digest(folder / name) for name in ('stdout.txt', 'stderr.txt')}}
     atomic(folder / 'receipt.json', receipt)
@@ -1488,20 +1783,21 @@ def run_check(project, state, run, args):
     return receipt, status == 'pass'
 
 
-def evidence_for(project, state, task_id, current_fingerprint=None, current_contract=None,
-                 allow_historical=False, allow_missing_workspace=False, defer_no_tests=False):
-    rows = [read(project.root / p) for p in state['evidence']]
+def _evidence_for_uncached(project, state, task_id, current_fingerprint=None, current_contract=None,
+                           allow_historical=False, allow_missing_workspace=False, defer_no_tests=False,
+                           kind=None, entry=None, allow_head_change=False, context=None):
+    all_rows = [read(project.root / p) for p in state['evidence']]
     # A whole-project `all` receipt is the final regression lane, not the
-    # task's own evidence.  Mixing it into this lookup makes a later
-    # non-test check shadow a valid task test and incorrectly raises
-    # TESTS_REQUIRED during ready.
-    rows = [r for r in rows if r['task'] == task_id]
+    # task's own evidence. Mixing it into this lookup would let it satisfy
+    # task completion or hide the task's own tests.
+    rows = [r for r in all_rows if r.get('task') == task_id]
     if not rows:
         raise WorkflowError('EVIDENCE_MISSING ' + task_id)
-    latest = rows[-1]
     try:
-        source_root = (project.verification_root(state) if task_id == 'all'
-                       else project.workspace_root(state, task_id=task_id))
+        source_root = (project.verification_root(state, allow_head_change=allow_head_change)
+                       if task_id == 'all'
+                       else project.workspace_root(state, task_id=task_id,
+                                                   allow_head_change=allow_head_change))
     except WorkflowError:
         if not allow_missing_workspace:
             raise
@@ -1510,40 +1806,86 @@ def evidence_for(project, state, task_id, current_fingerprint=None, current_cont
     source_exists = source_root.is_dir()
     if not source_exists and not allow_missing_workspace:
         raise WorkflowError('GIT_WORKSPACE_MISSING bound source workspace does not exist')
-    if latest.get('workspace_root') and Path(latest['workspace_root']).resolve() != source_root:
-        raise WorkflowError('EVIDENCE_WORKSPACE_CHANGED ' + task_id)
-    if source_exists:
-        verify_command_inputs(source_root,latest)
+    contract = current_contract or contract_hash(project, state, project.paths(state['id'])[1])
     expected_fingerprint = current_fingerprint
     if expected_fingerprint is None and not allow_historical:
         if not source_exists:
             raise WorkflowError('GIT_WORKSPACE_MISSING bound source workspace does not exist')
         expected_fingerprint = fingerprint(source_root)
-    if latest['status'] != 'pass' or (not allow_historical and latest['fingerprint'] != expected_fingerprint):
-        raise WorkflowError('EVIDENCE_STALE_OR_FAILED ' + task_id)
-    if latest.get('contract') != (current_contract or contract_hash(project, state, project.paths(state['id'])[1])):
-        raise WorkflowError('EVIDENCE_CONTRACT_CHANGED ' + task_id)
-    if (not allow_historical and
-            latest.get('verification_epoch', 0) < state.get('verification_epoch', 0)):
-        raise WorkflowError('EVIDENCE_BEFORE_RECOVERY ' + task_id)
-    folder = project.root / next(p for p in state['evidence'] if p.endswith(latest['id'] + '/receipt.json'))
-    for name, expected in latest['logs'].items():
-        if digest(folder.parent / name) != expected:
-            raise WorkflowError('EVIDENCE_TAMPERED ' + name)
+    input_invalid = {}
+    if source_exists:
+        for row in rows:
+            if row.get('command_inputs'):
+                try:
+                    verify_command_inputs(source_root, row)
+                except WorkflowError as exc:
+                    input_invalid[row.get('id')] = str(exc)
+    selection = select_evidence(rows, {
+        'task': task_id, 'kind': kind, 'entry': entry,
+        'workspace_root': str(source_root), 'fingerprint': expected_fingerprint,
+        'contract': contract, 'verification_epoch': state.get('verification_epoch', 0),
+        'allow_historical': allow_historical,
+        'command_inputs_invalid': input_invalid,
+    })
+    if selection['blocking_failures']:
+        failure = selection['blocking_failures'][0]
+        extra = len(selection['blocking_failures']) - 1
+        suffix = f' (+{extra} more)' if extra else ''
+        raise WorkflowError('EVIDENCE_APPLICABLE_FAILURE ' +
+                            f"{task_id} {failure['kind']}:{failure['entry']} " +
+                            f"{failure['status']}{suffix}")
+    candidates = selection[kind] if kind else selection['tests'] + selection['check']
+    if not candidates:
+        _raise_selection_error(task_id, selection)
+    primary = (selection[kind][-1] if kind else
+               (selection['tests'][-1] if selection['tests'] else selection['check'][-1]))
+    for row in selection['tests'] + selection['check']:
+        folder = _evidence_folder(project, state, row)
+        logs = row.get('logs')
+        if not isinstance(logs, dict):
+            raise WorkflowError('EVIDENCE_INCOMPLETE ' + str(row.get('id')))
+        for name, expected in logs.items():
+            try:
+                actual = digest(folder.parent / name)
+            except OSError as exc:
+                raise WorkflowError('EVIDENCE_TAMPERED ' + name) from exc
+            if actual != expected:
+                raise WorkflowError('EVIDENCE_TAMPERED ' + name)
     no_tests = all(t.get('no_tests_reason') for t in state['tasks']) if task_id == 'all' else project.item(state, task_id).get('no_tests_reason')
-    if latest['kind'] == 'check' and not no_tests and not defer_no_tests:
+    if primary['kind'] == 'check' and not no_tests and not defer_no_tests:
         raise WorkflowError('TESTS_REQUIRED supply an explicit task-specific no-tests reason for non-test changes')
-    return latest
+    return primary
 
 
-def validate_delivery(project, state, doc):
+def evidence_for(project, state, task_id, current_fingerprint=None, current_contract=None,
+                 allow_historical=False, allow_missing_workspace=False, defer_no_tests=False,
+                 kind=None, entry=None, allow_head_change=False, context=None):
+    """Select one effective receipt, deduplicated inside the active command phase."""
+    active = context if context is not None else current_context()
+    if active is None:
+        return _evidence_for_uncached(
+            project, state, task_id, current_fingerprint, current_contract,
+            allow_historical, allow_missing_workspace, defer_no_tests,
+            kind, entry, allow_head_change, None)
+    key = ('evidence', task_id, current_fingerprint, current_contract,
+           bool(allow_historical), bool(allow_missing_workspace), bool(defer_no_tests),
+           kind, entry, bool(allow_head_change), int(state.get('verification_epoch') or 0),
+           tuple(state.get('evidence') or []), project.task_definition_hash(state))
+    return active.get('evidence', key, lambda: _evidence_for_uncached(
+        project, state, task_id, current_fingerprint, current_contract,
+        allow_historical, allow_missing_workspace, defer_no_tests,
+        kind, entry, allow_head_change, active))
+
+
+def _validate_delivery_uncached(project, state, doc, allow_head_change=False, context=None):
     """One validation path for the controller and the delivery command."""
     if state.get('revalidation'):
         raise WorkflowError('REVALIDATION_PENDING ' + ', '.join(entry['task'] for entry in state['revalidation']))
     parallel = validate_parallel_bindings(state)
     if not parallel['valid']:
         raise WorkflowError(parallel['blocking'][0]['code'] + ' ' + str(parallel['blocking']))
-    project.validate_integration(state)
+    project.validate_integration(state, allow_head_change=allow_head_change,
+                                 context=context, verify_evidence=False)
     from .todos import Backlog
     backlog = Backlog(project.root).summary()
     if not backlog['exists']:
@@ -1563,10 +1905,11 @@ def validate_delivery(project, state, doc):
             task.setdefault('acceptance_track', {})['status'] = status
             if status != 'acceptance_verified':
                 raise WorkflowError('ACCEPTANCE_PENDING ' + task['id'])
-    fp = fingerprint(project.verification_root(state))
+    fp = fingerprint(project.verification_root(state, allow_head_change=allow_head_change))
     contract = contract_hash(project, state, doc)
     try:
-        evidence_for(project, state, 'all', current_fingerprint=fp, current_contract=contract)
+        evidence_for(project, state, 'all', current_fingerprint=fp, current_contract=contract,
+                     allow_head_change=allow_head_change, context=context)
     except WorkflowError as exc:
         raise WorkflowError('FINAL_REGRESSION_REQUIRED ' + str(exc)) from exc
     from .dispatch import attested_removed_tasks
@@ -1575,12 +1918,29 @@ def validate_delivery(project, state, doc):
         project, state, task['id'], current_contract=contract,
         allow_historical=not bool(task.get('topology')) or task['id'] in attested_ids,
         allow_missing_workspace=task['id'] in attested_ids,
+        allow_head_change=allow_head_change,
+        context=context,
     ) for task in state['tasks']]
     review = state.get('review') or {}
     if (not review or review.get('blocking') or review.get('fingerprint') != fp or
             review.get('sha256') != digest(doc / 'review.md') or review.get('contract') != contract):
         raise WorkflowError('REVIEW_MISSING_STALE_OR_BLOCKING')
     return fp, checks, backlog
+
+
+def validate_delivery(project, state, doc, allow_head_change=False, context=None):
+    """Run one full delivery validation per unchanged command phase."""
+    active = context if context is not None else current_context()
+    if active is None:
+        return _validate_delivery_uncached(project, state, doc, allow_head_change, None)
+    key = ('delivery', str(Path(doc).resolve()), bool(allow_head_change),
+           int(state.get('verification_epoch') or 0),
+           tuple(state.get('evidence') or []),
+           tuple((task.get('id'), task.get('status'), task.get('evidence'))
+                 for task in state.get('tasks') or []),
+           json.dumps(state.get('review') or {}, sort_keys=True, ensure_ascii=False))
+    return active.get('delivery_validation', key, lambda: _validate_delivery_uncached(
+        project, state, doc, allow_head_change, active))
 
 
 def _hygiene_release(project, state):
@@ -1628,8 +1988,8 @@ def _delivery_git_state(project, state):
         if status.returncode == 0 else ['<status-unavailable>']
     identity = git_identity(workspace)
     base = (state.get('git_topology') or {}).get('base_branch') or 'main'
-    merged = bool(identity.get('head')) and _git_run(
-        workspace, 'merge-base', '--is-ancestor', identity['head'], base).returncode == 0
+    merged = bool(identity.get('head')) and is_ancestor(
+        workspace, identity['head'], base).returncode == 0
     return {'workspace': str(workspace), 'git_clean': not dirty,
             'dirty_files': dirty[:20], 'base_branch': base,
             'branch_merged': merged}
@@ -1818,9 +2178,11 @@ def parser():
     n = sub.add_parser('new'); n.add_argument('id'); n.add_argument('--title', required=True); n.add_argument('--mode', choices=['interactive', 'unattended'], default='interactive'); n.add_argument('--quote')
     n.add_argument('--intent', choices=['single-task', 'serial-multi-task', 'parallel-multi-task', 'cross-session', 'full-stack'], default='single-task', help='Git topology recommendation context')
     n.add_argument('--size', choices=['small', 'large'], default='small', help='use large for cross-module or substantial single tasks')
+    n.add_argument('--independent-verification', action='store_true', help='request a separate worktree for independent verification')
+    n.add_argument('--protect-existing', action='store_true', help='request a clean worktree to protect existing changes')
     n.add_argument('--legacy-layout',action='store_true',help='compatibility: separated spec/plan layout')
     n.add_argument('--work',help='continue a saved idea by UUID or number')
-    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'revalidate', 'run', 'scope', 'check-path', 'review', 'ready', 'close', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'unblock', 'observe-head', 'recover-run', 'documents-adopt', 'acceptance-enable', 'acceptance-record', 'topology', 'topology-select', 'external-link'):
+    for name in ('approve', 'seal-plan', 'task-add', 'task-start', 'task-done', 'task-reopen', 'revalidate', 'run', 'run-status', 'scope', 'check-path', 'review', 'ready', 'close', 'save', 'resume', 'status', 'decision', 'authorize', 'authority', 'block', 'unblock', 'observe-head', 'recover-run', 'documents-adopt', 'acceptance-enable', 'acceptance-record', 'topology', 'topology-select', 'external-link'):
         q = sub.add_parser(name); q.add_argument('id')
         if name == 'documents-adopt':
             q.add_argument('--spec', required=True); q.add_argument('--plan', required=True); q.add_argument('--reason', required=True)
@@ -1836,8 +2198,14 @@ def parser():
             if name == 'task-done':
                 q.add_argument('--no-tests-reason')
         elif name == 'task-reopen': q.add_argument('task'); q.add_argument('--reason', required=True)
+        elif name == 'status':
+            q.add_argument('--brief', action='store_true',
+                           help='read the recorded ledger only; validation is NOT_CHECKED')
         elif name == 'run':
             q.add_argument('--task', required=True); q.add_argument('--kind', choices=['tests', 'check'], default='tests'); q.add_argument('--timeout', type=int, default=300); q.add_argument('--scan-timeout', type=int, default=120)
+        elif name == 'run-status':
+            q.add_argument('--evidence', required=True, help='evidence id to inspect')
+            q.add_argument('--wait', type=float, default=0, help='seconds to wait, clamped to 0..30')
         elif name == 'scope':
             group = q.add_mutually_exclusive_group(required=True); group.add_argument('--path'); group.add_argument('--off', action='store_true'); q.add_argument('--quote', required=True)
         elif name == 'check-path': q.add_argument('path')
@@ -2196,6 +2564,16 @@ def main(argv=None):
             install_notice('project', args.host, [project.root / ('.claude/skills' if host == 'claude' else '.zcode/skills' if host == 'zcode' else '.agents/skills') for host in targets])
             result = install(project.root, args.host, args.optional)
             print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
+        if args.command == 'run-status':
+            from .command_execution import progress_snapshot
+            run, _ = project.paths(args.id)
+            result = progress_snapshot(run, args.evidence, args.wait)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result.get('found') and not result.get('error') else 1
+        if args.command == 'status' and getattr(args, 'brief', False):
+            result, success = dispatch(project, args)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if success else 1
         if args.command in ('status', 'resume') and (project.meta / 'writer.lock').exists():
             lock_info = inspect_lock(project.root)
             if args.command == 'status':
@@ -2351,20 +2729,256 @@ def topology_clean(project, state, task_id=None, apply=False):
     return document
 
 
-def dispatch(project, args):
+def _preflight_review_gate(project, state, stage):
+    from .handoff import _gate
+    review = state.get('review') or {}
+    try:
+        report = project.paths(state['id'])[1] / 'review.md'
+    except WorkflowError:
+        report = None
+    if not review or report is None or not report.is_file():
+        return _gate('REVIEW_MISSING', 'the review report is missing',
+                     'write review.md and register a non-blocking review', stage)
+    if review.get('blocking'):
+        return _gate('REVIEW_BLOCKED', f"{review.get('blocking')} blocking review findings",
+                     'resolve the findings and register a clean review', stage)
+    try:
+        changed = review.get('sha256') != digest(report)
+    except OSError:
+        changed = True
+    if changed:
+        return _gate('REVIEW_STALE', 'review.md changed after review registration',
+                     'rerun review on the current report', stage)
+    return None
+
+
+def _preflight_close(project, state, args, gate):
+    current = state.get('status')
+    if not state.get('work_uuid'):
+        return [gate('CLOSE_REQUIRES_WORK_ARCHIVE',
+                     'the task has no document archive to close',
+                     'create or link a work archive before closing', current)]
+    from .documents import WORK_STAGE_ALLOWED, work_record_snapshot
+    record = work_record_snapshot(project.root, state['work_uuid'])
+    abandoned = bool(getattr(args, 'abandoned', False))
+    reconcile = bool(getattr(args, 'reconcile', False))
+    if abandoned:
+        if current != 'blocked':
+            return [gate('CLOSE_ABANDON_REQUIRES_BLOCKED',
+                         'close --abandoned is only valid for a blocked task',
+                         'unblock the task or use a normal ready close', current)]
+        if record and record.get('stage') == 'delivered':
+            return [gate('CLOSE_ABANDON_NOT_ALLOWED',
+                         'delivered work cannot be abandoned',
+                         'close the delivered archive normally', current)]
+        if (record and record.get('stage') != 'cancelled' and
+                'cancelled' not in WORK_STAGE_ALLOWED.get(record.get('stage'), set())):
+            return [gate('WORK_TRANSITION_INVALID',
+                         f"archive stage {record.get('stage')} cannot be cancelled",
+                         'inspect the work archive stage before abandoning', current)]
+        return []
+    if reconcile:
+        if record and record.get('stage') != 'closed':
+            return [gate('CLOSE_RECONCILE_REQUIRES_CLOSED_ARCHIVE',
+                         'the document archive is not closed yet',
+                         'close the work archive before reconciling', current)]
+        binding = state.get('git_topology') or {}
+        bound = binding.get('workspace_root')
+        if bound and Path(bound).is_dir():
+            return [gate('CLOSE_RECONCILE_REQUIRES_MISSING_WORKSPACE',
+                         'the bound workspace still exists',
+                         'remove or rebind the workspace before reconciling', current)]
+        return []
+    if record and record.get('stage') == 'closed':
+        return []
+    if current != 'ready':
+        return [gate('CLOSE_REQUIRES_READY',
+                     'close is only valid after ready or an explicitly closed archive',
+                     'finish the delivery workflow before closing', current)]
+    if record:
+        if 'closed' not in WORK_STAGE_ALLOWED.get(record.get('stage'), set()):
+            return [gate('WORK_TRANSITION_INVALID',
+                         f"archive stage {record.get('stage')} cannot be closed",
+                         'inspect the work archive stage before closing', current)]
+        if not record.get('closure_condition'):
+            return [gate('WORK_CLOSURE_CONDITION_REQUIRED',
+                         'the work archive has no closure condition',
+                         f"work-stage {record.get('uuid')} closed --reason \"<理由>\" "
+                         '--closure-condition "<验收条件>"', current,
+                         documents=[str(project.paths(state['id'])[1] / 'delivery.md')])]
+    return []
+
+
+def _preflight_ready(project, state, gate):
+    current = state.get('status')
+    if state.get('controller_required') and current != 'ready':
+        return [gate('CONTROLLER_REQUIRED',
+                     'run advance --to checking then --to ready before ready',
+                     'advance through the controller stages', current)]
+    if state.get('inflight'):
+        return [gate('EXECUTION_UNKNOWN',
+                     'an inflight command has not been recovered',
+                     'recover-run and revalidate', current)]
+    if state.get('revalidation'):
+        return [gate('REVALIDATION_PENDING',
+                     ', '.join(entry['task'] for entry in state['revalidation']),
+                     'run revalidate before ready', current)]
+    tasks = state.get('tasks') or []
+    pending = [task['id'] for task in tasks if task.get('status') != 'done']
+    if not tasks or pending:
+        return [gate('TASKS_INCOMPLETE', ', '.join(pending) or 'no tasks',
+                     'finish all registered tasks', current)]
+    review_gate = _preflight_review_gate(project, state, current)
+    return [review_gate] if review_gate else []
+
+
+def _preflight_advance(project, state, target, gate):
+    current = state.get('status')
+    if target is None:
+        return []
+    from .handoff import TRANSITIONS
+    if target == current and current in ('execute', 'review', 'checking', 'ready', 'ship'):
+        return []
+    expected = TRANSITIONS.get(current)
+    if current == 'needs-verification' and target == 'execute':
+        expected = 'execute'
+    if current in ('checking', 'ready') and target == 'review':
+        expected = 'review'
+    if target != expected:
+        return [gate('STAGE_ORDER_INVALID', f'{current} cannot advance directly to {target}',
+                     f'advance to {expected}' if expected else 'resume the current task', current)]
+    tasks = state.get('tasks') or []
+    if target == 'execute':
+        if not tasks:
+            return [gate('TASKS_MISSING', 'no implementation tasks are registered',
+                         'task-add the complete plan', current)]
+        doc = project.paths(state['id'])[1]
+        try:
+            project.valid_design(state, doc)
+        except (WorkflowError, OSError) as exc:
+            return [gate('DESIGN_NOT_APPROVED', str(exc),
+                         'approve the current design', current)]
+        try:
+            project.valid_plan(state, doc)
+        except (WorkflowError, OSError) as exc:
+            return [gate('PLAN_NOT_SEALED', str(exc),
+                         'plan-check then seal-plan', current)]
+        if state.get('scope', {}).get('mode') not in ('frozen', 'off'):
+            return [gate('SCOPE_UNDECIDED',
+                         'scope must be frozen or explicitly off',
+                         'choose scope once', current)]
+        if topology_required(state) and not topology_selected(state):
+            return [gate('GIT_TOPOLOGY_REQUIRED',
+                         'the task has no effective Git topology selection',
+                         'run topology and topology-select once before implementation', current)]
+        if parallel_required(state):
+            parallel = validate_parallel_bindings(state)
+            ownership_codes = {'GIT_INTEGRATION_REQUIRED', 'GIT_INTEGRATION_OWNER_CONFLICT',
+                               'GIT_INTEGRATION_DEPENDENCY_MISSING'}
+            ownership = [item for item in parallel['blocking'] if item['code'] in ownership_codes]
+            if ownership:
+                first = ownership[0]
+                detail = '; '.join(item.get('detail', item['code']) for item in ownership)
+                return [gate(first['code'], detail,
+                             '补齐唯一 integration 任务并声明全部子任务依赖后再进入 execute', current)]
+    elif target == 'review':
+        pending = [task['id'] for task in tasks if task.get('status') != 'done']
+        if pending:
+            return [gate('TASKS_INCOMPLETE', ', '.join(pending),
+                         'finish all registered tasks', current)]
+        if state.get('inflight'):
+            return [gate('EXECUTION_UNKNOWN',
+                         'an inflight command has not been recovered',
+                         'recover-run and revalidate', current)]
+    elif target == 'ready':
+        if state.get('inflight'):
+            return [gate('EXECUTION_UNKNOWN',
+                         'an inflight command has not been recovered',
+                         'recover-run and revalidate', current)]
+        pending = [task['id'] for task in tasks if task.get('status') != 'done']
+        if not tasks or pending:
+            return [gate('TASKS_INCOMPLETE', ', '.join(pending) or 'no tasks',
+                         'finish all registered tasks', current)]
+        review_gate = _preflight_review_gate(project, state, current)
+        return [review_gate] if review_gate else []
+    return []
+
+
+def preflight_command(project, state_snapshot, command, args):
+    """Return only cheap, already-decidable blockers for one command.
+
+    An empty list means the caller must continue through the authoritative
+    validation path.  This function never writes state, launches Git, or scans
+    source.  It can therefore reject a missing closure condition or review
+    report without paying for a full delivery check.
+    """
+    if command not in ('close', 'ready', 'advance', 'handoff'):
+        return []
+    if command in ('close', 'ready', 'advance') and (
+            (project.meta / 'document-transaction.json').exists() or
+            (project.meta / 'document-migration.json').exists()):
+        from .handoff import _gate
+        return [_gate('DOCUMENT_TRANSACTION_PENDING',
+                      'a document operation needs recovery first',
+                      'run docs-recover or docs-move-recover', state_snapshot.get('status'))]
+    from .handoff import _gate
+
+    def gate(code, detail, action, stage, documents=None, evidence=None):
+        return _gate(code, detail, action, stage, documents, evidence)
+
+    if command == 'close':
+        return _preflight_close(project, state_snapshot, args, gate)
+    if command == 'ready':
+        return _preflight_ready(project, state_snapshot, gate)
+    return _preflight_advance(project, state_snapshot, getattr(args, 'to', None), gate)
+
+
+def _preflight_command_result(project, state, command, gates):
+    return {'task': state.get('id'), 'status': state.get('status'), 'command': command,
+            'preflight': 'blocked', 'blockers': gates,
+            'next_skill': 'gsp-workflow',
+            'documents': [str(project.document(state, kind)) for kind in ('design', 'plan')],
+            'scope': (state.get('scope') or {}).get('mode')}
+
+
+def dispatch(project, args, context=None):
+    if args.command == 'status' and getattr(args, 'brief', False):
+        return project.brief_state(args.id), True
+    if context is None:
+        context = ValidationContext(project, run_id=getattr(args, 'id', None))
+    previous = activate(context)
+    try:
+        return _dispatch(project, args, context)
+    finally:
+        deactivate(previous)
+
+
+def _dispatch(project, args, context):
     command = args.command
     if command.startswith(('work-','module-')) or command in ('docs-search','docs-index','docs-recover'):
         from .documents import handle
         return handle(project,args),True
+    if command == 'run-status':
+        from .command_execution import progress_snapshot
+        run, _ = project.paths(args.id)
+        result = progress_snapshot(run, args.evidence, args.wait)
+        return result, not result.get('error')
     if command == 'init':
         project.initialize(); return {'project': str(project.root)}, True
     if command in ('handoff', 'advance'):
-        from .handoff import preview, advance
+        from .handoff import preview, advance, blocked_preview
+        snapshot = project.ledger_state(args.id)
+        gates = preflight_command(project, snapshot, command, args)
+        if gates:
+            result = blocked_preview(project, snapshot, getattr(args, 'to', None), gates)
+            return result, command == 'handoff'
         state, run, _ = project.state(args.id, execution=False)
         if command == 'handoff':
             return preview(project, state, args.to), True
+        context.begin_phase('final')
         result, success = advance(project, state, run, args.to)
         if success:
+            context.assert_unchanged()
             project.write(state, 'advance', json.dumps({'to': args.to}, ensure_ascii=False))
         return result, success
     if command == 'new':
@@ -2420,8 +3034,25 @@ def dispatch(project, args):
         elif args.supersedes or args.reason or args.source:
             raise WorkflowError('LEARNING_TEXT_REQUIRED')
         return book.query(args.query,args.history), True
+    if command in ('close', 'ready'):
+        snapshot = project.ledger_state(args.id)
+        gates = preflight_command(project, snapshot, command, args)
+        if gates:
+            return _preflight_command_result(project, snapshot, command, gates), False
     try:
-        state, run, doc = project.state(args.id, execution=command in ('task-start', 'task-done', 'task-reopen', 'revalidate', 'run', 'review', 'ready'), allow_head_change=command == 'observe-head', release_scope=command == 'scope' and not args.path, allow_closed=command == 'close', recovery=command == 'recover-run' or (command == 'topology-select' and getattr(args, 'rebind', False)) or (command == 'close' and (getattr(args, 'abandoned', False) or getattr(args, 'reconcile', False))))
+        state, run, doc = project.state(
+            args.id,
+            execution=command in ('task-start', 'task-done', 'task-reopen',
+                                  'revalidate', 'run', 'review', 'ready'),
+            allow_head_change=command == 'observe-head',
+            release_scope=command == 'scope' and not args.path,
+            allow_closed=command == 'close',
+            recovery=command == 'recover-run' or
+            (command == 'topology-select' and getattr(args, 'rebind', False)) or
+            (command == 'close' and (getattr(args, 'abandoned', False) or
+                                     getattr(args, 'reconcile', False))),
+            context=context,
+            defer_delivery=command == 'ready')
     except WorkflowError as exc:
         if command not in ('status', 'resume') or 'GIT_WORKSPACE_MISSING' not in str(exc):
             raise
@@ -2565,13 +3196,13 @@ def dispatch(project, args):
             if record.get('stage') == 'delivered':
                 raise WorkflowError('CLOSE_ABANDON_NOT_ALLOWED delivered work cannot be abandoned')
             if record.get('stage') not in {'cancelled', 'closed'}:
-                book.stage(record['uuid'], 'cancelled', args.reason)
+                book.stage(record['uuid'], 'cancelled', args.reason, run_state=state, context=context)
             state['close_kind'] = 'abandoned'
         else:
             if state.get('status') != 'ready' and record.get('stage') != 'closed':
                 raise WorkflowError('CLOSE_REQUIRES_READY close is only valid after ready or an explicitly closed archive')
             if record.get('stage') != 'closed':
-                book.stage(record['uuid'], 'closed', args.reason)
+                book.stage(record['uuid'], 'closed', args.reason, run_state=state, context=context)
             state['close_kind'] = 'normal'
         active = project.meta / 'active.json'
         if active.exists() and read(active).get('task') == state['id']:
@@ -2645,7 +3276,8 @@ def dispatch(project, args):
         if owned_by:
             owner['depends'] = list(dict.fromkeys(list(owner.get('depends') or []) + [args.task]))
         state['plan_seal'] = None
-        state['status'] = 'plan'
+        if state.get('status') != 'design' or state.get('design_approval'):
+            state['status'] = 'plan'
     elif command == 'acceptance-enable':
         state['acceptance_protocol'] = 'dual-track'
         for task in state['tasks']:
@@ -2722,6 +3354,7 @@ def dispatch(project, args):
     elif command == 'task-done':
         task = project.item(state, args.task)
         if task['status'] != 'running': raise WorkflowError('TASK_NOT_RUNNING')
+        context.begin_phase('final')
         latest = evidence_for(project, state, args.task, defer_no_tests=True)
         supplied = getattr(args, 'no_tests_reason', None)
         if latest['kind'] == 'tests':
@@ -2740,6 +3373,7 @@ def dispatch(project, args):
             task.setdefault('history', []).append(
                 {'status': 'done', 'source': 'task-done',
                  'no_tests_reason': task['no_tests_reason'], 'at': now()})
+        context.assert_unchanged()
         task['evidence'] = latest['id']
         task['status'] = 'done'
         if 'acceptance_cards' in task:
@@ -2785,6 +3419,7 @@ def dispatch(project, args):
     elif command == 'ready':
         if state.get('controller_required') and state.get('status') != 'ready':
             raise WorkflowError('CONTROLLER_REQUIRED run advance <id> --to checking then --to ready before ready')
+        context.begin_phase('final')
         fp, checks, backlog = validate_delivery(project, state, doc)
         hygiene = _hygiene_release(project, state)
         if hygiene.get('accepted'):
@@ -2794,6 +3429,7 @@ def dispatch(project, args):
         state['git_clean'] = delivered_git['git_clean']
         state['branch_merged'] = delivered_git['branch_merged']
         state['delivery_git'] = delivered_git
+        context.assert_unchanged()
         review = state['review']
         state['status'] = 'ready'
         state['delivery_fingerprint'] = fp
@@ -2848,6 +3484,7 @@ def dispatch(project, args):
         state['unblocked_at'] = now()
         state['unblock_reason'] = redact(args.reason)
     elif command == 'observe-head':
+        context.begin_phase('final')
         task_id = getattr(args, 'task_id', None)
         if task_id:
             task = project.item(state, task_id)
@@ -2858,42 +3495,92 @@ def dispatch(project, args):
             actual = git_identity(workspace)
             if actual.get('branch') != binding.get('branch') or actual.get('root') != str(workspace):
                 raise WorkflowError('GIT_WORKSPACE_MISMATCH inspect child workspace identity')
-            base_check = _git_run(workspace, 'merge-base', '--is-ancestor', binding['base_head'], actual['head'])
+            base_check = is_ancestor(workspace, binding['base_head'], actual['head'])
             if base_check.returncode:
                 raise WorkflowError('GIT_BASE_CHANGED child no longer descends from recorded base')
+            previous = {'root': binding.get('workspace_root'), 'branch': binding.get('branch'),
+                        'base_head': binding.get('base_head'), 'head': binding.get('head')}
+            current = {'root': actual.get('root'), 'branch': actual.get('branch'),
+                       'base_head': binding.get('base_head'), 'head': actual.get('head')}
+            checks = {'workspace': actual.get('root') == str(workspace),
+                      'branch': actual.get('branch') == binding.get('branch'),
+                      'base': base_check.returncode == 0}
+            if task.get('status') == 'done':
+                details = {}
+                try:
+                    evidence_for(project, state, task_id,
+                                 current_fingerprint=fingerprint(workspace),
+                                 allow_head_change=True)
+                    checks['evidence'] = True
+                except (WorkflowError, OSError) as exc:
+                    checks['evidence'] = False
+                    details['evidence'] = str(exc)
+            else:
+                details = {}
+            if state.get('status') == 'ready':
+                try:
+                    project.validate_integration(state, allow_head_change=True)
+                    checks['integration'] = True
+                except WorkflowError:
+                    checks['integration'] = False
+            observation = head_observation_change(previous, current,
+                                                  {'checks': checks, 'details': details})
+            if not observation['identity_changed'] and not observation['verification_changed']:
+                return {'task': state['id'], 'plan_task': task_id, 'head': actual.get('head'),
+                        'changed': False, **observation}, True
             binding.setdefault('head_history', []).append({'previous': binding.get('head'), 'head': actual['head'], 'reason': args.reason, 'at': now()})
             binding['head'] = actual['head']
-            state['review'] = None
-            if state['status'] == 'ready':
-                state['status'] = 'needs-verification'
+            if observation['verification_changed']:
+                state['review'] = None
+                if state['status'] == 'ready':
+                    state['status'] = 'needs-verification'
+            context.assert_unchanged()
             project.write(state, command, args.reason)
-            return {'task': state['id'], 'plan_task': task_id, 'head': actual['head']}, True
-        preserve = state['status'] == 'ready' and not state.get('inflight')
-        if preserve:
-            # HEAD is provenance, not an input. Explicitly recheck the sealed
-            # contract and real receipts before accepting an unchanged tree.
-            current_fingerprint = fingerprint(project.workspace_root(state))
-            for task in state['tasks']:
-                evidence_for(project, state, task['id'], current_fingerprint=current_fingerprint,
-                             allow_historical=True)
-        before = state['git']
-        state['git'] = git_identity(project.workspace_root(state))
+            return {'task': state['id'], 'plan_task': task_id, 'head': actual['head'],
+                    'changed': True, **observation}, True
+        before = dict(state.get('git') or {})
+        workspace = project.workspace_root(state)
+        actual = git_identity(workspace)
+        previous = {'root': before.get('root'), 'branch': before.get('branch'),
+                    'head': before.get('head')}
+        current = {'root': actual.get('root'), 'branch': actual.get('branch'),
+                   'head': actual.get('head')}
+        if previous == current:
+            return {'task': state['id'], 'head': actual.get('head'), 'changed': False,
+                    'identity_changed': False, 'verification_changed': False,
+                    'preserve_content_evidence': True, 'reason': 'no-change'}, True
+        preserve = state.get('status') == 'ready' and not state.get('inflight')
+        checks = {'workspace': actual.get('root') == before.get('root'),
+                  'branch': actual.get('branch') == before.get('branch'),
+                  'delivery': preserve}
+        observation = head_observation_change(previous, current, {'checks': checks})
+        state['git'] = actual
         if state.get('git_topology'):
             state['git_topology']['head'] = state['git']['head']
+        state.setdefault('head_history', []).append({
+            'previous': previous, 'current': current,
+            'reason': args.reason, 'at': now(),
+            'observation': observation,
+        })
         state['head_reconciliation'] = {
             'previous': before, 'current': state['git'], 'reason': args.reason, 'at': now(),
+            'changed': True, 'observation': observation,
             'commit_warnings': commit_number_warnings(project.root, before.get('head'), state['git'].get('head'), state.get('number')),
         }
-        if not preserve:
+        if observation['verification_changed']:
             state['review'] = None
             state['status'] = 'needs-verification'
+        context.assert_unchanged()
+        project.write(state, command, args.reason)
+        return {'task': state['id'], 'head': actual.get('head'), 'changed': True,
+                **observation}, True
     elif command == 'recover-run':
         if not state.get('inflight'): raise WorkflowError('NO_UNKNOWN_EXECUTION')
         inflight = state['inflight']
         receipt_path = project.root / f".gsp/runs/{state['id']}/evidence/{inflight['id']}/receipt.json"
         if receipt_path.is_file():
             receipt = read(receipt_path)
-            if receipt.get('id') == inflight['id'] and receipt.get('task') == inflight.get('task') and receipt.get('status') in ('pass', 'fail', 'failed-output', 'zero-tests', 'test-count-unknown', 'inputs-changed', 'scope-violation'):
+            if receipt.get('id') == inflight['id'] and receipt.get('task') == inflight.get('task') and receipt.get('status') in ('pass', 'fail', 'failed-output', 'zero-tests', 'test-count-unknown', 'inputs-changed', 'scope-violation', 'log-truncated'):
                 if receipt_path.relative_to(project.root).as_posix() not in state.get('evidence', []):
                     state.setdefault('evidence', []).append(receipt_path.relative_to(project.root).as_posix())
                 state['last_recovery'] = {'execution': state.pop('inflight'), 'outcome': 'claimed-receipt', 'receipt': receipt_path.relative_to(project.root).as_posix(), 'at': now()}
@@ -2940,7 +3627,8 @@ def dispatch(project, args):
                     continue
             else:
                 if task['status'] != 'running':
-                    dispatch(project, argparse.Namespace(command='task-start', id=state['id'], task=task_id))
+                    dispatch(project, argparse.Namespace(command='task-start', id=state['id'],
+                                                         task=task_id), context=context)
                 receipts = [read(project.root / path) for path in state.get('evidence', [])]
                 rows = [row for row in receipts if row.get('task') == task_id]
                 if not rows:
@@ -2949,13 +3637,14 @@ def dispatch(project, args):
                 run_args = argparse.Namespace(command='run', id=state['id'], task=task_id,
                                               kind=receipt.get('kind', 'tests'), timeout=300, scan_timeout=120,
                                               argv=list(receipt['argv']))
-                result, ok = dispatch(project, run_args)
+                result, ok = dispatch(project, run_args, context=context)
                 results.append({'task': task_id, 'status': result.get('status') if isinstance(result, dict) else None})
                 if not ok:
                     state = read(run / 'state.json')
                     return {'task': state['id'], 'revalidation': 'stopped', 'failed': task_id,
                             'remaining': [item['task'] for item in state.get('revalidation') or []]}, False
-                dispatch(project, argparse.Namespace(command='task-done', id=state['id'], task=task_id))
+                dispatch(project, argparse.Namespace(command='task-done', id=state['id'],
+                                                     task=task_id), context=context)
             state = read(run / 'state.json')
             state['revalidation'] = [item for item in state.get('revalidation') or [] if item['task'] != task_id]
             project.write(state, 'revalidation', task_id + ' revalidated')

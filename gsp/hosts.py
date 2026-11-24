@@ -61,6 +61,11 @@ def identity(pid):
     return {'pid': pid, 'token': process_token(pid)}
 
 
+def parent_identity():
+    """Identity of the controller process that owns this command."""
+    return {**identity(os.getpid()), 'role': 'controller'}
+
+
 def terminate_owned(process):
     """Only the Popen child just created by this controller; never enumerate targets."""
     if process.poll() is not None:

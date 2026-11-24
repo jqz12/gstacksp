@@ -142,10 +142,11 @@ class GitTopologyTests(unittest.TestCase):
         self.assertEqual(dirty_recommendation['mode'], 'worktree')
         self.assertTrue(any('脏' in reason for reason in dirty_recommendation['reasons']))
 
-    def test_large_single_task_recommends_worktree(self):
+    def test_large_single_task_branch_is_enough_without_independent_verification(self):
         result = recommend(probe(self.repo()), {'number': 'GSP-000018', 'title': '跨模块重构',
                                                'intent': 'single-task', 'size': 'large'})
-        self.assertEqual(result['mode'], 'worktree')
+        self.assertEqual(result['mode'], 'branch')
+        self.assertTrue(any('规模' in reason for reason in result['reasons']))
 
     def test_branch_name_keeps_gsp_and_task_number_and_chinese_topic(self):
         name = branch_name('GSP-000018', 'T02', '后端接口')

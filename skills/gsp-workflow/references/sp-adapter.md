@@ -58,9 +58,9 @@ SP 的 progress.md 是每个计划、每个工作树的 scratch ledger，不是�
 
 - brainstorming：读根待办；保留完整讨论、设计、builder check；确认后 approve。
 - writing-plans：保留完整任务粒度、全局约束、Review Focus、spec coverage；根待办按需关联，完整 task-add 后 seal-plan。按风险使用 autoplan/UI/devex，不叠加 GS 四阶段。
-- execute：resume 核对，不重复已完成任务；CLI 登记和证据；后台显式读取 driver.md 并 drive-init/start，不能和当前会话并发写。
+- execute：resume 核对，不重复已完成任务；CLI 登记和证据；后台显式读取 driver.md 并 drive-init/start，不能和当前会话并发写。原生 run 持续写脱敏日志、进度与终态，长命令用 run-status 观察；相同空等待最多两次，第三次前检查日志、进程或产物。真实构建环境以 Popen 注入和回执为准，不把 prompt 文本当环境证明。
 - review：请求和接收反馈两份原文均需使用；审查 SHA 范围覆盖整个任务而非机械 HEAD~1。独立审查保留完整模板，自查注明限制；review.md 保存范围、结论、发现和未覆盖，再 CLI review 登记。审查者先核对已有证据，仅具体疑点补跑，不无意义重复全套。
-- verify/ship：核对根待办、真实证据、最终 all 回归、当前整体审查后 ready。原版 evidence-before-claims 保留；复用证据必须证明输入及契约仍匹配，不能旧日志冒充当前验证。外部动作完成后补交付，不预先称成功。
+- verify/ship：核对根待办、真实证据、最终 all 回归、当前整体审查后 ready。原版 evidence-before-claims 保留；证据按命令入口和有效集合选择，适用失败、截断日志、输入/契约/epoch/workspace 变化与篡改继续阻止完成，不能旧日志冒充当前验证。observe-head 无变化是 no-op，status --brief 和 run-status 都不是交付证明。外部动作完成后补交付，不预先称成功。
 - learn/context：经验有来源追加，本地保存；save/resume 管恢复。不默认向 gbrain 外发。
 
 ## 维护要求

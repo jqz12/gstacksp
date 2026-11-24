@@ -27,7 +27,7 @@
 - 同任务目录 `review.md`：审查范围、审查者、发现、处理、未覆盖项；自查不能冒称独立审查。
 - 同任务目录 `delivery.md`：验证后的交付入口，链接设计、计划和证据。
 - `.gsp/runs/<id>/state.json`：机器状态正本；通过 CLI 更新，不手改完成状态或伪造证据。
-- `.gsp/runs/<id>/evidence/<uuid>/`：一次命令的一份不可覆盖记录，含 receipt、stdout、stderr。
+- `.gsp/runs/<id>/evidence/<uuid>/`：一次命令的一份不可覆盖记录，含 receipt、脱敏 stdout/stderr、`command-progress.json` 和终态 `command-result.json`。
 - `docs/gsp/learnings.jsonl`：本项目可复用经验，含来源，不自动外发。
 - `.gsp/config.json`：本项目明确的提问偏好；历史推断不自动写成偏好。
 - 项目根 `TODOS.md`：跨任务的未解决事项与完成历史，兼容已有 `TODO.md`。完整规则见 [待办生命周期](backlog.md)，规划、审查、QA、交付与恢复按需读取。不能用任务状态或经验库替代它。
@@ -41,7 +41,7 @@ Git 生命周期由 health route、workflow 和按需 `gsp-git` 共同承接：h
 
 并行和全栈任务使用 `task-add --role frontend|backend|integration`，通过 `topology-select <id> --task Tnn` 为每个可写任务绑定独立 branch/worktree；控制根只保存一份 `.gsp` 账本，源码命令和 fingerprint 使用绑定的 `workspace_root`。计划封存后新增 frontend/backend 必须用 `--owned-by <integration>` 声明归属并进入依赖图；新增 integration 必须用 `--depends` 传递覆盖现有全部可写任务。共享可写 worktree、重复 branch、缺少 integration owner、子任务未完成或集成 base 已漂移时阻止进入 `execute`/`ready`。资源不足可以顺序复用已释放 workspace，但不能退回未记录的主分支写入。
 
-任务创建时按实际形态声明 `--intent`，大功能或跨模块单任务用 `--size large`。同一单任务换会话只复核现有绑定，不额外制造集成任务。`--base` 指定派生基线；位置变化使用 `topology-select --rebind`，使旧验证失效并保留历史。子任务实际提交核对后使用 `observe-head --task Tnn`；集成 HEAD 必须包含所有子任务已验证的干净提交，当前不自动证明 cherry-pick/squash 的来源。最终 `run --task all`、审查和交付针对唯一集成工作区。多工作区由 Native 执行；headless driver 当前拒绝绑定 worktree，不能在控制根执行后冒称子工作区已验证。真正非 Git 项目保留原工作流，损坏 Git 和探测失败不能降级成该例外。
+任务创建时按实际形态声明 `--intent`，大功能或跨模块单任务可用 `--size large` 记录风险。`size` 不单独强制 worktree；并行写者、独立验证或保护现有改动才是隔离的主要理由。工作位置与构建缓存分开决定，不让多个写者无租约地共写同一 target。同一单任务换会话只复核现有绑定，不额外制造集成任务。`--base` 指定派生基线；位置变化使用 `topology-select --rebind`，使旧验证失效并保留历史。子任务实际提交核对后使用 `observe-head --task Tnn`；集成 HEAD 必须包含所有子任务已验证的干净提交，当前不自动证明 cherry-pick/squash 的来源。最终 `run --task all`、审查和交付针对唯一集成工作区。多工作区由 Native 执行；headless driver 当前拒绝绑定 worktree，不能在控制根执行后冒称子工作区已验证。真正非 Git 项目保留原工作流，损坏 Git 和探测失败不能降级成该例外。
 
 首次实现前，只问一次是否冻结并给出建议；用户已经说明时直接执行。小修改可原地冻结，大功能/并行改动可用宿主原生 worktree，已有工作区先检测。现有 Git worktree 独立工作目录并共享 Git 数据，不是沙箱。
 
@@ -73,6 +73,8 @@ Codex direct-edit hook 解析 `apply_patch`、`Edit`、`Write` 和 `NotebookEdit
 
 managed worktree 的构建根是 `<project>/.gsp/build/<编号>/<slug>`；brief 和 Tnn-prompt 写入 `CARGO_TARGET_DIR` 与 `BUILD_ROOT`。worktree 回收时删除自己的构建根，活动 dispatch 引用或删除失败则保留并记录。`worktree_build:"off"` 才退回 worktree 自带目录。
 
+`run` 在真实 Popen 前解析唯一构建上下文并注入白名单变量，回执记录实际 `mode/root/env/provenance/compatibility_key`；非 Cargo 项目保持 `mode=off`，不会继承外层构建变量冒充绑定。宿主已有冲突的 `CARGO_TARGET_DIR`/`BUILD_ROOT` 时拒绝启动并报 `BUILD_CONTEXT_CONFLICT`。实际根内使用原子排他的 `.gsp-build-lease.json` 跨控制根协调 GSP 写者；控制进程死亡但子进程仍活或启动窗口未知时保留现场，不自动抢锁或终止同名进程。
+
 `ready` 校验最新 `all` 回执：未解释的 `hygiene.retained`/`errors`/`truncated` 阻塞为 `HYGIENE_LEFTOVER`，写入 decision 才放行并在 delivery 列出理由；失败运行在上限内的保留不阻塞。delivery 同时记录 `git_clean` 与 `branch_merged`，不隐藏未提交或未合并。
 
 收尾用 `topology-clean <id> [task]`（默认 dry-run，`--apply` 只删除已合并+干净+无活动租约的 worktree 与已合并分支），以及 `close --cleanup`；`close` 发现绑定 worktree 有未提交改动时默认拒绝，`--allow-dirty` 必须配合明确理由。workspace 已删除的遗留 ready/closed 用 `close --reconcile` 归一，`status`/`resume` 返回 `workspace_missing=true` 而不是永久失败。`topology`/`new` 输出 `residue`，让残留对新任务可见。
@@ -82,6 +84,10 @@ managed worktree 的构建根是 `<project>/.gsp/build/<编号>/<slug>`；brief 
 有行为变更时优先先写会失败的有效测试，再最小实现、测试和重构；纯文档或无合适自动测试的任务记录具体理由与替代验证。测试命令从项目实际配置选择。
 
 任务运行 `task-start` → 实现/测试 → `run --task T1 --kind tests -- <真实 argv>` → `task-done`。未知测试数和零测试不会算作通过；非测试检查使用 `--kind check`，并在 `task-add` 或 `task-done --no-tests-reason "<具体理由>"` 登记理由。退出 0 只证明该命令状态，不能证明全部需求。修改文件会使旧证据失效。多个任务实现后按 `run --task all` → 整体审查 → `ready` 的顺序收口；同一输入只跑一次最终回归，只有测试入口或测试集合确实改变、或有已记录的抖动时，才重复运行并保留每次回执。
+
+完成判断使用有效证据集合，不只看最后一张回执：`tests` 与 `check` 按命令入口分组，任一入口的适用失败阻止完成，只有同一入口后续成功才能解除；输入、契约、epoch、workspace 或入口变化会使旧成功失效。`all` 回执不顶替子任务证据。`task-done` 优先引用有效 tests，check-only 必须显式记录理由。日志或回执篡改、截断日志和未知终态都不能通过。
+
+控制命令在一次 `dispatch` 内复用未变化阶段的验证结果，并在最终阶段清空缓存、重新核对源内容与回执/日志摘要；不跨命令缓存安全结论。`status --brief` 只读账本，输出 `validation=NOT_CHECKED`、`not_authoritative=true`，不运行 Git 或扫描工程。`observe-head` 在 HEAD 与验证输入均未变时返回 no-op，不重写 review、ready 或证据；真实内容、绑定、契约、入口或集成关系变化仍进入 `needs-verification`。长命令的 `run-status` 同样只是运行观测，不是交付证明。
 
 审查按风险检查规格、逻辑、测试、边界和安全，反馈先核实再修复。失败不改弱测试换绿。缺少浏览器、独立代理、远程 CI 时明确未覆盖。`ready` 校验本地状态和证据，不证明真实用户验收或外部部署成功。
 

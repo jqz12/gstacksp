@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 
-from gsp.runtime import Project, WorkflowError, dispatch, parser, read
+from gsp.runtime import Project, dispatch, parser, read
 from gsp.document_health import audit
 
 
@@ -59,7 +59,9 @@ class GovernanceClosureTests(unittest.TestCase):
         with (self.doc/'delivery.md').open('a', encoding='utf-8') as f: f.write('\nGovernance complete\n')
         audit(self.root, Path(self.tmp.name)/'reports')
         self.assertEqual(self.project.state('governance')[0]['status'], 'needs-verification')
-        with self.assertRaises(WorkflowError): self.cmd('ready', 'governance')
+        result, ok = dispatch(self.project, parser().parse_args(['ready', 'governance']))
+        self.assertFalse(ok)
+        self.assertEqual(result['blockers'][0]['code'], 'CONTROLLER_REQUIRED')
         self.cmd('task-reopen', 'governance', 'T1', '--reason', 'New document inputs need current evidence')
         self.cmd('task-start', 'governance', 'T1')
         self.finish()

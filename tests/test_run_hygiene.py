@@ -6,11 +6,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from gsp.runtime import Project, dispatch, parser, read
+from gsp.runtime import Project, WorkflowError, dispatch, parser, read
 
 
 PROBE = '''import os, sys
@@ -29,6 +30,9 @@ sys.exit(int(sys.argv[1]) if len(sys.argv) > 1 else 0)
 
 class RunHygieneTests(unittest.TestCase):
     def setUp(self):
+        self.saved_build_env = {key: os.environ.pop(key) for key in
+                                ('CARGO_TARGET_DIR', 'BUILD_ROOT') if key in os.environ}
+        self.addCleanup(lambda: os.environ.update(self.saved_build_env))
         self.tmp = tempfile.TemporaryDirectory(prefix='gsp-run-hygiene-')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -141,6 +145,21 @@ class RunHygieneTests(unittest.TestCase):
         self.assertTrue(receipt['hygiene']['disabled'])
         self.assertIsNone(receipt['hygiene']['temp_isolation_dir'])
         self.assertFalse((self.root / '.gsp' / 'tmp' / 'runs' / receipt['id']).exists())
+
+    def test_truncated_logs_cannot_complete_a_task(self):
+        program = self.root / 'probe_loud.py'
+        program.write_text(
+            "print('Ran 1 test in 0.001s')\n"
+            "print('OK')\n"
+            "print('x' * 4096)\n", encoding='utf-8')
+        with patch('gsp.command_execution.MAX_STREAM_BYTES', 64):
+            self.cmd('run', 'work', '--task', 'T01', '--kind', 'tests', '--',
+                     sys.executable, str(program), require_ok=False)
+        receipt = self.receipt()
+        self.assertEqual(receipt['status'], 'log-truncated')
+        self.assertTrue(receipt['log_integrity']['stdout']['truncated'])
+        with self.assertRaisesRegex(WorkflowError, 'EVIDENCE_APPLICABLE_FAILURE'):
+            dispatch(self.project, parser().parse_args(['task-done', 'work', 'T01']))
 
 
 if __name__ == '__main__':

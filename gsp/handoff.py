@@ -102,6 +102,18 @@ def _checks(project, state, target):
             first = parallel['blocking'][0]
             return [_gate(first['code'], '; '.join(item.get('detail', item['code']) for item in parallel['blocking']),
                           'complete the child and integration topology checks', current)]
+        document = project.paths(state['id'])[1]
+        review = state.get('review') or {}
+        if not review or not (document / 'review.md').is_file():
+            return [_gate('REVIEW_MISSING', 'the review report is missing',
+                          'write review.md and register a non-blocking review', current)]
+        if review.get('blocking'):
+            return [_gate('REVIEW_BLOCKED', f"{review.get('blocking')} blocking review findings",
+                          'resolve the findings and register a clean review', current)]
+        from .runtime import digest
+        if review.get('sha256') != digest(document / 'review.md'):
+            return [_gate('REVIEW_STALE', 'review.md changed after review registration',
+                          'rerun review on the current report', current)]
         from .runtime import validate_delivery
         try:
             validate_delivery(project, state, project.paths(state['id'])[1])
@@ -110,14 +122,22 @@ def _checks(project, state, target):
     return []
 
 
+def blocked_preview(project, state, target, blockers):
+    current = state.get('status')
+    target = target or TRANSITIONS.get(current)
+    return {'task': state['id'], 'from_stage': current, 'to_stage': target,
+            'allowed': False, 'blockers': blockers,
+            'next_skill': NEXT_SKILL.get(target or current, 'gsp-workflow'),
+            'documents': _docs(project, state), 'scope': state.get('scope', {}).get('mode')}
+
+
 def preview(project, state, target=None):
     current = state.get('status')
     target = target or TRANSITIONS.get(current)
     blockers = _checks(project, state, target) if target else [_gate('NO_NEXT_STAGE', 'task has no automatic next stage', 'resume or close the task', current)]
-    return {'task': state['id'], 'from_stage': current, 'to_stage': target,
-            'allowed': not blockers, 'blockers': blockers,
-            'next_skill': NEXT_SKILL.get(target or current, 'gsp-workflow'),
-            'documents': _docs(project, state), 'scope': state.get('scope', {}).get('mode')}
+    result = blocked_preview(project, state, target, blockers)
+    result['allowed'] = not blockers
+    return result
 
 
 def record_handoff(run_dir, payload):

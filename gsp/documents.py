@@ -15,6 +15,66 @@ import uuid
 from .runtime import WorkflowError, atomic, digest, git_identity, inside, now, read, redact, sha
 
 
+WORK_STAGE_ALLOWED = {
+    'idea': {'design', 'paused', 'cancelled'},
+    'design': {'paused', 'cancelled'},
+    'approved': {'design', 'paused', 'cancelled'},
+    'implementing': {'design', 'paused', 'cancelled'},
+    'ready': {'design', 'paused', 'cancelled', 'delivered', 'closed'},
+    'delivered': {'closed'},
+    'paused': {'design', 'cancelled'},
+    'cancelled': {'design'},
+    'closed': set(),
+}
+
+
+def work_record_snapshot(root, identity):
+    """Read one work record without Git probes or the document full scan.
+
+    The document index is a cache and is used only as a bounded hint.  A
+    missing or stale row falls back to the two supported record locations;
+    callers still perform the authoritative Governance validation later.
+    """
+    root = Path(root).resolve()
+    index = root / '.gsp/documents.sqlite'
+    if index.is_file():
+        try:
+            db = sqlite3.connect(index, timeout=2)
+            try:
+                row = db.execute(
+                    'SELECT path FROM entries WHERE uuid=? OR number=?',
+                    (identity, identity)).fetchone()
+            finally:
+                db.close()
+        except sqlite3.Error:
+            row = None
+        if row:
+            path = root / row[0]
+            if inside(root, path) and path.is_file():
+                try:
+                    record = read(path)
+                except (WorkflowError, OSError):
+                    record = None
+                if record and (record.get('uuid') == identity or
+                               (record.get('number') and record.get('number') == identity)):
+                    return record
+    base = root / 'docs/work'
+    if not base.is_dir():
+        return None
+    for pattern in ('*/*/record.json', '*/*/*/record.json'):
+        for path in base.glob(pattern):
+            if not inside(root, path):
+                continue
+            try:
+                record = read(path)
+            except (WorkflowError, OSError):
+                continue
+            if record.get('uuid') == identity or (record.get('number') and
+                                                  record.get('number') == identity):
+                return record
+    return None
+
+
 class Governance:
     def __init__(self, root):
         self.root = Path(root).resolve()
@@ -221,14 +281,11 @@ class Governance:
                     db.execute('INSERT OR REPLACE INTO texts VALUES (?,?,?)',(rel,h,p.read_text(encoding='utf-8-sig')))
             db.commit()
 
-    def stage(self, identity, target, reason):
+    def stage(self, identity, target, reason, run_state=None, context=None):
         r=self.get(identity)
         if r['kind']!='work' or not reason.strip(): raise WorkflowError('WORK_REASON_REQUIRED')
         if target not in ('idea','design','paused','cancelled','delivered','closed'): raise WorkflowError('WORK_STAGE_REQUIRES_EXECUTION use approve/seal-plan/ready')
-        allowed={'idea':{'design','paused','cancelled'},'design':{'paused','cancelled'},
-                 'approved':{'design','paused','cancelled'},'implementing':{'design','paused','cancelled'},
-                 'ready':{'design','paused','cancelled','delivered','closed'},'delivered':{'closed'},
-                 'paused':{'design','cancelled'},'cancelled':{'design'},'closed':set()}
+        allowed = WORK_STAGE_ALLOWED
         if target!=r['stage'] and target not in allowed.get(r['stage'],set()):raise WorkflowError('WORK_TRANSITION_INVALID')
         if r.get('run_id') and target in ('idea','design','paused','cancelled'):
             run=self.path('.gsp/runs/'+r['run_id']+'/state.json')
@@ -237,7 +294,9 @@ class Governance:
         if target in ('delivered','closed'):
             from .runtime import Project
             if not r.get('run_id'): raise WorkflowError('WORK_NO_READY_RUN')
-            state,_,_=Project(self.root).state(r['run_id'])
+            state = run_state
+            if state is None:
+                state,_,_=Project(self.root).state(r['run_id'], context=context)
             if state['status']!='ready' or state.get('work_uuid')!=r['uuid']: raise WorkflowError('WORK_NOT_READY')
             if not r.get('closure_condition'): raise WorkflowError('WORK_CLOSURE_CONDITION_REQUIRED')
         before=r['stage']; r['stage']=target
