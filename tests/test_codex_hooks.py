@@ -139,6 +139,48 @@ class CodexHooksTests(unittest.TestCase):
         result=wait(max_output_tokens=1000)
         self.assertEqual(result['hookSpecificOutput']['permissionDecision'],'deny')
 
+    def test_wait_guard_accepts_numeric_session_and_bash_alias(self):
+        def wait(tool_name, session_id):
+            return self.call('PreToolUse',tool_name=tool_name,tool_input={
+                'session_id':session_id,'chars':'','yield_time_ms':1000,'max_output_tokens':2000})
+
+        for tool_name,session_id in (('Bash',74439),('exec_command',74440)):
+            with self.subTest(tool=tool_name):
+                self.assertNotIn('permissionDecision',wait(tool_name,session_id).get('hookSpecificOutput',{}))
+                self.assertNotIn('permissionDecision',wait(tool_name,session_id).get('hookSpecificOutput',{}))
+                result=wait(tool_name,session_id)
+                self.assertEqual(result['hookSpecificOutput']['permissionDecision'],'deny')
+
+    def test_wait_guard_shares_streak_between_write_stdin_and_alias(self):
+        self.assertNotIn('permissionDecision',self.call(
+            'PreToolUse',tool_name='write_stdin',tool_input={
+                'session_id':74439,'chars':'','yield_time_ms':1000}).get('hookSpecificOutput',{}))
+        self.assertNotIn('permissionDecision',self.call(
+            'PreToolUse',tool_name='Bash',tool_input={
+                'session_id':'74439','chars':'','yield_time_ms':1000}).get('hookSpecificOutput',{}))
+        result=self.call('PreToolUse',tool_name='Bash',tool_input={
+            'session_id':74439,'chars':'','yield_time_ms':1000})
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'],'deny')
+
+    def test_real_bash_command_resets_alias_wait_streak(self):
+        def wait():
+            return self.call('PreToolUse',tool_name='Bash',tool_input={
+                'session_id':74439,'chars':'','yield_time_ms':1000})
+
+        wait(); wait()
+        self.assertNotIn('permissionDecision',self.call(
+            'PreToolUse',tool_name='Bash',tool_input={
+                'command':'Get-Content log.txt','session_id':74439,'chars':''}).get('hookSpecificOutput',{}))
+        self.assertNotIn('permissionDecision',wait().get('hookSpecificOutput',{}))
+
+    def test_wait_guard_accepts_json_string_tool_input(self):
+        payload=json.dumps({'session_id':74439,'chars':'','yield_time_ms':1000,'max_output_tokens':2000})
+        for _ in range(2):
+            self.assertNotIn('permissionDecision',self.call(
+                'PreToolUse',tool_name='Bash',tool_input=payload).get('hookSpecificOutput',{}))
+        result=self.call('PreToolUse',tool_name='Bash',tool_input=payload)
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'],'deny')
+
     def test_wait_guard_isolates_sessions_and_resets_after_observation_or_input(self):
         def wait(tool_session, chars=''):
             return self.call('PreToolUse',tool_name='write_stdin',tool_input={
@@ -172,6 +214,13 @@ class CodexHooksTests(unittest.TestCase):
         self.assertEqual(report['wait_guard_denied'],1)
         text=''.join(p.read_text() for p in (self.root/'.gsp/audits/codex-hooks').rglob('*') if p.is_file())
         self.assertNotIn('raw-tool-session-99842',text)
+
+    def test_wait_guard_report_counts_bash_alias_denial(self):
+        payload={'chars':'','session_id':74439,'yield_time_ms':1000,'max_output_tokens':2000}
+        for _ in range(3):
+            self.call('PreToolUse',tool_name='Bash',tool_input=payload)
+        report=hooks.report(self.root)
+        self.assertEqual(report['wait_guard_denied'],1)
 
     def test_wait_guard_storage_failure_degrades_without_denial(self):
         from unittest.mock import patch

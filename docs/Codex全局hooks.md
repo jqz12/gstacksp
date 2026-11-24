@@ -50,6 +50,8 @@ Direct-edit 的任务归属以补丁目标路径对应的 source worktree 为准
 
 长命令或 stdout/stderr 被重定向时，记录日志路径、PID/exec session、状态/退出码来源和预期产物。相同空 `write_stdin` 最多等待两次。第三次前读取日志、检查进程、退出码或产物。Codex wait-guard 在受信 hook 收到事件时拒绝第三次空等待，并记录 `coverage=wait-guard`。等待参数变化不会重置预算。
 
+**当前宿主投递限制（2026-11-24）：** Codex 对已有 exec 会话的 `write_stdin` 轮询不会再次投递 `PreToolUse`。实测三次空等待期间审计零事件、`wait_guard_denied=0`；因此该宿主上 wait-guard 无法实时计数或拒绝轮询，别名代码只对将来会投递等待载荷的宿主生效。真实防护依赖执行规则（最多两次空等待，然后检查日志、进程、退出码或产物），不得宣称 hook 已实时拦截。
+
 **Shell、write_stdin、特殊工具及宿主工具存在覆盖缺口。** 任意脚本、命令和 MCP 副作用不能通过路径字符串完整判断。hook 自身失败或未受信任也不能宣称保护生效。冻结不是沙箱；继续使用宿主权限、GSP `run` 证据与事后范围检测。
 
 ## 实验记录

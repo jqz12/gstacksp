@@ -163,6 +163,39 @@ m.HookInstall(PROFILE).apply('install')
         self.assertNotIn('deployed-outer-session',audit)
         self.assertNotIn('deployed-tool-session',audit)
 
+    def test_deployed_runtime_wait_guard_accepts_bash_alias(self):
+        import sys
+        from process_helpers import run
+        project=self.root/'project'
+        (project/'.gsp').mkdir(parents=True)
+        (project/'.gsp/project.json').write_text(json.dumps({'root':str(project)}))
+        self.manager.apply('install')
+        script=self.root/'gstacksp/hooks/scripts/gsp.py'
+
+        def call():
+            payload={
+                'hook_event_name':'PreToolUse',
+                'tool_name':'Bash',
+                'cwd':str(project),
+                'session_id':'deployed-outer-session',
+                'tool_input':{
+                    'session_id':74439,
+                    'chars':'',
+                    'yield_time_ms':1000,
+                    'max_output_tokens':2000,
+                },
+            }
+            return run([sys.executable,str(script),'codex-hook'],
+                       input=json.dumps(payload),text=True,capture_output=True,
+                       cwd=project,timeout=20)
+
+        responses=[json.loads(call().stdout) for _ in range(3)]
+        self.assertNotIn('permissionDecision',responses[0].get('hookSpecificOutput',{}))
+        self.assertNotIn('permissionDecision',responses[1].get('hookSpecificOutput',{}))
+        self.assertEqual(responses[2]['hookSpecificOutput']['permissionDecision'],'deny')
+        audit=''.join(path.read_text() for path in (project/'.gsp/audits/codex-hooks').rglob('*') if path.is_file())
+        self.assertNotIn('74439',audit)
+
     @unittest.skipUnless(__import__('os').name=='nt','Windows shell boundary')
     def test_actual_registered_command_runs_in_powershell_and_cmd(self):
         from process_helpers import run

@@ -20,6 +20,7 @@ REPORT_SHARDS = 10
 WAIT_GUARD_LIMIT = 2
 WAIT_GUARD_TTL = 3600
 WAIT_GUARD_ENTRIES = 128
+WAIT_ALIASES = {'Bash', 'exec_command'}
 EVENTS = {'SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Stop','Interrupt','SessionEnd'}
 
 
@@ -169,6 +170,45 @@ def edit_task(root, cwd, targets, fallback):
     return next(iter(owners),None) or fallback
 
 
+def wait_input(payload):
+    """Return a tool_input mapping without trusting a host-specific wrapper."""
+    data=payload.get('tool_input')
+    if isinstance(data,str):
+        try:
+            data=json.loads(data)
+        except (TypeError,ValueError):
+            return None
+    return data if isinstance(data,dict) else None
+
+
+def wait_mode(tool,payload):
+    """Classify a PreToolUse payload as empty wait, input, or other.
+
+    Some Codex hosts expose the write_stdin tool as Bash or exec_command while
+    preserving the wait fields. Only wait-shaped alias payloads count; a real
+    shell command remains an observation and resets the streak.
+    """
+    data=wait_input(payload)
+    if not isinstance(data,dict):
+        return 'invalid',None
+    session=data.get('session_id')
+    valid_session=(isinstance(session,(str,int)) and not isinstance(session,bool)
+                   and str(session)!='')
+    if tool=='write_stdin':
+        if not valid_session:
+            return 'invalid',None
+        return ('wait' if data.get('chars','')=='' else 'input'),str(session)
+    if tool in WAIT_ALIASES:
+        if 'command' in data or 'cmd' in data:
+            return 'other',None
+        if not valid_session or 'chars' not in data:
+            return 'other',None
+        if not any(key in data for key in ('yield_time_ms','max_output_tokens')):
+            return 'other',None
+        return ('wait' if data.get('chars')=='' else 'input'),str(session)
+    return 'other',None
+
+
 def wait_guard(root, payload, event, tool):
     session=key(payload.get('session_id','missing'))
     folder=safe_file(root,root/'.gsp/audits/codex-hooks'/session)
@@ -186,21 +226,16 @@ def wait_guard(root, payload, event, tool):
             entries={k:v for k,v in state['entries'].items()
                      if isinstance(v,dict) and isinstance(v.get('last_seen'),(int,float))
                      and now_value-float(v['last_seen'])<=WAIT_GUARD_TTL}
-            if event=='PreToolUse' and tool=='write_stdin':
-                data=payload.get('tool_input')
-                if isinstance(data,dict):
-                    tool_session=data.get('session_id')
-                    chars=data.get('chars','')
-                    if isinstance(tool_session,str) and tool_session and chars=='':
-                        tool_key=key(tool_session)
-                        previous=entries.get(tool_key,{})
-                        count=int(previous.get('streak',0))+1
-                        entries[tool_key]={'streak':count,'last_seen':now_value}
-                        blocked=count>WAIT_GUARD_LIMIT
-                    elif chars!='':
-                        entries={}
-            elif event=='PreToolUse':
-                entries={}
+            if event=='PreToolUse':
+                mode,tool_session=wait_mode(tool,payload)
+                if mode=='wait' and tool_session:
+                    tool_key=key(tool_session)
+                    previous=entries.get(tool_key,{})
+                    count=int(previous.get('streak',0))+1
+                    entries[tool_key]={'streak':count,'last_seen':now_value}
+                    blocked=count>WAIT_GUARD_LIMIT
+                elif mode in ('input','other'):
+                    entries={}
             if len(entries)>WAIT_GUARD_ENTRIES:
                 entries=dict(sorted(entries.items(),key=lambda item:item[1].get('last_seen',0),reverse=True)[:WAIT_GUARD_ENTRIES])
             atomic(path,{'schema':1,'entries':entries,'updated':now_value})
