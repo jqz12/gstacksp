@@ -60,9 +60,19 @@ class DocumentTests(unittest.TestCase):
         self.assertIn('../specs/'+spec.name,plan.read_text(encoding='utf-8'))
         self.assertNotEqual(spec,self.project.document(b,'design'))
         self.assertFalse((self.root/'docs/gsp/tasks/login/design.md').exists())
+        self.project.dashboard(a)
         self.assertIn(spec.name,(self.root/'docs/gsp/README.md').read_text(encoding='utf-8'))
     def test_legacy_task_keeps_original_documents(self):
-        a=self.create();run,doc=self.project.paths('login')
+        from unittest.mock import patch
+        # Legacy workflow state predates the journal. Fixture creation must not
+        # mutate a modern published candidate and present it as pre-journal data.
+        def publish_pre_journal(state, event, detail='', action_uid=None):
+            run,_=self.project.paths(state['id'])
+            atomic(run/'state.json',state)
+        with patch.object(self.project,'write',side_effect=publish_pre_journal):
+            a=self.create()
+        self.assertNotIn('_command_commit',a)
+        run,doc=self.project.paths('login')
         a.pop('documents');atomic(run/'state.json',a)
         (doc/'design.md').write_text('# Legacy approved specification',encoding='utf-8')
         (doc/'plan.md').write_text('# Legacy plan',encoding='utf-8')

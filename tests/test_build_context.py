@@ -10,7 +10,7 @@ from pathlib import Path
 from gsp.build_context import (BUILD_LEASE_NAME, build_lease, command_environment,
                                compatibility_key, resolve_context)
 from gsp.hosts import identity
-from gsp.runtime import Project, WorkflowError, atomic, run_check
+from gsp.runtime import Project, WorkflowError, atomic, dispatch, parser, run_check
 
 
 PROBE = '''import json, os
@@ -70,6 +70,12 @@ class BuildContextTests(unittest.TestCase):
                 'head': self.head, 'intent': 'single-task',
             },
         }
+        dispatch(self.project, parser().parse_args(['new', 'build', '--title', 'build context fixture']))
+        canonical = self.project.ledger_state('build')
+        self.state = {**canonical, **self.state, 'work_uuid': canonical['work_uuid'],
+                      'number': canonical['number']}
+        # Synthetic direct-run provider state predates sealed TaskContracts.
+        self.state.pop('operation_schema', None)
 
     def git(self, *argv):
         env = {key: value for key, value in os.environ.items()

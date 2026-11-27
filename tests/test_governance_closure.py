@@ -18,6 +18,15 @@ class GovernanceClosureTests(unittest.TestCase):
         self.project.initialize()
         self.cmd('new', 'governance', '--title', 'Document governance fixture')
         state = read(self.root/'.gsp/runs/governance/state.json')
+        # This published governance-close fixture predates the convergence schema.
+        # Keep the product gate intact; only this synthetic work is legacy.
+        state.pop('convergence_schema', None)
+        self.project.write(
+            state,
+            'fixture-legacy-convergence',
+            'legacy governance-closure fixture created before convergence schema',
+            action_uid='fixture:legacy-convergence:governance-closure',
+        )
         self.doc = self.root/state['doc_dir']
         self.project.document(state, 'design').write_text('# Govern the guide and verify the current document inputs.', encoding='utf-8')
         self.cmd('scope', 'governance', '--off', '--quote', 'synthetic fixture')

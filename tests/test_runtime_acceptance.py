@@ -1,9 +1,12 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from tests.process_helpers import session_binding
+from gsp.runtime import Project
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "scripts" / "gsp.py"
@@ -12,6 +15,9 @@ CLI = ROOT / "scripts" / "gsp.py"
 class DualTrackRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="gsp-dual-track-")
+        self.env=os.environ.copy()
+        self.env.pop('GSP_SESSION_CONTEXT',None)
+        self.env.update(HOME=self.tmp.name,USERPROFILE=self.tmp.name,CODEX_HOME=str(Path(self.tmp.name)/'.codex'))
         self.project = Path(self.tmp.name) / "project"
         self.project.mkdir()
 
@@ -21,7 +27,7 @@ class DualTrackRuntimeTests(unittest.TestCase):
     def cli(self, *args, ok=True):
         result = subprocess.run(
             [sys.executable, str(CLI), "--project", str(self.project), *args],
-            text=True, encoding="utf-8", capture_output=True,
+            text=True, encoding="utf-8", capture_output=True, env=self.env,
         )
         if ok:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -34,6 +40,12 @@ class DualTrackRuntimeTests(unittest.TestCase):
         self.cli("new", "login", "--title", "Login")
         state_file = self.project / ".gsp/runs/login/state.json"
         state = json.loads(state_file.read_text(encoding="utf-8"))
+        binding=session_binding(self.project,state['work_uuid'],'main','codex','acceptance-main')
+        self.env['GSP_SESSION_CONTEXT']=str(self.project/binding.handle_path)
+        # Preserve this published dual-track acceptance fixture as legacy.
+        state.pop('convergence_schema',None)
+        Project(self.project).write(state,'fixture','legacy dual-track acceptance',
+                                    action_uid='fixture:legacy-dual-track')
         design = self.project / state["documents"]["design"]
         design.write_text("# Design\nLogin returns a session.\n", encoding="utf-8")
         self.cli("approve", "login", "--quote", "approve fixture design")
@@ -49,7 +61,8 @@ class DualTrackRuntimeTests(unittest.TestCase):
             "steps": ["run behavior"], "expected": "behavior works", "observed": "not run",
             "evidence": ["fixture-test"], "not_checked_reason": "fixture setup", "next_action": "record acceptance",
         }]
-        state_file.write_text(json.dumps(state), encoding="utf-8")
+        Project(self.project).write(state,'fixture','acceptance cards',
+                                    action_uid='fixture:acceptance-cards')
         self.cli("task-start", "login", "T1")
         return state_file
 
@@ -71,7 +84,8 @@ class DualTrackRuntimeTests(unittest.TestCase):
         self.assertEqual(state["tasks"][0]["implementation"]["status"], "implementation_done")
         self.assertEqual(state["tasks"][0]["acceptance_track"]["status"], "acceptance_pending")
         state["tasks"][0]["acceptance_cards"][0].update(status="PASS", observed="accepted", evidence=["fixture-test"])
-        state_file.write_text(json.dumps(state), encoding="utf-8")
+        Project(self.project).write(state,'fixture','accepted behavior card',
+                                    action_uid='fixture:accepted-behavior-card')
         self.cli("advance", "login", "--to", "ready")
         self.cli("ready", "login")
 

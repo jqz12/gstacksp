@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP systematic-debugging"
-  short_description: "GstackSP 项目工作流：测试失败、异常输出或错误行为需要先定位根因再修复时"
-  default_prompt: "Use $gsp-systematic-debugging for the relevant part of this project task."

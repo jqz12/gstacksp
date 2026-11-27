@@ -7,14 +7,15 @@ import subprocess
 import sys
 import time
 
-from .runtime import WorkflowError, inside, read, sha, visible_git_marker
+from .core import (WorkflowError, inside, read, sha)
+from .git_operations import (visible_git_marker)
 
 BUILD_DIRS={'target','build','dist','out','.next','.cache','.mypy_cache','.ruff_cache'}
 HISTORY=('docs/work/','docs/superpowers/','docs/gsp/')
 
 
 def scan(root, deadline=None, progress=None):
-    from .runtime import SKIP_DIRS
+    from .workflow_support import (SKIP_DIRS)
     root=Path(root).resolve()
     deadline=deadline if deadline is not None else time.monotonic()+120
     started=time.monotonic();last=started;count=0;total=0

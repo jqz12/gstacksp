@@ -9,8 +9,12 @@ description: "Use when 新项目需要建立文档入口、老项目需要完整
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
-阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+条件方法见 [方法索引](../gsp-workflow/references/methods.md)。只在实际触发条件成立时读取对应完整方法；当前上下文未变化时不重复读取，也不把方法入口变成新的默认技能。
 
-路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+阶段推进遵循 [阶段转换契约](../gsp-workflow/references/stage-transitions.md)。
+
+跨会话与恢复遵循 [跨会话契约](../gsp-workflow/references/cross-session.md)。
+
+阶段结果遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套方法完成后返回原任务。
 
 先读 [文档治理执行规则](../gsp-workflow/references/document-governance-execution.md) 和 [共同治理契约](../gsp-workflow/references/document-governance.md)。核对用户原始目标，明确新项目、老项目完整治理或日常局部维护；区分仅检查与已授权整改，不把完整治理缩小为报告或迁移预览。修改前按执行规则选择独立任务、嵌套维护或只读路径；独立整改必须实际resume并建立当前任务验收，不能只沿用旧文件夹。复用现有 GSP 设计、计划、执行和验证，不另设重复批准。完整治理先用 health 获取发现，再逐项阅读、确认正本及归属，按授权受控处理，最后复查；日常仅核对受影响资料，必要时才全量 health。记录盘点、预览、迁移、验收的实际阶段；报告通过不等于治理完成。交付必须对应原始目标，并披露未完成、例外及证据。本技能是执行指导，不是 CLI 自动强制门禁。完整治理同时盘点根目录资料、非Markdown证据和本地工作产物，核对生成工具及输出位置、唯一正本、共享范围和保留规则；详情按共同治理契约的项目资料与工作产物章节执行。

@@ -17,7 +17,7 @@ class CodexHooksTests(unittest.TestCase):
         (self.root/'src').mkdir()
         (self.root/'.gsp/project.json').write_text('{"id":"fixture"}')
         (self.root/'.gsp/active.json').write_text('{"task":"task"}')
-        self.state = {'id':'task','status':'execute','scope':{'mode':'frozen','path':str(self.root/'src')},
+        self.state = {'id':'task','status':'execute','scope':{'mode':'pending','path':None},
                       'documents':{'design':'docs/spec.md','plan':'docs/plan.md'},'doc_dir':'docs/work/task'}
         (self.root/'.gsp/runs/task/state.json').write_text(json.dumps(self.state))
 
@@ -33,13 +33,150 @@ class CodexHooksTests(unittest.TestCase):
             self.assertEqual(hooks.handle({'cwd':folder,'hook_event_name':'SessionStart'}),{})
             self.assertEqual(list(Path(folder).iterdir()),[])
 
-    def test_frozen_patch_all_paths_including_rename(self):
+    def native_workspace(self):
+        holder = tempfile.TemporaryDirectory(prefix='gsp-hook-native-discovery-')
+        self.addCleanup(holder.cleanup)
+        base = Path(holder.name)
+        control, native = base / 'control', base / 'native'
+        control.mkdir()
+        for argv in [
+            ['init', '-q', '-b', 'main'],
+            ['config', 'user.name', 'Native Hook Test'],
+            ['config', 'user.email', 'native-hook@example.invalid'],
+        ]:
+            result = subprocess.run(['git', *argv], cwd=control,
+                                    capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (control / 'README.md').write_text('# native discovery\n', encoding='utf-8')
+        for argv in [
+            ['add', 'README.md'],
+            ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture'],
+            ['worktree', 'add', '-q', '-b', 'codex/native-hook', str(native)],
+        ]:
+            result = subprocess.run(['git', *argv], cwd=control,
+                                    capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (control / '.gsp').mkdir()
+        (control / '.gsp/project.json').write_text(
+            json.dumps({'id': 'native-hook-fixture', 'root': str(control)}),
+            encoding='utf-8',
+        )
+        (native / 'src').mkdir()
+        return control, native
+
+    def test_native_linked_hook_discovery_uses_verified_control_root_readonly(self):
+        import hashlib
+        control, native = self.native_workspace()
+        paths = [control / '.gsp/project.json', control / '.git/index',
+                 control / '.git/HEAD', native / '.git']
+        before = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+        for cwd in [native, native / 'src']:
+            with self.subTest(cwd=cwd):
+                self.assertEqual(hooks.locate(str(cwd)), control)
+        self.assertEqual(before, {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+                                  for p in paths})
+        self.assertEqual(list((control / '.gsp').iterdir()), [control / '.gsp/project.json'])
+        self.assertFalse((native / '.gsp').exists())
+
+    def test_native_linked_hook_discovery_respects_explicit_ceiling(self):
+        from process_helpers import temporary_env
+        _, native = self.native_workspace()
+        with temporary_env({'GSP_CEILING_DIRECTORIES': str(native)}):
+            self.assertIsNone(hooks.locate(str(native / 'src')))
+
+    def test_copied_native_marker_cannot_bypass_edit_hook_discovery(self):
+        _, native = self.native_workspace()
+        copied = native.parent / 'copied'
+        copied.mkdir()
+        (copied / '.git').write_bytes((native / '.git').read_bytes())
+        from gsp.runtime import WorkflowError
+        with self.assertRaisesRegex(WorkflowError, 'CONTROL_ROOT_TOPOLOGY_'):
+            hooks.locate(str(copied))
+        result = hooks.handle({
+            'cwd': str(copied), 'session_id': 'foreign-agent',
+            'hook_event_name': 'PreToolUse', 'tool_name': 'apply_patch',
+            'tool_input': {'command': '*** Begin Patch\n*** Add File: source.py\n+x\n*** End Patch'},
+        })
+        self.assertEqual(result.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
+        self.assertIn('GSP metadata invalid', str(result))
+        self.assertFalse((copied / 'source.py').exists())
+        self.assertFalse((copied / '.gsp').exists())
+
+    def test_split_native_marker_is_rejected_before_hook_root_selection(self):
+        from gsp.runtime import Project, WorkflowError, find_project_root
+        control, native = self.native_workspace()
+        (native / '.gsp').mkdir()
+        (native / '.gsp/project.json').write_text(
+            json.dumps({'id': 'split-identity', 'root': str(native)}),
+            encoding='utf-8',
+        )
+        paths = [control / '.gsp/project.json', native / '.gsp/project.json',
+                 control / '.git/index', control / '.git/HEAD', native / '.git']
+        before = {str(path): path.read_bytes() for path in paths}
+        with self.assertRaisesRegex(WorkflowError, 'CONTROL_ROOT_SPLIT_AUTHORITY'):
+            Project(native)
+        for cwd in [native, native / 'src']:
+            with self.subTest(cwd=cwd):
+                with self.assertRaisesRegex(WorkflowError, 'CONTROL_ROOT_SPLIT_AUTHORITY'):
+                    find_project_root(cwd, include_linked=True)
+                with self.assertRaisesRegex(WorkflowError, 'CONTROL_ROOT_SPLIT_AUTHORITY'):
+                    hooks.locate(str(cwd))
+                reply = hooks.handle({
+                    'cwd': str(cwd), 'agent_id': 'split-agent',
+                    'hook_event_name': 'PreToolUse', 'tool_name': 'apply_patch',
+                    'tool_input': {'command': '*** Begin Patch\n*** Add File: unsafe.py\n+x\n*** End Patch'},
+                })
+                self.assertEqual(reply.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
+                self.assertFalse((cwd / 'unsafe.py').exists())
+        self.assertEqual(before, {str(path): path.read_bytes() for path in paths})
+        self.assertEqual(find_project_root(native), native)  # default legacy lookup is unchanged
+
+    def test_nested_gsp_marker_cannot_hide_native_git_ownership(self):
+        from gsp.runtime import Project, WorkflowError
+        _, native = self.native_workspace()
+        nested = native / 'src'
+        (nested / '.gsp').mkdir()
+        (nested / '.gsp/project.json').write_text(
+            json.dumps({'id': 'nested-identity', 'root': str(nested)}),
+            encoding='utf-8',
+        )
+        with self.assertRaises(WorkflowError):
+            Project(nested)
+        with self.assertRaises(WorkflowError):
+            hooks.locate(str(nested))
+        self.assertFalse((native / '.gsp').exists())
+
+    def test_copied_git_and_gsp_markers_cannot_select_foreign_authority(self):
+        from gsp.runtime import WorkflowError
+        control, native = self.native_workspace()
+        copied = native.parent / 'copied-with-identity'
+        copied.mkdir()
+        (copied / '.git').write_bytes((native / '.git').read_bytes())
+        (copied / '.gsp').mkdir()
+        (copied / '.gsp/project.json').write_bytes((control / '.gsp/project.json').read_bytes())
+        before = (copied / '.gsp/project.json').read_bytes()
+        with self.assertRaisesRegex(WorkflowError, 'CONTROL_ROOT_TOPOLOGY_'):
+            hooks.locate(str(copied))
+        self.assertEqual((copied / '.gsp/project.json').read_bytes(), before)
+
+    def test_native_without_primary_identity_remains_noop_and_readonly(self):
+        control, native = self.native_workspace()
+        marker = control / '.gsp/project.json'
+        marker.unlink()  # owned fixture only; represents a not-yet-initialized primary
+        for cwd in [native, native / 'src']:
+            with self.subTest(cwd=cwd):
+                self.assertIsNone(hooks.locate(str(cwd)))
+        self.assertFalse(marker.exists())
+        self.assertFalse((native / '.gsp').exists())
+
+    def test_legacy_scope_does_not_gate_owned_patch_paths(self):
         for text in ['*** Begin Patch\n*** Add File: src/a.py\n+x\n*** End Patch',
-                     '*** Begin Patch\n*** Delete File: src/a.py\n*** End Patch']:
+                     '*** Begin Patch\n*** Delete File: src/a.py\n*** End Patch',
+                     '*** Begin Patch\n*** Add File: outside.py\n+x\n*** End Patch']:
             self.assertNotIn('permissionDecision',self.call('PreToolUse',tool_name='apply_patch',tool_input={'command':text}).get('hookSpecificOutput',{}))
-        for text in ['*** Begin Patch\n*** Add File: outside.py\n+x\n*** End Patch',
-                     '*** Begin Patch\n*** Update File: src/a.py\n*** Move to: outside.py\n@@\n-x\n+y\n*** End Patch',
-                     '*** Begin Patch\n*** Add File: src/../../escape.py\n+x\n*** End Patch','garbage']:
+        for text in ['*** Begin Patch\n*** Add File: src/../../escape.py\n+x\n*** End Patch',
+                     '*** Begin Patch\n*** Update File: .gsp/project.json\n@@\n-x\n+y\n*** End Patch',
+                     'garbage']:
             result=self.call('PreToolUse',tool_name='apply_patch',tool_input={'command':text})
             self.assertEqual(result['hookSpecificOutput']['permissionDecision'],'deny',text)
 
@@ -114,6 +251,123 @@ class CodexHooksTests(unittest.TestCase):
                              'tool_name':'apply_patch','tool_input':{
                                  'command':'*** Begin Patch\n*** Add File: foreign/source.txt\n+x\n*** End Patch'}})
         self.assertEqual(result['hookSpecificOutput']['permissionDecision'],'deny')
+
+    def test_hook_actual_agent_explicit_actor_mismatch(self):
+        from gsp.identity_store import IdentityStore
+        from gsp.runtime import Project, dispatch, parser
+        from gsp.session_context import create_binding
+        from gsp import sessions
+
+        root = self.root/'identity-project'
+        root.mkdir()
+        subprocess.run(
+            ['git', 'init', '-q', '-b', 'main'], cwd=root,
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ['git', 'config', 'user.name', 'Hook Identity Test'], cwd=root,
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ['git', 'config', 'user.email', 'hook-identity@example.invalid'],
+            cwd=root, check=True, capture_output=True,
+        )
+        (root/'README.md').write_text('# hook identity\n', encoding='utf-8')
+        subprocess.run(
+            ['git', 'add', 'README.md'], cwd=root,
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ['git', 'commit', '-qm', 'chore: baseline'], cwd=root,
+            check=True, capture_output=True,
+        )
+        project = Project(root)
+        project.initialize()
+        dispatch(project, parser().parse_args([
+            'new', 'work', '--title', 'Hook actor mismatch',
+            '--intent', 'cross-session',
+        ]))
+        state = json.loads(
+            (root/'.gsp/runs/work/state.json').read_text(encoding='utf-8')
+        )
+        state['git_topology'] = {
+            'effective_mode': 'in-place',
+            'branch': 'main',
+            'workspace_root': str(root),
+            'control_root': str(root),
+            'intent': 'cross-session',
+            'enforce': True,
+        }
+        (root/'.gsp/runs/work/state.json').write_text(
+            json.dumps(state), encoding='utf-8',
+        )
+        binding = create_binding(
+            IdentityStore(root), state['work_uuid'], 'main', 'codex',
+            'main-thread',
+            frozenset({
+                'accept', 'brief', 'claim', 'dispatch', 'handoff',
+                'plan', 'report', 'write',
+            }),
+        )
+        context = root/binding.handle_path
+        sessions.register_session(project, state, parser().parse_args([
+            'session-register', 'work', '--role', 'controller',
+            '--host', 'codex', '--thread', 'main-thread',
+            '--write-mode', 'write', '--path', '.',
+            '--context', str(context),
+        ]))
+        def run_hook(agent_id, host_session_id='parent-thread', explicit_id='S01'):
+            return hooks.handle({
+                'hook_event_name': 'PreToolUse',
+                'tool_name': 'Write',
+                'cwd': str(root),
+                'session_id': host_session_id,
+                'agent_id': agent_id,
+                'gsp_session_id': explicit_id,
+                'gsp_session_context': str(context),
+                'tool_input': {'file_path': 'services/mismatch.py'},
+            })
+
+        matching = run_hook('main-thread')
+        self.assertNotEqual(
+            matching.get('hookSpecificOutput', {}).get('permissionDecision'),
+            'deny',
+            matching,
+        )
+        audit_text = ''.join(
+            path.read_text(encoding='utf-8')
+            for path in (root/'.gsp/audits/codex-hooks').rglob('*.json*')
+        )
+        self.assertIn('"outcome":"allowed"', audit_text)
+        self.assertIn('"coverage":"session-direct-edit-paths"', audit_text)
+        result = run_hook('foreign-thread')
+        self.assertEqual(
+            result.get('hookSpecificOutput', {}).get('permissionDecision'),
+            'deny', result,
+        )
+        self.assertIn(
+            'SESSION_ACTOR_MISMATCH',
+            result.get('hookSpecificOutput', {}).get(
+                'permissionDecisionReason', '',
+            ),
+        )
+        conflicting = run_hook('main-thread', explicit_id='S99')
+        self.assertIn(
+            'SESSION_ACTOR_MISMATCH',
+            conflicting['hookSpecificOutput']['permissionDecisionReason'],
+        )
+        unverified = hooks.handle({
+            'hook_event_name': 'PreToolUse',
+            'tool_name': 'Write',
+            'cwd': str(root),
+            'gsp_session_id': 'S01',
+            'gsp_session_context': str(context),
+            'tool_input': {'file_path': 'services/unverified.py'},
+        })
+        self.assertIn(
+            'SESSION_ACTOR_UNVERIFIED',
+            unverified['hookSpecificOutput']['permissionDecisionReason'],
+        )
 
     def test_wait_guard_blocks_third_empty_wait(self):
         def wait(tool_session='exec-1', **options):

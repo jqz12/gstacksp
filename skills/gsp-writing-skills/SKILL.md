@@ -11,6 +11,12 @@ Artifact layout is adapted, not the method: use the paths returned by GSP status
 
 Use the [output and handoff contract](../gsp-workflow/references/output-handoff.md) for actual results, honestly attributed skills used, evidence, next action and owner. Return nested methods to the current task; continue authorized work without a redundant approval.
 
+Conditional methods are indexed in [methods](../gsp-workflow/references/methods.md). Only when the actual 触发条件 applies, read the complete method; do not load every method by default.
+
+Stage transitions follow [stage-transitions](../gsp-workflow/references/stage-transitions.md); a routine advance is one business operation and active preview is optional.
+
+Cross-session and recovery follow [cross-session](../gsp-workflow/references/cross-session.md). Read it only when that mode or recovery is active.
+
 <!-- sp-preserved-body:begin -->
 # Writing Skills
 

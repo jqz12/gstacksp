@@ -1,0 +1,2045 @@
+{
+  "schema": 1,
+  "version": "0.9.9",
+  "source_commit": "f7f13c00b4872892511dd900a2c3c45786b018d5",
+  "entries": [
+    {
+      "original_name": "gsp-workflow",
+      "old_pack": "core",
+      "class": "default",
+      "source_kind": "GS+SP",
+      "source_provenance": [
+        "SP:using-superpowers",
+        "GS:careful",
+        "GS:guard"
+      ],
+      "source_digest": "b3b9d014c609bd122279f3ae5367b9b98181b241c5f9da52b9b7f3955bf48434",
+      "source_files": [
+        {
+          "path": "skills/gsp-workflow/SKILL.md",
+          "digest": "b3b9d014c609bd122279f3ae5367b9b98181b241c5f9da52b9b7f3955bf48434"
+        },
+        {
+          "path": "skills/gsp-workflow/agents/openai.yaml",
+          "digest": "5b9acedd1103089a14c5879be5c60eb38b891cfa59bc8b86c0369306ad871a57"
+        }
+      ],
+      "public_paths": [
+        "skills/gsp-workflow/SKILL.md",
+        "skills/gsp-workflow/agents/openai.yaml"
+      ],
+      "payload_root": "skills/gsp-workflow",
+      "internal_method_path": null,
+      "resource_digest": "78d8f4a60e89dbcef758cdb3f5cdfcc980f5878e55892c3eb94f5c602aa5312e",
+      "stage_membership": [
+        "workflow"
+      ],
+      "trigger": "开始或恢复 GstackSP 开发任务，需要选择当前阶段和适用条件方法时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-workflow/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/using-superpowers",
+        "skills/gsp-workflow/upstream/skills/using-superpowers"
+      ],
+      "retired_artifacts": [],
+      "install_selection": "default",
+      "replacement": null,
+      "public_order": 0,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-git",
+      "old_pack": "core",
+      "class": "internal",
+      "source_kind": "GSP+SP",
+      "source_provenance": [
+        "GSP:git-lifecycle",
+        "SP:using-git-worktrees",
+        "SP:finishing-a-development-branch"
+      ],
+      "source_digest": "7b558d05f37f274775299785265be102ec3ad223cfb77454cbb8a0828ce0ae6a",
+      "source_files": [
+        {
+          "path": "skills/gsp-git/SKILL.md",
+          "digest": "7b558d05f37f274775299785265be102ec3ad223cfb77454cbb8a0828ce0ae6a"
+        },
+        {
+          "path": "skills/gsp-git/agents/openai.yaml",
+          "digest": "fa34ab87a15fc2fe35184893455f35513c45db8e79ab6981d87ab05e3feed90c"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-git/METHOD.md",
+      "resource_digest": "7dd1b1f2d4708bed5c01fb7fb646a20eaae8349d7f0d173060c1cb1c2cdc881d",
+      "stage_membership": [
+        "ship"
+      ],
+      "trigger": "Git health route 指向 Git 专业处理，或用户要求检查分支、归属、提交和分支收尾时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-git/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/using-git-worktrees",
+        "skills/gsp-workflow/upstream/skills/using-git-worktrees",
+        "sources/superpowers/skills/finishing-a-development-branch",
+        "skills/gsp-workflow/upstream/skills/finishing-a-development-branch"
+      ],
+      "retired_artifacts": [
+        "skills/gsp-git/SKILL.md",
+        "skills/gsp-git/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-ship",
+      "public_order": null,
+      "method_order": 18
+    },
+    {
+      "original_name": "gsp-document-governance",
+      "old_pack": "optional",
+      "class": "on_demand",
+      "source_kind": "GSP",
+      "source_provenance": [
+        "GSP:document-governance"
+      ],
+      "source_digest": "f581a7535e299fb1479c1ed2c4a2c9fa491d946d040f1255746e0799a2adef71",
+      "source_files": [
+        {
+          "path": "skills/gsp-document-governance/SKILL.md",
+          "digest": "f581a7535e299fb1479c1ed2c4a2c9fa491d946d040f1255746e0799a2adef71"
+        },
+        {
+          "path": "skills/gsp-document-governance/agents/openai.yaml",
+          "digest": "b53790e28ec5e75b16b56468d35286a161169859718387f356e8fc231114d6b2"
+        }
+      ],
+      "public_paths": [
+        "skills/gsp-document-governance/SKILL.md",
+        "skills/gsp-document-governance/agents/openai.yaml"
+      ],
+      "payload_root": "skills/gsp-document-governance",
+      "internal_method_path": null,
+      "resource_digest": "df46c00392ae42f1afa916eb309ba379410706108dc68d4aaf50541def1e321c",
+      "stage_membership": [
+        "document-governance"
+      ],
+      "trigger": "新项目需要建立文档入口、老项目需要完整接入或整理，或本次改动需要维护相关文档正本时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-document-governance/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [],
+      "install_selection": "on_demand",
+      "replacement": null,
+      "public_order": 7,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-health",
+      "old_pack": "core",
+      "class": "on_demand",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:health",
+        "GS:gstack-doctor"
+      ],
+      "source_digest": "244f2fc8836ffef7f0cd52cf2f81315f840ca7a9db744e3a690d26153f23c1fe",
+      "source_files": [
+        {
+          "path": "skills/gsp-health/SKILL.md",
+          "digest": "244f2fc8836ffef7f0cd52cf2f81315f840ca7a9db744e3a690d26153f23c1fe"
+        },
+        {
+          "path": "skills/gsp-health/agents/openai.yaml",
+          "digest": "a065742d11ec4066d093c9e03b3d150d987bb505358ab7270c9272254ffcf81c"
+        }
+      ],
+      "public_paths": [
+        "skills/gsp-health/SKILL.md",
+        "skills/gsp-health/agents/openai.yaml"
+      ],
+      "payload_root": "skills/gsp-health",
+      "internal_method_path": null,
+      "resource_digest": "53943466c7098992be60cc6e80314a62e8cafb39032ffc92acfd6e7220f1f79a",
+      "stage_membership": [
+        "health"
+      ],
+      "trigger": "当前工作流安装、依赖、技能发现、项目文档结构或跨宿主能力需要检查时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-health/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [],
+      "install_selection": "on_demand",
+      "replacement": null,
+      "public_order": 6,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-code-quality",
+      "old_pack": "core",
+      "class": "internal",
+      "source_kind": "GS+GSP+SP",
+      "source_provenance": [
+        "GSP:code-quality",
+        "GS:health",
+        "GS:test-audit",
+        "SP:verification-before-completion"
+      ],
+      "source_digest": "3cffd90b618724d61f2b8ec542e03e72c3cdfe99375df9cbe0eac7244fff427d",
+      "source_files": [
+        {
+          "path": "skills/gsp-code-quality/SKILL.md",
+          "digest": "3cffd90b618724d61f2b8ec542e03e72c3cdfe99375df9cbe0eac7244fff427d"
+        },
+        {
+          "path": "skills/gsp-code-quality/agents/openai.yaml",
+          "digest": "7ab7c0e62c046ba29a705d8a972b79f78b449d9ad3e3d32299aca8a376b312b9"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-code-quality/METHOD.md",
+      "resource_digest": "121ef50f61d0efe28a236050184a58cb753e319e6c601dbe9484d179a1996199",
+      "stage_membership": [
+        "execute"
+      ],
+      "trigger": "项目需要建立基线、检查本次改动质量或在交付前执行完整质量门禁时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-code-quality/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/verification-before-completion",
+        "skills/gsp-workflow/upstream/skills/verification-before-completion"
+      ],
+      "retired_artifacts": [
+        "skills/gsp-code-quality/SKILL.md",
+        "skills/gsp-code-quality/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-execute",
+      "public_order": null,
+      "method_order": 8
+    },
+    {
+      "original_name": "gsp-context-restore",
+      "old_pack": "core",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:context-restore"
+      ],
+      "source_digest": "980737b165bf8b33f77434227ac709f5fa97638c5f19d9423174f858f46db50e",
+      "source_files": [
+        {
+          "path": "skills/gsp-context-restore/SKILL.md",
+          "digest": "980737b165bf8b33f77434227ac709f5fa97638c5f19d9423174f858f46db50e"
+        },
+        {
+          "path": "skills/gsp-context-restore/agents/openai.yaml",
+          "digest": "a1383ce8bc1ad2334077c12fa3a3f56302858e64ba6e8d50e2fbc02a5f6d6b94"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/references/contract.md",
+      "resource_digest": "ce3822fe8fe985cb966d1c4cb59113a730ec5ea03bcc2b9f15e060be312a367b",
+      "stage_membership": [
+        "workflow"
+      ],
+      "trigger": "恢复中断任务、压缩后的上下文或将同一项目交给另一个宿主时",
+      "shared_artifact": true,
+      "replaced_old_path": "skills/gsp-context-restore/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-context-restore/SKILL.md",
+        "skills/gsp-context-restore/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-workflow",
+      "public_order": null,
+      "method_order": 25
+    },
+    {
+      "original_name": "gsp-freeze",
+      "old_pack": "core",
+      "class": "retired",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:freeze",
+        "GS:unfreeze"
+      ],
+      "source_digest": "351ea7fffbb48193b4c3c05d107bfecdadec4e34ab335c2ad2ce15d6a88e424c",
+      "source_files": [
+        {
+          "path": "skills/gsp-freeze/SKILL.md",
+          "digest": "351ea7fffbb48193b4c3c05d107bfecdadec4e34ab335c2ad2ce15d6a88e424c"
+        },
+        {
+          "path": "skills/gsp-freeze/agents/openai.yaml",
+          "digest": "fb565f88cb067e604c22628409e748fb6f111fdd7e977a60c7a3937acf385ef2"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": null,
+      "resource_digest": "351ea7fffbb48193b4c3c05d107bfecdadec4e34ab335c2ad2ce15d6a88e424c",
+      "stage_membership": [
+        "workflow"
+      ],
+      "trigger": "本次任务需要选择、设置、查看或解除允许修改的目录范围时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-freeze/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-freeze/SKILL.md",
+        "skills/gsp-freeze/agents/openai.yaml"
+      ],
+      "install_selection": "never",
+      "replacement": "gsp-workflow",
+      "public_order": null,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-brainstorming",
+      "old_pack": "core",
+      "class": "default",
+      "source_kind": "SP",
+      "source_provenance": [
+        "SP:brainstorming"
+      ],
+      "source_digest": "3f09aca91e0da84c334e82712ea12984cc4b74fbec004fdb5287d28cbc73cb04",
+      "source_files": [
+        {
+          "path": "skills/gsp-brainstorming/SKILL.md",
+          "digest": "3f09aca91e0da84c334e82712ea12984cc4b74fbec004fdb5287d28cbc73cb04"
+        },
+        {
+          "path": "skills/gsp-brainstorming/agents/openai.yaml",
+          "digest": "f0a7ab6d85f912f457cc7b4e3234d4c78f54808bde196cc32350e510898c3e5e"
+        }
+      ],
+      "public_paths": [
+        "skills/gsp-brainstorming/SKILL.md",
+        "skills/gsp-brainstorming/agents/openai.yaml"
+      ],
+      "payload_root": "skills/gsp-brainstorming",
+      "internal_method_path": null,
+      "resource_digest": "4abc49524f586c351671f3a1e46b59a03f7ffee09ab37a991406f4dfb2aeb65d",
+      "stage_membership": [
+        "brainstorming"
+      ],
+      "trigger": "开发需求尚有重要目标、范围或方案需要讨论并确认时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-brainstorming/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/brainstorming",
+        "skills/gsp-workflow/upstream/skills/brainstorming"
+      ],
+      "retired_artifacts": [],
+      "install_selection": "default",
+      "replacement": null,
+      "public_order": 1,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-writing-plans",
+      "old_pack": "core",
+      "class": "default",
+      "source_kind": "SP",
+      "source_provenance": [
+        "SP:writing-plans"
+      ],
+      "source_digest": "02197ec81009c46744439db3be96fcb26835206c44d2edcca1c4548945026a05",
+      "source_files": [
+        {
+          "path": "skills/gsp-writing-plans/SKILL.md",
+          "digest": "02197ec81009c46744439db3be96fcb26835206c44d2edcca1c4548945026a05"
+        },
+        {
+          "path": "skills/gsp-writing-plans/agents/openai.yaml",
+          "digest": "10b5344bf7a743f812b00161566d43e3231c6db89b9cd35048742bd22ff09934"
+        }
+      ],
+      "public_paths": [
+        "skills/gsp-writing-plans/SKILL.md",
+        "skills/gsp-writing-plans/agents/openai.yaml"
+      ],
+      "payload_root": "skills/gsp-writing-plans",
+      "internal_method_path": null,
+      "resource_digest": "48c7f0e71f5b12c1cc3cfca179074f9d20098e49b1ae9e5f42352dd334212411",
+      "stage_membership": [
+        "writing-plans"
+      ],
+      "trigger": "已确认设计需要拆分为可执行、可验证的实施任务时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-writing-plans/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/writing-plans",
+        "skills/gsp-workflow/upstream/skills/writing-plans"
+      ],
+      "retired_artifacts": [],
+      "install_selection": "default",
+      "replacement": null,
+      "public_order": 2,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-autoplan",
+      "old_pack": "core",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:autoplan",
+        "GS:plan-ceo-review",
+        "GS:plan-eng-review"
+      ],
+      "source_digest": "c1b3f76103df3334b79f5b68cee47a5cc9504374c0afea62c68eef48935cadb1",
+      "source_files": [
+        {
+          "path": "skills/gsp-autoplan/SKILL.md",
+          "digest": "c1b3f76103df3334b79f5b68cee47a5cc9504374c0afea62c68eef48935cadb1"
+        },
+        {
+          "path": "skills/gsp-autoplan/agents/openai.yaml",
+          "digest": "d86c5362830a71e2ffcf8cd65f0b75ab9caef94a60c878ea3e1c4977caebb745"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-autoplan/METHOD.md",
+      "resource_digest": "c39a35f1fe51f3ddf450fc07a6a42d7ec0f52679083f128c1dfc74d8065b8347",
+      "stage_membership": [
+        "writing-plans"
+      ],
+      "trigger": "复杂或有风险的实施计划需要在开发前进行范围与工程审查时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-autoplan/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-autoplan/SKILL.md",
+        "skills/gsp-autoplan/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-writing-plans",
+      "public_order": null,
+      "method_order": 2
+    },
+    {
+      "original_name": "gsp-plan-tune",
+      "old_pack": "core",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:plan-tune"
+      ],
+      "source_digest": "4af00543363444475d673a464aa72bb32a001889b99348e4b837130f5544cf7b",
+      "source_files": [
+        {
+          "path": "skills/gsp-plan-tune/SKILL.md",
+          "digest": "4af00543363444475d673a464aa72bb32a001889b99348e4b837130f5544cf7b"
+        },
+        {
+          "path": "skills/gsp-plan-tune/agents/openai.yaml",
+          "digest": "29b00217c26b758e2f430dbc9f7aa2bd149b36de898489b7f1f2751cccc806cd"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-plan-tune/METHOD.md",
+      "resource_digest": "7bd2197c95f2f5d594619db638026c8b8a6a5927346688707830417097c62fc7",
+      "stage_membership": [
+        "writing-plans"
+      ],
+      "trigger": "用户明确要求调整哪些常规问题需要询问或使用推荐答案时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-plan-tune/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-plan-tune/SKILL.md",
+        "skills/gsp-plan-tune/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-writing-plans",
+      "public_order": null,
+      "method_order": 3
+    },
+    {
+      "original_name": "gsp-eval-plan",
+      "old_pack": "core",
+      "class": "retired",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:eval-plan"
+      ],
+      "source_digest": "c5ef624a2d5beb850ee4053f5fde0a102fbd85ff94e4741e2c3f5e8dd563397f",
+      "source_files": [
+        {
+          "path": "skills/gsp-eval-plan/SKILL.md",
+          "digest": "c5ef624a2d5beb850ee4053f5fde0a102fbd85ff94e4741e2c3f5e8dd563397f"
+        },
+        {
+          "path": "skills/gsp-eval-plan/agents/openai.yaml",
+          "digest": "46196c7774da0383f9e97d1e4ecb079107422a8600f8f0c3581042c547847784"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": null,
+      "resource_digest": "c5ef624a2d5beb850ee4053f5fde0a102fbd85ff94e4741e2c3f5e8dd563397f",
+      "stage_membership": [
+        "writing-plans"
+      ],
+      "trigger": "需要设计模型或技能效果的对照评测及预算和小规模试运行时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-eval-plan/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-eval-plan/SKILL.md",
+        "skills/gsp-eval-plan/agents/openai.yaml"
+      ],
+      "install_selection": "never",
+      "replacement": "gsp-writing-plans",
+      "public_order": null,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-execute",
+      "old_pack": "core",
+      "class": "default",
+      "source_kind": "SP",
+      "source_provenance": [
+        "SP:executing-plans",
+        "SP:subagent-driven-development",
+        "SP:dispatching-parallel-agents",
+        "SP:using-git-worktrees"
+      ],
+      "source_digest": "612d00154e5741d97f93ead50c2c9e019865122eb890da10637991300f5a3e15",
+      "source_files": [
+        {
+          "path": "skills/gsp-execute/SKILL.md",
+          "digest": "612d00154e5741d97f93ead50c2c9e019865122eb890da10637991300f5a3e15"
+        },
+        {
+          "path": "skills/gsp-execute/agents/openai.yaml",
+          "digest": "608db2e02225298460459cc4851017467cf46d3bf910c88b8f1472084ee80a99"
+        }
+      ],
+      "public_paths": [
+        "skills/gsp-execute/SKILL.md",
+        "skills/gsp-execute/agents/openai.yaml"
+      ],
+      "payload_root": "skills/gsp-execute",
+      "internal_method_path": null,
+      "resource_digest": "96917df237410910e848c44c4f5a077ecb007ea6d6623c34be75afa3ec0f0537",
+      "stage_membership": [
+        "execute"
+      ],
+      "trigger": "已确认设计与计划需要连续实施、测试和完成任务时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-execute/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/executing-plans",
+        "skills/gsp-workflow/upstream/skills/executing-plans",
+        "sources/superpowers/skills/subagent-driven-development",
+        "skills/gsp-workflow/upstream/skills/subagent-driven-development",
+        "sources/superpowers/skills/dispatching-parallel-agents",
+        "skills/gsp-workflow/upstream/skills/dispatching-parallel-agents",
+        "sources/superpowers/skills/using-git-worktrees",
+        "skills/gsp-workflow/upstream/skills/using-git-worktrees"
+      ],
+      "retired_artifacts": [],
+      "install_selection": "default",
+      "replacement": null,
+      "public_order": 3,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-test-driven-development",
+      "old_pack": "core",
+      "class": "internal",
+      "source_kind": "SP",
+      "source_provenance": [
+        "SP:test-driven-development"
+      ],
+      "source_digest": "c5eaa1266082353a8190e8c80f0b2840d0452e104c5b403dc8206eb4f257585a",
+      "source_files": [
+        {
+          "path": "skills/gsp-test-driven-development/SKILL.md",
+          "digest": "c5eaa1266082353a8190e8c80f0b2840d0452e104c5b403dc8206eb4f257585a"
+        },
+        {
+          "path": "skills/gsp-test-driven-development/agents/openai.yaml",
+          "digest": "32a4a9ecbe7e034689c44b1e53d50286be4e53c3e553b33fa8c2d92b8b5f64f3"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-test-driven-development/METHOD.md",
+      "resource_digest": "4b799b93a6a64adbc31460c19157c41ef545d73d285a8c4bc8c4ffde06990584",
+      "stage_membership": [
+        "execute"
+      ],
+      "trigger": "实现或修复可自动验证的行为，需要可靠回归测试时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-test-driven-development/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/test-driven-development",
+        "skills/gsp-workflow/upstream/skills/test-driven-development"
+      ],
+      "retired_artifacts": [
+        "skills/gsp-test-driven-development/SKILL.md",
+        "skills/gsp-test-driven-development/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-execute",
+      "public_order": null,
+      "method_order": 6
+    },
+    {
+      "original_name": "gsp-systematic-debugging",
+      "old_pack": "core",
+      "class": "internal",
+      "source_kind": "GS+SP",
+      "source_provenance": [
+        "SP:systematic-debugging",
+        "GS:investigate"
+      ],
+      "source_digest": "e8e579ff122f1aea57adb159e23b333e0a72a470875f1c35b465d6ea51c209a6",
+      "source_files": [
+        {
+          "path": "skills/gsp-systematic-debugging/SKILL.md",
+          "digest": "e8e579ff122f1aea57adb159e23b333e0a72a470875f1c35b465d6ea51c209a6"
+        },
+        {
+          "path": "skills/gsp-systematic-debugging/agents/openai.yaml",
+          "digest": "e539f50aa6c9a083608f3f54c7aee7912a031e394eacf60e46f74fef60040248"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-systematic-debugging/METHOD.md",
+      "resource_digest": "676b66f9a755e86ea7ea537ba230a97a18e2fd81b76edd3a3fe5a092b5ed2b3f",
+      "stage_membership": [
+        "execute"
+      ],
+      "trigger": "测试失败、异常输出或错误行为需要先定位根因再修复时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-systematic-debugging/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/systematic-debugging",
+        "skills/gsp-workflow/upstream/skills/systematic-debugging"
+      ],
+      "retired_artifacts": [
+        "skills/gsp-systematic-debugging/SKILL.md",
+        "skills/gsp-systematic-debugging/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-execute",
+      "public_order": null,
+      "method_order": 7
+    },
+    {
+      "original_name": "gsp-browse",
+      "old_pack": "core",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:browse"
+      ],
+      "source_digest": "ed6c04ca7b7803cd73985db01cd3e48fc2465744aa600efcde3e29c2e47433ea",
+      "source_files": [
+        {
+          "path": "skills/gsp-browse/SKILL.md",
+          "digest": "ed6c04ca7b7803cd73985db01cd3e48fc2465744aa600efcde3e29c2e47433ea"
+        },
+        {
+          "path": "skills/gsp-browse/agents/openai.yaml",
+          "digest": "29b24e4a8854a748de6df81e1048061e6ef685e8bb089ef02965c960c28a5d08"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-browse/METHOD.md",
+      "resource_digest": "8804729cc42df41e4eea680da2d46a00e93141f73911ad6e3213ef962b1af889",
+      "stage_membership": [
+        "execute"
+      ],
+      "trigger": "前端或网页任务需要实际打开页面、交互、截图或查看运行错误时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-browse/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-browse/SKILL.md",
+        "skills/gsp-browse/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-execute",
+      "public_order": null,
+      "method_order": 9
+    },
+    {
+      "original_name": "gsp-qa",
+      "old_pack": "core",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:qa",
+        "GS:qa-only"
+      ],
+      "source_digest": "7fc7bafc489c980047d852e384d29e0b405067860fc5c85629776974aec34c62",
+      "source_files": [
+        {
+          "path": "skills/gsp-qa/SKILL.md",
+          "digest": "7fc7bafc489c980047d852e384d29e0b405067860fc5c85629776974aec34c62"
+        },
+        {
+          "path": "skills/gsp-qa/agents/openai.yaml",
+          "digest": "ac15c71e9abcf2e2276f69b114f0c9d14aeed8276639ee629274987d1903bcfe"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-qa/METHOD.md",
+      "resource_digest": "637a3f9f0599add3d8317c29bdb1bd43d7e95f38bdc04057db958db1c2ea77b6",
+      "stage_membership": [
+        "execute"
+      ],
+      "trigger": "实现后需要验证浏览器、API 或 CLI 的实际使用流程与边界时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-qa/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-qa/SKILL.md",
+        "skills/gsp-qa/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-execute",
+      "public_order": null,
+      "method_order": 10
+    },
+    {
+      "original_name": "gsp-review",
+      "old_pack": "core",
+      "class": "default",
+      "source_kind": "GS+SP",
+      "source_provenance": [
+        "GS:review",
+        "SP:requesting-code-review",
+        "SP:receiving-code-review"
+      ],
+      "source_digest": "6f9ded7e283939c768b5e9cff61d2e2b95951dba182364e51fc8c317971529a4",
+      "source_files": [
+        {
+          "path": "skills/gsp-review/SKILL.md",
+          "digest": "6f9ded7e283939c768b5e9cff61d2e2b95951dba182364e51fc8c317971529a4"
+        },
+        {
+          "path": "skills/gsp-review/agents/openai.yaml",
+          "digest": "02f6502aff924c4624279968539cba57896aefd0b3331ca371ce916841929ab8"
+        }
+      ],
+      "public_paths": [
+        "skills/gsp-review/SKILL.md",
+        "skills/gsp-review/agents/openai.yaml"
+      ],
+      "payload_root": "skills/gsp-review",
+      "internal_method_path": null,
+      "resource_digest": "053c77a62fea14ca2e2d4bfb9ceb89d6d1c31c1f92e844e06fbd651fb3c96a7b",
+      "stage_membership": [
+        "review"
+      ],
+      "trigger": "一个任务、主要功能或整条分支需要规格符合性和代码质量审查时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-review/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/requesting-code-review",
+        "skills/gsp-workflow/upstream/skills/requesting-code-review",
+        "sources/superpowers/skills/receiving-code-review",
+        "skills/gsp-workflow/upstream/skills/receiving-code-review"
+      ],
+      "retired_artifacts": [],
+      "install_selection": "default",
+      "replacement": null,
+      "public_order": 4,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-verify",
+      "old_pack": "core",
+      "class": "internal",
+      "source_kind": "GS+SP",
+      "source_provenance": [
+        "SP:verification-before-completion",
+        "GS:verify"
+      ],
+      "source_digest": "1f7ef654511d98fc5cdc4d5272646c5f10dfc8c7dc06ee11a5ed7128d6d73325",
+      "source_files": [
+        {
+          "path": "skills/gsp-verify/SKILL.md",
+          "digest": "1f7ef654511d98fc5cdc4d5272646c5f10dfc8c7dc06ee11a5ed7128d6d73325"
+        },
+        {
+          "path": "skills/gsp-verify/agents/openai.yaml",
+          "digest": "b54453af1c11ba339fafc0e39d19b1523f16366abb6a2dfd2501f4aa2bb13470"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-verify/METHOD.md",
+      "resource_digest": "5506be72d084ae2e8bb4f16945aa5df49b6c8bdc187f5fee37ce6e9c04c2d127",
+      "stage_membership": [
+        "review"
+      ],
+      "trigger": "准备宣布任务完成、提交交付准备或复用测试证据之前",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-verify/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/verification-before-completion",
+        "skills/gsp-workflow/upstream/skills/verification-before-completion"
+      ],
+      "retired_artifacts": [
+        "skills/gsp-verify/SKILL.md",
+        "skills/gsp-verify/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-review",
+      "public_order": null,
+      "method_order": 15
+    },
+    {
+      "original_name": "gsp-ship",
+      "old_pack": "core",
+      "class": "default",
+      "source_kind": "GS+SP",
+      "source_provenance": [
+        "GS:ship",
+        "SP:finishing-a-development-branch",
+        "GS:document-release"
+      ],
+      "source_digest": "3c8c3e934d452f179d500c59a798bcb0a1f553b8027706e1cf8986868f5b022f",
+      "source_files": [
+        {
+          "path": "skills/gsp-ship/SKILL.md",
+          "digest": "3c8c3e934d452f179d500c59a798bcb0a1f553b8027706e1cf8986868f5b022f"
+        },
+        {
+          "path": "skills/gsp-ship/agents/openai.yaml",
+          "digest": "23c27ae0fb10e3b77fe0ceee5674d307e8ac8d3eb35346082e468d0dd5ae7234"
+        }
+      ],
+      "public_paths": [
+        "skills/gsp-ship/SKILL.md",
+        "skills/gsp-ship/agents/openai.yaml"
+      ],
+      "payload_root": "skills/gsp-ship",
+      "internal_method_path": null,
+      "resource_digest": "e0ff3ed93133b5df1af5afd81af7e27468fa1750e86e3cefb4c83fa4bde150d7",
+      "stage_membership": [
+        "ship"
+      ],
+      "trigger": "实现和审查结束，需要准备交付或执行已授权的发布分支操作时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-ship/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/finishing-a-development-branch",
+        "skills/gsp-workflow/upstream/skills/finishing-a-development-branch"
+      ],
+      "retired_artifacts": [],
+      "install_selection": "default",
+      "replacement": null,
+      "public_order": 5,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-learn",
+      "old_pack": "core",
+      "class": "retired",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:learn"
+      ],
+      "source_digest": "41b3af2db7d84bfebd787d09d33d403cefa2d9d9743d7e8b233b7c7fa16b078d",
+      "source_files": [
+        {
+          "path": "skills/gsp-learn/SKILL.md",
+          "digest": "41b3af2db7d84bfebd787d09d33d403cefa2d9d9743d7e8b233b7c7fa16b078d"
+        },
+        {
+          "path": "skills/gsp-learn/agents/openai.yaml",
+          "digest": "f8e43c01a4eb833b6270f54c9f11856ba196525a7c361eaa2a496f1cec32e26d"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": null,
+      "resource_digest": "41b3af2db7d84bfebd787d09d33d403cefa2d9d9743d7e8b233b7c7fa16b078d",
+      "stage_membership": [
+        "workflow"
+      ],
+      "trigger": "需要保存、检索或修正本项目已验证的可复用经验时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-learn/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-learn/SKILL.md",
+        "skills/gsp-learn/agents/openai.yaml"
+      ],
+      "install_selection": "never",
+      "replacement": "gsp-workflow",
+      "public_order": null,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-context-save",
+      "old_pack": "core",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:context-save"
+      ],
+      "source_digest": "6bfca9f6f5fcd2231edf689060ba1bed5b71af2dd2c6dd34e18494b675230f7a",
+      "source_files": [
+        {
+          "path": "skills/gsp-context-save/SKILL.md",
+          "digest": "6bfca9f6f5fcd2231edf689060ba1bed5b71af2dd2c6dd34e18494b675230f7a"
+        },
+        {
+          "path": "skills/gsp-context-save/agents/openai.yaml",
+          "digest": "623b2bc87f0466b1578d75012d47b7b1bf70d9958c036656dc0d2ca6544d056b"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/references/contract.md",
+      "resource_digest": "ce3822fe8fe985cb966d1c4cb59113a730ec5ea03bcc2b9f15e060be312a367b",
+      "stage_membership": [
+        "workflow"
+      ],
+      "trigger": "任务将中断、换宿主、压缩上下文或需要可恢复交接时",
+      "shared_artifact": true,
+      "replaced_old_path": "skills/gsp-context-save/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-context-save/SKILL.md",
+        "skills/gsp-context-save/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-workflow",
+      "public_order": null,
+      "method_order": 24
+    },
+    {
+      "original_name": "gsp-writing-skills",
+      "old_pack": "core",
+      "class": "on_demand",
+      "source_kind": "GS+SP",
+      "source_provenance": [
+        "SP:writing-skills",
+        "GS:write-skill"
+      ],
+      "source_digest": "961bf828ace3f52eae40612037128c064db6ac175baf3238f7b0e0f1e0cd5dbd",
+      "source_files": [
+        {
+          "path": "skills/gsp-writing-skills/SKILL.md",
+          "digest": "961bf828ace3f52eae40612037128c064db6ac175baf3238f7b0e0f1e0cd5dbd"
+        },
+        {
+          "path": "skills/gsp-writing-skills/agents/openai.yaml",
+          "digest": "6079f39cd4970e6af12b5a72541dd395f054992398b17cab112cc5e7ae75d07a"
+        }
+      ],
+      "public_paths": [
+        "skills/gsp-writing-skills/SKILL.md",
+        "skills/gsp-writing-skills/agents/openai.yaml"
+      ],
+      "payload_root": "skills/gsp-writing-skills",
+      "internal_method_path": null,
+      "resource_digest": "d5f0659ffb8b89c3b451b18aee3c871b20b470322a29100fe85a75297c3bd394",
+      "stage_membership": [
+        "writing-skills"
+      ],
+      "trigger": "需要新增或调整可复用的 GstackSP 技能和共享规则时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-writing-skills/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/writing-skills",
+        "skills/gsp-workflow/upstream/skills/writing-skills"
+      ],
+      "retired_artifacts": [],
+      "install_selection": "on_demand",
+      "replacement": null,
+      "public_order": 8,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-design-consultation",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:design-consultation"
+      ],
+      "source_digest": "4e9ffe036458c455810925bd08a465f5262e7ed8cb73d03ea58ca8028466a98d",
+      "source_files": [
+        {
+          "path": "skills/gsp-design-consultation/SKILL.md",
+          "digest": "4e9ffe036458c455810925bd08a465f5262e7ed8cb73d03ea58ca8028466a98d"
+        },
+        {
+          "path": "skills/gsp-design-consultation/agents/openai.yaml",
+          "digest": "b702b4a2dc1bb1bb9e6b7b4af067c8c14cf7e2c8020bbb0d82f8d2643407d86b"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-design-consultation/METHOD.md",
+      "resource_digest": "24ecf683f5200ae8d4a2e24e84c58cc86f2d5fdbbbb144f0a077952b60f258e0",
+      "stage_membership": [
+        "brainstorming"
+      ],
+      "trigger": "新界面需要确定视觉体系、字体、色彩、布局和交互基调时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-design-consultation/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-design-consultation/SKILL.md",
+        "skills/gsp-design-consultation/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-brainstorming",
+      "public_order": null,
+      "method_order": 0
+    },
+    {
+      "original_name": "gsp-design-shotgun",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:design-shotgun"
+      ],
+      "source_digest": "fea9971aeb58a8481d185b78e3587a5920dd0759c6ae1b4c6e17f763bdaa6694",
+      "source_files": [
+        {
+          "path": "skills/gsp-design-shotgun/SKILL.md",
+          "digest": "fea9971aeb58a8481d185b78e3587a5920dd0759c6ae1b4c6e17f763bdaa6694"
+        },
+        {
+          "path": "skills/gsp-design-shotgun/agents/openai.yaml",
+          "digest": "ed8ebf481b160f6ca962dad18dfe2aa250f60f6fb7c873a97d3c0921a011bc23"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-design-shotgun/METHOD.md",
+      "resource_digest": "b249a7d1a0161dc8497e2ac3852d8c08e9dba8ca7170d952b5ca23bc315c462e",
+      "stage_membership": [
+        "brainstorming"
+      ],
+      "trigger": "用户明确希望比较多套界面视觉方案时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-design-shotgun/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-design-shotgun/SKILL.md",
+        "skills/gsp-design-shotgun/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-brainstorming",
+      "public_order": null,
+      "method_order": 1
+    },
+    {
+      "original_name": "gsp-diagram",
+      "old_pack": "optional",
+      "class": "retired",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:diagram"
+      ],
+      "source_digest": "9f6efca800c4dcfec08da13beadc246e05adf257a64319d6466f2caffa55f431",
+      "source_files": [
+        {
+          "path": "skills/gsp-diagram/SKILL.md",
+          "digest": "9f6efca800c4dcfec08da13beadc246e05adf257a64319d6466f2caffa55f431"
+        },
+        {
+          "path": "skills/gsp-diagram/agents/openai.yaml",
+          "digest": "94761963399477689a69e1a0d06a5bbd82396c05d9b94591175edecf1d2ebfd6"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": null,
+      "resource_digest": "9f6efca800c4dcfec08da13beadc246e05adf257a64319d6466f2caffa55f431",
+      "stage_membership": [
+        "brainstorming"
+      ],
+      "trigger": "架构、状态或交互关系用图比文字更清楚时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-diagram/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-diagram/SKILL.md",
+        "skills/gsp-diagram/agents/openai.yaml"
+      ],
+      "install_selection": "never",
+      "replacement": "gsp-brainstorming",
+      "public_order": null,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-plan-design-review",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:plan-design-review"
+      ],
+      "source_digest": "76001009606c248ecce8e818486999aececa115cb861db9084791b7db26b72bd",
+      "source_files": [
+        {
+          "path": "skills/gsp-plan-design-review/SKILL.md",
+          "digest": "76001009606c248ecce8e818486999aececa115cb861db9084791b7db26b72bd"
+        },
+        {
+          "path": "skills/gsp-plan-design-review/agents/openai.yaml",
+          "digest": "1d627caaf512770a38ff54391d0de6979b25ad0269aa35ec6d46c42d601f86f2"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-plan-design-review/METHOD.md",
+      "resource_digest": "6532b85789f2ddfb7a228cc202d95995b2d69e20bd37113f76b702d8571bbfd7",
+      "stage_membership": [
+        "writing-plans"
+      ],
+      "trigger": "实施前的 UI 计划需要检查视觉交互、状态和可访问性覆盖时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-plan-design-review/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-plan-design-review/SKILL.md",
+        "skills/gsp-plan-design-review/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-writing-plans",
+      "public_order": null,
+      "method_order": 4
+    },
+    {
+      "original_name": "gsp-plan-devex-review",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:plan-devex-review"
+      ],
+      "source_digest": "e91fe5228a07c423145af1fc5db717ac87dbef41a6f2f3d04cabedc7aff671b5",
+      "source_files": [
+        {
+          "path": "skills/gsp-plan-devex-review/SKILL.md",
+          "digest": "e91fe5228a07c423145af1fc5db717ac87dbef41a6f2f3d04cabedc7aff671b5"
+        },
+        {
+          "path": "skills/gsp-plan-devex-review/agents/openai.yaml",
+          "digest": "d908229a41a3421fccd9bdf1859d3b74f572eed715e9e7c6a3d066d01879e0de"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-plan-devex-review/METHOD.md",
+      "resource_digest": "ef8e32d6546dd371a16c65f134ffd9e4e913c02292cdb16a3a8ec42f8cb08358",
+      "stage_membership": [
+        "writing-plans"
+      ],
+      "trigger": "CLI、SDK、API 或技能计划需要检查使用者上手和错误处理体验时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-plan-devex-review/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-plan-devex-review/SKILL.md",
+        "skills/gsp-plan-devex-review/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-writing-plans",
+      "public_order": null,
+      "method_order": 5
+    },
+    {
+      "original_name": "gsp-captain",
+      "old_pack": "optional",
+      "class": "retired",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:captain"
+      ],
+      "source_digest": "764e04329492672294d19d7d16948ec08b7ba3fbe2fcfcbae1a22205417376bb",
+      "source_files": [
+        {
+          "path": "skills/gsp-captain/SKILL.md",
+          "digest": "764e04329492672294d19d7d16948ec08b7ba3fbe2fcfcbae1a22205417376bb"
+        },
+        {
+          "path": "skills/gsp-captain/agents/openai.yaml",
+          "digest": "9c7ec539badf351a70df2d8455c0bb5194cfb1230c5be2ac11af1da58c359f14"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": null,
+      "resource_digest": "764e04329492672294d19d7d16948ec08b7ba3fbe2fcfcbae1a22205417376bb",
+      "stage_membership": [
+        "execute"
+      ],
+      "trigger": "确有多个独立任务需要协调代理和分支且宿主允许时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-captain/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-captain/SKILL.md",
+        "skills/gsp-captain/agents/openai.yaml"
+      ],
+      "install_selection": "never",
+      "replacement": "gsp-execute",
+      "public_order": null,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-open-gstack-browser",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:open-gstack-browser"
+      ],
+      "source_digest": "ad10de354969be2acb120d8eb99785fe1350dc28205299c0dc8d1391a73b77d1",
+      "source_files": [
+        {
+          "path": "skills/gsp-open-gstack-browser/SKILL.md",
+          "digest": "ad10de354969be2acb120d8eb99785fe1350dc28205299c0dc8d1391a73b77d1"
+        },
+        {
+          "path": "skills/gsp-open-gstack-browser/agents/openai.yaml",
+          "digest": "d70d8f2ddaa4c30bef48e3373acbc89a9f6bb27b451c8082062223a5444eb3e9"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-open-gstack-browser/METHOD.md",
+      "resource_digest": "6f2300a8186385d48c7d364412cf8bba8b25f80d35a0ec4d61a183258ff65eac",
+      "stage_membership": [
+        "execute"
+      ],
+      "trigger": "需要启动或连接当前宿主可用的浏览器测试会话时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-open-gstack-browser/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-open-gstack-browser/SKILL.md",
+        "skills/gsp-open-gstack-browser/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-execute",
+      "public_order": null,
+      "method_order": 11
+    },
+    {
+      "original_name": "gsp-setup-browser-cookies",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:setup-browser-cookies"
+      ],
+      "source_digest": "e2bb055e9cb33bfcfb19b96423911635178d69a2839f7064abd421c16de182cd",
+      "source_files": [
+        {
+          "path": "skills/gsp-setup-browser-cookies/SKILL.md",
+          "digest": "e2bb055e9cb33bfcfb19b96423911635178d69a2839f7064abd421c16de182cd"
+        },
+        {
+          "path": "skills/gsp-setup-browser-cookies/agents/openai.yaml",
+          "digest": "da116825eebf33f36a80a767123d7ed429067a348ac9ed85202c8784ce578d74"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-setup-browser-cookies/METHOD.md",
+      "resource_digest": "80a699a177be7c9594fa3f64b0dba46c8e22487c2328d3fe5810c0a9197243c6",
+      "stage_membership": [
+        "execute"
+      ],
+      "trigger": "用户明确要求为测试浏览器配置已有登录态时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-setup-browser-cookies/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-setup-browser-cookies/SKILL.md",
+        "skills/gsp-setup-browser-cookies/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-execute",
+      "public_order": null,
+      "method_order": 12
+    },
+    {
+      "original_name": "gsp-scrape",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:scrape"
+      ],
+      "source_digest": "abf7c3622f5ec44b63941078c1ca966a736d113a902c90d738ee3d5f313510cd",
+      "source_files": [
+        {
+          "path": "skills/gsp-scrape/SKILL.md",
+          "digest": "abf7c3622f5ec44b63941078c1ca966a736d113a902c90d738ee3d5f313510cd"
+        },
+        {
+          "path": "skills/gsp-scrape/agents/openai.yaml",
+          "digest": "a0dcb9aa25b17aee54b35a8eb2934ec64402935fb1c7ac88beaed2164f8af2d0"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-scrape/METHOD.md",
+      "resource_digest": "06f643d20fdadec512bf3c1436440a83909e67a19025d83d6ef12c04abe1eb03",
+      "stage_membership": [
+        "workflow"
+      ],
+      "trigger": "用户需要从可访问网页提取结构化数据时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-scrape/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-scrape/SKILL.md",
+        "skills/gsp-scrape/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-workflow",
+      "public_order": null,
+      "method_order": 26
+    },
+    {
+      "original_name": "gsp-skillify",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:skillify"
+      ],
+      "source_digest": "816d12c99af9b6bce8512d93098461db28005f45b1356c14a8800a46f2384eec",
+      "source_files": [
+        {
+          "path": "skills/gsp-skillify/SKILL.md",
+          "digest": "816d12c99af9b6bce8512d93098461db28005f45b1356c14a8800a46f2384eec"
+        },
+        {
+          "path": "skills/gsp-skillify/agents/openai.yaml",
+          "digest": "98981fd8b6054dad16654c820f0cf7d8ce17443e541f89108e8c91def9d7dfdd"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-skillify/METHOD.md",
+      "resource_digest": "652820906d9b98fd2f8e73da27a39e909b3d74c69bd81b5592f9450a0c4f0cfc",
+      "stage_membership": [
+        "writing-skills"
+      ],
+      "trigger": "已成功重复的网页提取流程值得形成可复用技能时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-skillify/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-skillify/SKILL.md",
+        "skills/gsp-skillify/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-writing-skills",
+      "public_order": null,
+      "method_order": 27
+    },
+    {
+      "original_name": "gsp-design-review",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:design-review"
+      ],
+      "source_digest": "a09cc4be5875a1816a988666883545aa3ab65c5c6762e3ca961b391b7f1771f6",
+      "source_files": [
+        {
+          "path": "skills/gsp-design-review/SKILL.md",
+          "digest": "a09cc4be5875a1816a988666883545aa3ab65c5c6762e3ca961b391b7f1771f6"
+        },
+        {
+          "path": "skills/gsp-design-review/agents/openai.yaml",
+          "digest": "cc20634a837131ade7686d5b434ae9d8dcbf18c84a13e70f5c642a3f0fa3caf6"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-design-review/METHOD.md",
+      "resource_digest": "c0b8d32b7a7468b22a07e213d58d2df8eb56d366e7fe102066fb46d90c3d1cd9",
+      "stage_membership": [
+        "review"
+      ],
+      "trigger": "已有可运行页面需要检查视觉质量与交互一致性时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-design-review/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-design-review/SKILL.md",
+        "skills/gsp-design-review/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-review",
+      "public_order": null,
+      "method_order": 16
+    },
+    {
+      "original_name": "gsp-benchmark",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:benchmark"
+      ],
+      "source_digest": "0291ad8202fafd6c92c2a115e591dd1f624f0e193d9b99711e98ea247e4ce7db",
+      "source_files": [
+        {
+          "path": "skills/gsp-benchmark/SKILL.md",
+          "digest": "0291ad8202fafd6c92c2a115e591dd1f624f0e193d9b99711e98ea247e4ce7db"
+        },
+        {
+          "path": "skills/gsp-benchmark/agents/openai.yaml",
+          "digest": "49a4f1e256c4d7049c298e4dc464fbf211da49714fd2bcf0bb857122ff8d3840"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-benchmark/METHOD.md",
+      "resource_digest": "335209ed88d3002454d531dd2b6f4a9aeb10ff8fbbc84cb3501f0d29d145c8a1",
+      "stage_membership": [
+        "execute"
+      ],
+      "trigger": "页面性能或资源指标明确属于任务验收目标时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-benchmark/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-benchmark/SKILL.md",
+        "skills/gsp-benchmark/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-execute",
+      "public_order": null,
+      "method_order": 13
+    },
+    {
+      "original_name": "gsp-devex-review",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:devex-review"
+      ],
+      "source_digest": "81b8120f34f92008a573b6e65b8bebc42818cc2a942597baddf24917a71c458c",
+      "source_files": [
+        {
+          "path": "skills/gsp-devex-review/SKILL.md",
+          "digest": "81b8120f34f92008a573b6e65b8bebc42818cc2a942597baddf24917a71c458c"
+        },
+        {
+          "path": "skills/gsp-devex-review/agents/openai.yaml",
+          "digest": "13342164caefc702cb114c7db4ae2a5b69bf03f13e832a93f474cc9037d2f547"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-devex-review/METHOD.md",
+      "resource_digest": "b6b00761a190e4510b73889a26cfaa3895d9458cb989ce30dc5e9174569b7ddb",
+      "stage_membership": [
+        "review"
+      ],
+      "trigger": "工具实现后需要实际验证安装、首次使用、错误与恢复体验时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-devex-review/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-devex-review/SKILL.md",
+        "skills/gsp-devex-review/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-review",
+      "public_order": null,
+      "method_order": 17
+    },
+    {
+      "original_name": "gsp-test-audit",
+      "old_pack": "optional",
+      "class": "retired",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:test-audit"
+      ],
+      "source_digest": "e7d964f354f2350a4ede601105d3d1d6c7cf48843aed6fd529f33780f4acff7a",
+      "source_files": [
+        {
+          "path": "skills/gsp-test-audit/SKILL.md",
+          "digest": "e7d964f354f2350a4ede601105d3d1d6c7cf48843aed6fd529f33780f4acff7a"
+        },
+        {
+          "path": "skills/gsp-test-audit/agents/openai.yaml",
+          "digest": "5b3918a6cea0028c5c8e9e3829204fe0c9349fa90d14200aea190fd77dad44f5"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": null,
+      "resource_digest": "e7d964f354f2350a4ede601105d3d1d6c7cf48843aed6fd529f33780f4acff7a",
+      "stage_membership": [
+        "review"
+      ],
+      "trigger": "已有测试套件需要判断低价值、重复或缺失行为覆盖时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-test-audit/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-test-audit/SKILL.md",
+        "skills/gsp-test-audit/agents/openai.yaml"
+      ],
+      "install_selection": "never",
+      "replacement": "gsp-review",
+      "public_order": null,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-cso",
+      "old_pack": "optional",
+      "class": "retired",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:cso"
+      ],
+      "source_digest": "3487ab782a6a5594a17b4da3f1157e84dd8949788d8ca58cd2760b8667a739f4",
+      "source_files": [
+        {
+          "path": "skills/gsp-cso/SKILL.md",
+          "digest": "3487ab782a6a5594a17b4da3f1157e84dd8949788d8ca58cd2760b8667a739f4"
+        },
+        {
+          "path": "skills/gsp-cso/agents/openai.yaml",
+          "digest": "c4052cc8b6fcd8a915f8ed6e5626fdbbd29972041654d6a327636b44b19be480"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": null,
+      "resource_digest": "3487ab782a6a5594a17b4da3f1157e84dd8949788d8ca58cd2760b8667a739f4",
+      "stage_membership": [
+        "review"
+      ],
+      "trigger": "任务涉及身份、权限、敏感数据或暴露面，需要针对性安全检查时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-cso/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-cso/SKILL.md",
+        "skills/gsp-cso/agents/openai.yaml"
+      ],
+      "install_selection": "never",
+      "replacement": "gsp-review",
+      "public_order": null,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-codex",
+      "old_pack": "optional",
+      "class": "retired",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:codex"
+      ],
+      "source_digest": "90111b1da396d55b71a476dc398987c2df66504fd15abc37b775c12268892521",
+      "source_files": [
+        {
+          "path": "skills/gsp-codex/SKILL.md",
+          "digest": "90111b1da396d55b71a476dc398987c2df66504fd15abc37b775c12268892521"
+        },
+        {
+          "path": "skills/gsp-codex/agents/openai.yaml",
+          "digest": "1e6133a76b7464e07335828f8e329fd1847e781789c4a642672085e542c8ecda"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": null,
+      "resource_digest": "90111b1da396d55b71a476dc398987c2df66504fd15abc37b775c12268892521",
+      "stage_membership": [
+        "execute"
+      ],
+      "trigger": "需要由另一可用宿主或模型提供独立代码或方案意见时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-codex/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-codex/SKILL.md",
+        "skills/gsp-codex/agents/openai.yaml"
+      ],
+      "install_selection": "never",
+      "replacement": "gsp-execute",
+      "public_order": null,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-benchmark-models",
+      "old_pack": "optional",
+      "class": "retired",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:benchmark-models"
+      ],
+      "source_digest": "17bd9ec6b773b3b9c92ffc205cd942278fb1e3abfefe0cc891d3750d10f89714",
+      "source_files": [
+        {
+          "path": "skills/gsp-benchmark-models/SKILL.md",
+          "digest": "17bd9ec6b773b3b9c92ffc205cd942278fb1e3abfefe0cc891d3750d10f89714"
+        },
+        {
+          "path": "skills/gsp-benchmark-models/agents/openai.yaml",
+          "digest": "a257eafadae888945f723b2befe2856ebdb34e8dbc7e63a3d1888d6910c15ad7"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": null,
+      "resource_digest": "17bd9ec6b773b3b9c92ffc205cd942278fb1e3abfefe0cc891d3750d10f89714",
+      "stage_membership": [
+        "review"
+      ],
+      "trigger": "用户需要比较多个模型在同一工作流任务上的效果与成本时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-benchmark-models/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-benchmark-models/SKILL.md",
+        "skills/gsp-benchmark-models/agents/openai.yaml"
+      ],
+      "install_selection": "never",
+      "replacement": "gsp-review",
+      "public_order": null,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-modernize",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:modernize"
+      ],
+      "source_digest": "e47b4fa2a1ec5b3a945814594cb72aa836a36270e3723cc1cf5502ae449ba576",
+      "source_files": [
+        {
+          "path": "skills/gsp-modernize/SKILL.md",
+          "digest": "e47b4fa2a1ec5b3a945814594cb72aa836a36270e3723cc1cf5502ae449ba576"
+        },
+        {
+          "path": "skills/gsp-modernize/agents/openai.yaml",
+          "digest": "70cbde072bf906253fd8da8c4683929c4d2283632700a027731bf843a4d4a12c"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-modernize/METHOD.md",
+      "resource_digest": "398e4b31639eccc6061f798bc436fff7932d38f7121509659fcaaed5fe2961ec",
+      "stage_membership": [
+        "ship"
+      ],
+      "trigger": "已有老旧 PR 或任务分支需要评估是否继续、重做或关闭时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-modernize/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-modernize/SKILL.md",
+        "skills/gsp-modernize/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-ship",
+      "public_order": null,
+      "method_order": 23
+    },
+    {
+      "original_name": "gsp-document-generate",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:document-generate"
+      ],
+      "source_digest": "e39105f03579bac2f0ff0b5aa19232a554485408de7601a6219542f774aa6066",
+      "source_files": [
+        {
+          "path": "skills/gsp-document-generate/SKILL.md",
+          "digest": "e39105f03579bac2f0ff0b5aa19232a554485408de7601a6219542f774aa6066"
+        },
+        {
+          "path": "skills/gsp-document-generate/agents/openai.yaml",
+          "digest": "cfdcbeced5616df2eece67591112ffba51c7a3d427ab947a14caf742d8557b6b"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-document-generate/METHOD.md",
+      "resource_digest": "b40c183f6490521286e4eb5040424ccaaf2a828f6bacacc8c2d0dcadd8b23965",
+      "stage_membership": [
+        "execute"
+      ],
+      "trigger": "功能、模块或项目确有缺失的使用说明或接口文档需要补齐时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-document-generate/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-document-generate/SKILL.md",
+        "skills/gsp-document-generate/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-execute",
+      "public_order": null,
+      "method_order": 14
+    },
+    {
+      "original_name": "gsp-make-pdf",
+      "old_pack": "optional",
+      "class": "retired",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:make-pdf"
+      ],
+      "source_digest": "38e2b40b2f81652854dda3dc93e80938590bfd9b2c56dc2d34c0fead07ca91b8",
+      "source_files": [
+        {
+          "path": "skills/gsp-make-pdf/SKILL.md",
+          "digest": "38e2b40b2f81652854dda3dc93e80938590bfd9b2c56dc2d34c0fead07ca91b8"
+        },
+        {
+          "path": "skills/gsp-make-pdf/agents/openai.yaml",
+          "digest": "edc8bcfff64e4d0b840efd620c85c264689e790051b469a24bf73ee7dd9ae467"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": null,
+      "resource_digest": "38e2b40b2f81652854dda3dc93e80938590bfd9b2c56dc2d34c0fead07ca91b8",
+      "stage_membership": [
+        "ship"
+      ],
+      "trigger": "用户明确需要将项目文档交付为 PDF 时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-make-pdf/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-make-pdf/SKILL.md",
+        "skills/gsp-make-pdf/agents/openai.yaml"
+      ],
+      "install_selection": "never",
+      "replacement": "gsp-ship",
+      "public_order": null,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-land-and-deploy",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:land-and-deploy"
+      ],
+      "source_digest": "2bef8f126d1ffe543ff3606b394032348900f28c6ba2e8b37100924e5bc00c9c",
+      "source_files": [
+        {
+          "path": "skills/gsp-land-and-deploy/SKILL.md",
+          "digest": "2bef8f126d1ffe543ff3606b394032348900f28c6ba2e8b37100924e5bc00c9c"
+        },
+        {
+          "path": "skills/gsp-land-and-deploy/agents/openai.yaml",
+          "digest": "150cc646ac1a74c43292b554293847153a44584281d54c66908ea0cb9f601516"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-land-and-deploy/METHOD.md",
+      "resource_digest": "92a51e8ce903fbdf25255e3aa3358c3f3e6ffdca55b26dda8f616e2a3e3f7eb9",
+      "stage_membership": [
+        "ship"
+      ],
+      "trigger": "交付已准备且用户授权合并或部署到具体环境时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-land-and-deploy/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-land-and-deploy/SKILL.md",
+        "skills/gsp-land-and-deploy/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-ship",
+      "public_order": null,
+      "method_order": 19
+    },
+    {
+      "original_name": "gsp-setup-deploy",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:setup-deploy"
+      ],
+      "source_digest": "523e7746ce2a7815ad780b5cf52e01896b85009fb3f16deb3c68b63509f8eef6",
+      "source_files": [
+        {
+          "path": "skills/gsp-setup-deploy/SKILL.md",
+          "digest": "523e7746ce2a7815ad780b5cf52e01896b85009fb3f16deb3c68b63509f8eef6"
+        },
+        {
+          "path": "skills/gsp-setup-deploy/agents/openai.yaml",
+          "digest": "230cb72d7918a9568aef4ebb6a171d20a95376baf9f224ffc35ee95889270e4e"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-setup-deploy/METHOD.md",
+      "resource_digest": "c49d118da3172c6f668498e7089216a7098ebec3f669614ea8698117b7b214b4",
+      "stage_membership": [
+        "ship"
+      ],
+      "trigger": "项目第一次需要配置具体部署目标与验证流程时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-setup-deploy/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-setup-deploy/SKILL.md",
+        "skills/gsp-setup-deploy/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-ship",
+      "public_order": null,
+      "method_order": 20
+    },
+    {
+      "original_name": "gsp-landing-report",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:landing-report"
+      ],
+      "source_digest": "cae298c5018bdb0cd8b1b552e0c7e64a323c073d7cc7de18d58e51eafad4a2c0",
+      "source_files": [
+        {
+          "path": "skills/gsp-landing-report/SKILL.md",
+          "digest": "cae298c5018bdb0cd8b1b552e0c7e64a323c073d7cc7de18d58e51eafad4a2c0"
+        },
+        {
+          "path": "skills/gsp-landing-report/agents/openai.yaml",
+          "digest": "868d2de4dd62dcc9374da2e9fb9a34a0279616cb47893bc8b5c32dd062f10321"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-landing-report/METHOD.md",
+      "resource_digest": "7bf48c46a69a914e6204e9fd5d42bb162af294a1ab74ad0b233bb1983d6796e0",
+      "stage_membership": [
+        "ship"
+      ],
+      "trigger": "需要只读查看多个待合并分支或 PR 的状态时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-landing-report/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-landing-report/SKILL.md",
+        "skills/gsp-landing-report/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-ship",
+      "public_order": null,
+      "method_order": 21
+    },
+    {
+      "original_name": "gsp-canary",
+      "old_pack": "optional",
+      "class": "internal",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:canary"
+      ],
+      "source_digest": "154a39f0eb8ba6450d3658880637cde068b09aefc4b6c1a8eb3715cd10cf8e18",
+      "source_files": [
+        {
+          "path": "skills/gsp-canary/SKILL.md",
+          "digest": "154a39f0eb8ba6450d3658880637cde068b09aefc4b6c1a8eb3715cd10cf8e18"
+        },
+        {
+          "path": "skills/gsp-canary/agents/openai.yaml",
+          "digest": "81d8575879b0bbcd243b0d762274c11d56afc067820d411d11ce9850afffd377"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": "skills/gsp-workflow/methods/gsp-canary/METHOD.md",
+      "resource_digest": "fc5090bcfb1ac65ef3c0c27bbbb4125748eb2c356475602cec5f9b763d31e231",
+      "stage_membership": [
+        "ship"
+      ],
+      "trigger": "已授权部署后需要在约定时间观察健康指标时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-canary/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-canary/SKILL.md",
+        "skills/gsp-canary/agents/openai.yaml"
+      ],
+      "install_selection": "resource",
+      "replacement": "gsp-ship",
+      "public_order": null,
+      "method_order": 22
+    },
+    {
+      "original_name": "gsp-setup-gbrain",
+      "old_pack": "optional",
+      "class": "retired",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:setup-gbrain"
+      ],
+      "source_digest": "870940855291feb82d7a6a489c138c2561d135b571efb7ae3c8bab3f6f178ccb",
+      "source_files": [
+        {
+          "path": "skills/gsp-setup-gbrain/SKILL.md",
+          "digest": "870940855291feb82d7a6a489c138c2561d135b571efb7ae3c8bab3f6f178ccb"
+        },
+        {
+          "path": "skills/gsp-setup-gbrain/agents/openai.yaml",
+          "digest": "d45dcbf1bad3f273c9af2797a8c7c5d6c85cb072383eb2a5ef6361012d04e3ac"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": null,
+      "resource_digest": "870940855291feb82d7a6a489c138c2561d135b571efb7ae3c8bab3f6f178ccb",
+      "stage_membership": [
+        "workflow"
+      ],
+      "trigger": "用户选择用 gbrain 作为本地经验之外的可选记忆后端时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-setup-gbrain/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-setup-gbrain/SKILL.md",
+        "skills/gsp-setup-gbrain/agents/openai.yaml"
+      ],
+      "install_selection": "never",
+      "replacement": "gsp-workflow",
+      "public_order": null,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-sync-gbrain",
+      "old_pack": "optional",
+      "class": "retired",
+      "source_kind": "GS",
+      "source_provenance": [
+        "GS:sync-gbrain"
+      ],
+      "source_digest": "f07af80cacee8eabdb4b68d53d7b9175f5bf892ae122ddfbba2e8e071f4b0a2d",
+      "source_files": [
+        {
+          "path": "skills/gsp-sync-gbrain/SKILL.md",
+          "digest": "f07af80cacee8eabdb4b68d53d7b9175f5bf892ae122ddfbba2e8e071f4b0a2d"
+        },
+        {
+          "path": "skills/gsp-sync-gbrain/agents/openai.yaml",
+          "digest": "6bb3ba78a2777ec97b53ddd6209c5ce787b90b465a35b40573082b672730aba5"
+        }
+      ],
+      "public_paths": [],
+      "payload_root": null,
+      "internal_method_path": null,
+      "resource_digest": "f07af80cacee8eabdb4b68d53d7b9175f5bf892ae122ddfbba2e8e071f4b0a2d",
+      "stage_membership": [
+        "workflow"
+      ],
+      "trigger": "用户明确需要将本项目选定知识同步到已配置 gbrain 时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-sync-gbrain/SKILL.md",
+      "attachment_refs": [],
+      "retired_artifacts": [
+        "skills/gsp-sync-gbrain/SKILL.md",
+        "skills/gsp-sync-gbrain/agents/openai.yaml"
+      ],
+      "install_selection": "never",
+      "replacement": "gsp-workflow",
+      "public_order": null,
+      "method_order": null
+    },
+    {
+      "original_name": "gsp-diagnosing-superpowers",
+      "old_pack": "optional",
+      "class": "on_demand",
+      "source_kind": "SP",
+      "source_provenance": [
+        "SP:diagnosing-superpowers"
+      ],
+      "source_digest": "4c33c8a86321972d4d65dcbca119914376f0667aa1ba5561719b1a9d4903f336",
+      "source_files": [
+        {
+          "path": "skills/gsp-diagnosing-superpowers/SKILL.md",
+          "digest": "4c33c8a86321972d4d65dcbca119914376f0667aa1ba5561719b1a9d4903f336"
+        },
+        {
+          "path": "skills/gsp-diagnosing-superpowers/agents/openai.yaml",
+          "digest": "fbd9851c90209b348f3692a43c0f062b1181f12a4db3111408b5a484d162b1fa"
+        }
+      ],
+      "public_paths": [
+        "skills/gsp-diagnosing-superpowers/SKILL.md",
+        "skills/gsp-diagnosing-superpowers/agents/openai.yaml"
+      ],
+      "payload_root": "skills/gsp-diagnosing-superpowers",
+      "internal_method_path": null,
+      "resource_digest": "2f16a8de8b2fe60de552dd76da7d39d54708be2b846ab675951289ae48505f1e",
+      "stage_membership": [
+        "diagnosing-superpowers"
+      ],
+      "trigger": "用户希望对指定 GstackSP 会话的重复工作、费用或技能未触发做事后诊断时",
+      "shared_artifact": false,
+      "replaced_old_path": "skills/gsp-diagnosing-superpowers/SKILL.md",
+      "attachment_refs": [
+        "sources/superpowers/skills/diagnosing-superpowers",
+        "skills/gsp-workflow/upstream/skills/diagnosing-superpowers"
+      ],
+      "retired_artifacts": [],
+      "install_selection": "on_demand",
+      "replacement": null,
+      "public_order": 9,
+      "method_order": null
+    }
+  ],
+  "excluded": [
+    "office-hours",
+    "spec",
+    "design-html",
+    "design-motion",
+    "pair-agent",
+    "runaway-stopper",
+    "gstack-upgrade",
+    "ubicloud",
+    "ios-clean",
+    "ios-design-review",
+    "ios-fix",
+    "ios-qa",
+    "ios-sync",
+    "deslop-shared-libs",
+    "retro"
+  ]
+}

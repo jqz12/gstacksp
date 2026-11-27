@@ -9,8 +9,10 @@ import sys
 import time
 import uuid
 
-from .runtime import (Project, WorkflowError, atomic, find_project_root, inside,
-                      now, read, slug)
+from .core import (WorkflowError, atomic, inside, now, read)
+from .project import (Project)
+from .project_resolution import (find_project_root)
+from .workflow_support import (slug)
 
 INPUT_LIMIT = 1024 * 1024
 SESSION_LIMIT = 32 * 1024 * 1024
@@ -140,7 +142,7 @@ def patch_paths(command):
 
 def locate(cwd):
     if not isinstance(cwd,str) or not Path(cwd).is_absolute(): return None
-    root=find_project_root(Path(cwd))
+    root=find_project_root(Path(cwd), include_linked=True)
     if root is not None:
         safe_file(root,root/'.gsp/project.json')
     return root
@@ -168,6 +170,69 @@ def edit_task(root, cwd, targets, fallback):
     owners.discard(None)
     if len(owners)>1: raise WorkflowError('GIT_EDIT_TARGET_CONFLICT multiple tasks claim patch targets')
     return next(iter(owners),None) or fallback
+
+
+def actual_actor_token(payload):
+    """Use the host agent id, falling back only to the host session id."""
+    raw = payload.get('agent_id')
+    if not (isinstance(raw, (str, int)) and not isinstance(raw, bool)
+            and str(raw).strip()):
+        raw = payload.get('session_id')
+    if not (isinstance(raw, (str, int)) and not isinstance(raw, bool)
+            and str(raw).strip()):
+        return None
+    return str(raw).strip()
+
+
+def require_actual_actor(project, state, payload):
+    """Require actual host identity and any explicit GSP selection to agree."""
+    from .sessions import load_registry
+    actual = actual_actor_token(payload)
+    explicit = str(
+        payload.get('gsp_session_id') or os.environ.get('GSP_SESSION_ID') or ''
+    ).strip()
+    context_path = str(
+        payload.get('gsp_session_context')
+        or os.environ.get('GSP_SESSION_CONTEXT') or ''
+    ).strip()
+    if actual is None:
+        if explicit or context_path:
+            raise WorkflowError('SESSION_ACTOR_UNVERIFIED host identity is unavailable')
+        return None
+    registry = load_registry(project, state)
+    rows = [
+        row for row in registry.get('sessions', [])
+        if actual in {
+            str(row.get('id') or ''),
+            str(row.get('thread_id') or ''),
+            str(row.get('host_session_id') or ''),
+        }
+    ]
+    if len(rows) != 1:
+        raise WorkflowError('SESSION_ACTOR_MISMATCH ' + actual)
+    row = rows[0]
+    if explicit:
+        selected = [
+            candidate for candidate in registry.get('sessions', [])
+            if explicit in {
+                str(candidate.get('id') or ''),
+                str(candidate.get('thread_id') or ''),
+                str(candidate.get('host_session_id') or ''),
+            }
+        ]
+        if len(selected) != 1 or selected[0].get('id') != row.get('id'):
+            raise WorkflowError('SESSION_ACTOR_MISMATCH ' + actual)
+    if context_path:
+        candidate = Path(context_path)
+        if not candidate.is_absolute():
+            candidate = project.root / candidate
+        expected = project.root / str(row.get('context') or '')
+        if (
+            not row.get('context')
+            or candidate.resolve() != expected.resolve()
+        ):
+            raise WorkflowError('SESSION_ACTOR_MISMATCH ' + actual)
+    return actual
 
 
 def wait_input(payload):
@@ -264,6 +329,10 @@ def handle(payload):
             task=task or load(active).get('task');slug(task)
             state=load(safe_file(root,root/'.gsp/runs'/task/'state.json'))
             if state.get('id')!=task: raise WorkflowError('HOOK_TASK_MISMATCH')
+        if writing and state and (state.get('git_topology') or {}).get('intent') == 'cross-session':
+            # The navigation pointer can belong to another main chat. Resolve
+            # actual cwd/edit ownership before actor checks or guard writes.
+            require_actual_actor(Project(root),state,payload)
         result={};outcome='observed';coverage='metadata-only'
         guard_blocked,guard_degraded=wait_guard(root,payload,event,tool)
         if guard_degraded:
@@ -278,30 +347,38 @@ def handle(payload):
                 context+='Bound documents: '+json.dumps({k:str(Project(root).document(state,k).relative_to(root)) for k in ('design','plan')},ensure_ascii=True)
             else: context+='No active task. Discuss design before implementation.'
             result={'hookSpecificOutput':{'hookEventName':event,'additionalContext':context[:1800]}}
-        if not guard_blocked and writing and state and (state.get('scope',{}).get('mode')=='frozen' or
-                                  (state.get('git_topology') or {}).get('enforce') or
-                                  (state.get('git_topology') or {}).get('intent') == 'cross-session'):
+        if not guard_blocked and writing and state:
             try:
                 data=payload.get('tool_input')
                 if not isinstance(data,dict): raise WorkflowError('HOOK_EDIT_INPUT_INVALID')
                 project=Project(root)
-                for absolute in absolute_paths: project.scope_path(state, absolute)
                 if (state.get('git_topology') or {}).get('intent') == 'cross-session':
                     from .sessions import authorize_edit
-                    token=(payload.get('gsp_session_id') or os.environ.get('GSP_SESSION_ID')
-                           or payload.get('session_id'))
-                    authorize_edit(project, state, token, absolute_paths)
+                    context_path=(payload.get('gsp_session_context')
+                                  or os.environ.get('GSP_SESSION_CONTEXT'))
+                    token=require_actual_actor(project,state,payload)
+                    # A durable session context handle is the preferred credential.
+                    # A bound session may also be resolved from its registry token;
+                    # authorize_edit fails closed with SESSION_CONTEXT_REQUIRED for
+                    # legacy bare-id rows that have no bound context.
+                    if not context_path and not token:
+                        raise WorkflowError('SESSION_CONTEXT_REQUIRED')
+                    authorize_edit(project, state, token, absolute_paths, context_path)
+                    for absolute in absolute_paths: project.scope_path(state, absolute)
                     coverage='session-direct-edit-paths'
                 else:
+                    for absolute in absolute_paths: project.scope_path(state, absolute)
                     coverage='direct-edit-paths'
                 outcome='allowed'
             except (WorkflowError,ValueError,TypeError,OSError) as exc:
                 outcome='denied';coverage='direct-edit-paths'
                 reason=str(exc)
-                if reason.startswith(('SESSION_', 'CONTROLLER_', 'WORKSPACE_')):
+                if (state.get('git_topology') or {}).get('intent') == 'cross-session':
+                    result=deny('GSP session edit refused: '+reason)
+                elif reason.startswith(('SESSION_', 'CONTROLLER_', 'WORKSPACE_')):
                     result=deny('GSP session edit refused: '+reason)
                 else:
-                    result=deny('GSP frozen edit refused: outside scope or unparseable edit. Inspect gsp scope/check-path; no scope was changed.')
+                    result=deny('GSP edit refused by workspace ownership or conflict checks: '+reason)
         elif not guard_blocked and tool in ('Bash','exec_command','write_stdin'):
             coverage='shell-not-enforced'
         try:
@@ -312,7 +389,13 @@ def handle(payload):
         except (OSError,WorkflowError,ValueError,KeyError,TypeError):
             result.setdefault('systemMessage','GSP audit unavailable; process coverage is degraded. Task state unchanged.')
         return result
-    except (WorkflowError,ValueError,TypeError,KeyError,OSError,AttributeError):
+    except (WorkflowError,ValueError,TypeError,KeyError,OSError,AttributeError) as exc:
+        reason=str(exc)
+        if writing and reason.startswith((
+            'SESSION_ACTOR_','SESSION_CONTEXT_','SESSION_BINDING_',
+            'SESSION_WRITE_LEASE_','SESSION_PATH_','WORK_UID_',
+        )):
+            return deny('GSP session edit refused: '+reason)
         return deny('GSP metadata invalid; inspect project state before editing.') if writing else {'systemMessage':'GSP hook could not inspect project; coverage NOT_CHECKED.'}
 
 

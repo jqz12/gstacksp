@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP canary"
-  short_description: "GstackSP 项目工作流：已授权部署后需要在约定时间观察健康指标时"
-  default_prompt: "Use $gsp-canary for the relevant part of this project task."

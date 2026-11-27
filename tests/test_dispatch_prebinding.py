@@ -6,6 +6,10 @@ from pathlib import Path
 from gsp.dispatch import load_dispatch
 from gsp.git_topology import branch_name
 from gsp.runtime import Project, WorkflowError, dispatch, parser, read
+try:
+    from process_helpers import session_binding
+except ModuleNotFoundError:
+    from tests.process_helpers import session_binding
 
 
 class DispatchPrebindingTests(unittest.TestCase):
@@ -23,6 +27,11 @@ class DispatchPrebindingTests(unittest.TestCase):
         self.project.initialize()
         self.cmd("new", "work", "--title", "派发预绑定", "--intent", "cross-session")
         state = self.state()
+        # This fixture exercises the published legacy auto-worktree path.
+        # Modern slicing/triage is covered by test_convergence_wiring.
+        state.pop("convergence_schema", None)
+        self.project.write(state, "fixture", "legacy prebinding plan",
+                           action_uid="fixture:legacy-prebinding")
         self.project.document(state, "design").write_text("# Design\nFixture prebinding.", encoding="utf-8")
         self.cmd("approve", "work", "--quote", "SYNTHETIC approved")
         self.cmd("task-add", "work", "T10", "--title", "编号服务",
@@ -72,8 +81,13 @@ class DispatchPrebindingTests(unittest.TestCase):
         return read(self.root / ".gsp/runs/work/state.json")
 
     def register_controller(self):
+        state = self.state()
+        binding = session_binding(
+            self.root, state['work_uuid'], 'main', 'codex', 'main-thread',
+        )
         self.cmd("session-register", "work", "--role", "controller", "--host", "codex",
-                 "--thread", "main-thread", "--write-mode", "write", "--path", ".")
+                 "--thread", "main-thread", "--write-mode", "write", "--path", ".",
+                 "--context", str(self.root / binding.handle_path))
 
     def dispatch_t10(self):
         return self.cmd(
@@ -97,7 +111,10 @@ class DispatchPrebindingTests(unittest.TestCase):
 
         state = self.state()
         state["status"] = "execute"
-        self.project.write(state, "fixture", "prebind execute")
+        self.project.write(
+            state, "fixture", "prebind execute",
+            action_uid="fixture:prebind-execute",
+        )
         self.cmd("task-start", "work", "T10")
         self.cmd("check-path", "work", str(Path(row["worktree"]) / "src" / "service.py"))
 

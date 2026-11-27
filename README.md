@@ -1,76 +1,82 @@
 # GstackSP
 
-适合个人开发者的 Windows 开发工作流，供 Claude Code 和 Codex 使用。
+面向 Codex 原生开发会话的 SP+GS 工作流。发布面为 **6 个默认入口和 4 个按需入口**；另有 **28 项内部来源职责**，落为 **26 个独立 `METHOD.md` 加 1 份共享的 workflow 业务恢复说明**，12 个旧包装完全退役。完整 Superpowers 正文、TDD/SDD、独立规格与质量审查、最终 all 回归、验证和交付门禁继续保留，但只有触发条件成立时才加载对应方法。
 
-保留 Superpowers 完整技能正文与配套资源，以其设计、计划、测试和审查为主干，加入按授权连续执行、冻结、经验、恢复、项目代码质量检测与交付。**22 个核心技能、28 个按需扩展**；没有必要每个任务都加载全部技能。代码质量检测只运行项目声明的检查，按 change、baseline、release 三种模式路由到审查、验证或执行修复。
+## 公开技能入口
+
+默认流程：
+
+| 技能 | 用途 |
+|---|---|
+| `gsp-workflow` | 选择阶段、恢复业务状态并加载当前适用方法 |
+| `gsp-brainstorming` | 明确目标、范围、方案和验收 |
+| `gsp-writing-plans` | 形成可执行、可验收且写集清晰的计划 |
+| `gsp-execute` | 按 TaskContract 和 TDD 实施、运行真实检查 |
+| `gsp-review` | 独立规格与质量审查、最终整体审查和 verify |
+| `gsp-ship` | 提交、合并、资源收敛和交付准备 |
+
+按需维护入口：
+
+| 技能 | 用途 |
+|---|---|
+| `gsp-health` | 检查安装、文档结构、Git 路由和跨宿主事实 |
+| `gsp-document-governance` | 新项目文档接入、老项目整理和持续治理 |
+| `gsp-writing-skills` | 新增或调整可复用 GSP 技能 |
+| `gsp-diagnosing-superpowers` | 对指定会话做只读重复工作、成本和触发诊断 |
+
+## 安装
+
+当前只服务 Codex。项目级安装把 6 个默认入口写入目标项目的 `.agents/skills`；用户级安装写入当前 Codex profile。任务规格、计划、待办、状态和证据始终保存在目标项目中。
+
+```powershell
+python E:\GstackSP\scripts\gsp.py --project E:\MyProject install --host codex
+python E:\GstackSP\scripts\gsp.py --project E:\MyProject init
+python E:\GstackSP\scripts\gsp.py --project E:\MyProject health --host codex
+```
+
+用户级安装：
+
+```powershell
+python E:\GstackSP\scripts\gsp.py install --scope user --host codex
+```
+
+4 个按需入口不进入默认安装集合。确有需要时显式点名，例如：
+
+```powershell
+python E:\GstackSP\scripts\gsp.py --project E:\MyProject install --host codex --optional writing-skills
+```
+
+安装器按 `skills/skill-manifest.json` 的精确分类处理升级和退役；用户修改或未知文件不会被静默覆盖。安装完成后在真实 Codex 会话调用 `$gsp-workflow`，再按需验证实际加载路径；脚本检查文件存在不等于宿主已经触发技能。
+
+## 日常使用
+
+告诉 Codex：“用 GstackSP 做这个需求，先讨论设计；确认后按推荐连续推进，准备交付。” 新任务在 `docs/work/<年份>/<月份>/<固定档案>/` 保存规格、计划和阶段材料。普通查询使用 `status --brief`，只读记录不启动 Git 或全仓扫描，也不证明当前可交付。
+
+Codex 原生聊天、代理、历史、压缩/恢复、模型参数和 worktree 负责运行生命周期；GSP 保存业务编号、TaskContract、主体代际、共享资源租约、质量证据和验收状态。Goal 只在用户明确创建目标时使用。小任务不额外创建会话或 worktree；并行可写单元或独立验证确有必要时，才使用 Codex 原生 worktree 并登记资源归属。
+
+`gsp-ship` 统一承接验收候选、提交、基于最新目标验证合并候选、按授权推送、处置本任务 worktree、分支和临时资源，最后关闭业务项。`drive-*` 仅作为用户明确要求脱离会话连续执行时的 legacy 兼容入口，不属于默认流程。
+
+## 有效证据
+
+每个任务先登记可观察的 TDD Red/Green，再运行项目声明的真实检查；最终候选必须在同一输入契约上完成 all 回归、独立规格与质量审查、整体审查和 verify。相同 argv、输入、环境、工具、阶段、契约及覆盖均可证明等价时复用已有结果；未知、截断、后续失败或输入漂移不能当作通过。质量门禁同时记录原始命令、日志、执行进程、Git/扫描/写入和实际等待时间，不用技能数量、代码行数或并行速度替代真实成本。
 
 ## 先看哪里
 
 - [项目文档索引](docs/README.md)：公开使用说明和维护入口。
+- [跨会话开发模式](docs/reference/cross-session-development.md)：业务关联、资源租约和恢复边界。
 - [计划结构检查接口](docs/reference/plan-quality.md)：计划结构检查与验收边界。
 - [构建上下文与独占缓存](docs/reference/build-context.md)：真实环境注入、兼容键、租约和恢复。
 - [命令执行进度、日志与恢复](docs/reference/command-progress.md)：流式日志、心跳、`run-status` 和终态。
-- `skills/`：可安装的 GSP 技能定义。
-- `scripts/`：安装、构建和校验工具。
-
-历史设计讨论、技能取舍和父本源码研究属于本地来源档案，保存在开发工作区，不进入公开仓库或安装包。
-
-## 安装范围
-
-可以选择项目级（`--scope project`）或当前用户全局级（`--scope user`）。全局安装供多个项目共用，不新建目标项目技能目录。任务文档和证据保存在各项目本地。AI 协助安装时，范围未说明先询问一次。具体路径与命令见 [项目文档索引](docs/README.md)。
-
-下面是项目级安装示例：
-
-需要 Python 3.10+，不需要 Bun、WSL、数据库或付费 API。
-
-```powershell
-python E:\GstackSP\scripts\gsp.py --project E:\MyProject install --host both
-python E:\GstackSP\scripts\gsp.py --project E:\MyProject init
-python E:\GstackSP\scripts\gsp.py --project E:\MyProject health --host both
-```
-
-目标目录需已存在。安装器添加本项目的技能和带标记引导块，保留用户已有内容，遇到未知或用户修改过的技能文件拒绝覆盖。核心默认安装；例如 UI 扩展：
-
-```powershell
-python E:\GstackSP\scripts\gsp.py --project E:\MyProject install --host both --optional design-consultation design-review
-```
-
-装好后在实际宿主调用 `gsp-workflow`，再调用 `gsp-health` 验证真实发现。Claude 通常为 `/gsp-workflow`，Codex 为 `$gsp-workflow`；实际列表由宿主决定，项目引导文件提供读取路径。脚本检查文件存在不等于真实会话已加载。
-
-## 日常使用
-
-新任务采用 `docs/work/<年份>/<月份>/<固定档案>/`，先保存想法用 `work-new`，文档按阶段生成。`health --documents-only` 只读检查结构；需要持久化报告时使用 `health --documents`。残留锁可用 `inspect-lock` 诊断，并在证据完整时用 `recover-lock` 恢复；旧项目先预览再整理。命令及边界见 [项目文档索引](docs/README.md)。旧任务继续兼容，以 status/resume 返回路径为准。
-
-告诉 AI：“用 GstackSP 做这个需求，先讨论设计；确认后按推荐连续推进，准备交付。”
-
-Git 项目的新任务先盘点分支和 worktree，再记录一次工作位置选择；同一任务恢复时复用有效绑定。多会话、并行 agent 与前后端协作见[分支与 worktree 规则](docs/reference/git-topology.md)。如果需要主会话协调多个独立聊天，使用明确的 `cross-session` 意图；主会话维护唯一总体计划，使用 `session-dispatch` 批量发布 ready 任务。未指定 worktree 时 GSP 自动创建 managed worktree，使用 `session-progress` 展示进度，使用 `session-watch` 消费完成事件，再用 `session-accept` 接受任务并自动释放租约和清理。`session-clean --retry` 只用于 cleanup-pending 恢复，显式绑定的 worktree 只释放不删除。完整规则见[跨会话开发模式](docs/reference/cross-session-development.md)。
-
-冻结没说明时问一次；已开启无人值守并授权推荐选择时记录后继续。工作位置与构建缓存分开决定：小改/串行可原地，`--size large` 只提示风险；并行写者、独立验证或保护现有改动才优先使用 worktree。你已授权的推送、合并、删除分支等动作按精确范围执行，不重复问；默认只准备交付。
-
-长命令通过 `run` 的脱敏 stdout/stderr、`command-progress.json` 和 `run-status` 观察，进程身份、心跳与日志路径写入证据目录。`run-status` 和 `status --brief` 都是非权威快照，不能替代最终回归、证据校验和整体审查。构建上下文与租约规则见[构建上下文与独占缓存](docs/reference/build-context.md)。
-
-目标项目的任务记录和 `.gsp/` 状态由目标项目本地维护；公开仓库只提供运行时代码、技能和用户文档。计划结构检查与语义边界见[接口说明](docs/reference/plan-quality.md)。
-
-完整发布源和生成规则见 `scripts/build_skills.py`、`scripts/sp_preservation.py` 及 `skills/gsp-workflow/references/`。
+- `skills/skill-manifest.json`：唯一技能清单；`gsp/skill_catalog.py` 是只读 provider。
 
 ## 开发此项目
 
 ```powershell
 python scripts/build_skills.py
+python scripts/validate_skills.py
 python -m unittest discover -s tests -v
 python scripts/run_tests.py --jobs 4
-python scripts/run_tests.py --jobs 4 --tier fast
-python scripts/validate_skills.py
 python scripts/package.py
 ```
 
-`python -m unittest discover -s tests -v` 仍是串行基准口径；`scripts/run_tests.py`
-只改变执行方式：按模块分片并行、输出唯一的 `Ran N tests` 汇总，测试集合与失败判定不变。
-`--tier fast` 是纯单元快测层（不含子进程/CLI 测试，约 50 个用例）；`tests/tiers.json`
-同时记录不能与其它分片竞争的锁/PID 模块，它们会先单独运行。分片权重来自本机实测耗时，
-只影响负载均衡，不影响覆盖。
-
-`scripts/build_skills.py` 是生成技能的维护源；路由 `gsp-workflow` 和共同契约手工维护。可选技能通过当前宿主/项目已有工具完成工作，未集成第三方浏览器守护进程、模型服务或部署账户。
-
-
-
+`scripts/build_skills.py` 只从 canonical manifest 生成 10 个公开投影、26 个物理 `METHOD.md`、方法索引和 catalog，并清退源中孤立的旧 `SKILL.md`。条件方法不会被拼进六个默认技能。`scripts/sp_preservation.py` 校验完整 SP 正文和附件未丢失；打包、安装和目录展示消费同一 provider。

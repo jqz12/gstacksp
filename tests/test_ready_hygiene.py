@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from gsp.runtime import (Project, WorkflowError, _delivery_git_state,
-                         _hygiene_release, atomic)
+                         _hygiene_release, atomic, digest)
 
 
 class ReadyHygieneTests(unittest.TestCase):
@@ -51,13 +51,32 @@ class ReadyHygieneTests(unittest.TestCase):
                     _hygiene_release(self.project, self.state)
 
     def test_decision_line_releases_the_gate(self):
-        self.receipt(retained=1, truncated=False, errors=[])
+        path = self.receipt(retained=1, truncated=False, errors=[])
         with self.decisions.open('a', encoding='utf-8') as stream:
-            stream.write('- 2026-11-24 [user] HYGIENE_LEFTOVER 接受：保留一次失败构建用于取证\n')
+            stream.write('- 2026-11-24 [user] HYGIENE_LEFTOVER ACCEPT '
+                         f'receipt=x digest={digest(path)} 保留一次失败构建用于取证\n')
         result = _hygiene_release(self.project, self.state)
         self.assertTrue(result['required'])
         self.assertTrue(result['accepted'])
         self.assertIn('HYGIENE_LEFTOVER', result['reason'])
+
+    def test_mentioning_an_unresolved_leftover_is_not_acceptance(self):
+        self.receipt(retained=1, truncated=False, errors=[])
+        self.decisions.write_text('hygiene leftover remains unresolved, repair required.\n', encoding='utf-8')
+        with self.assertRaisesRegex(WorkflowError, 'HYGIENE_LEFTOVER'):
+            _hygiene_release(self.project, self.state)
+
+    def test_old_or_unbound_decision_cannot_accept_new_evidence(self):
+        path = self.receipt(retained=1, truncated=False, errors=[])
+        self.state['hygiene_release'] = {'reason': 'previous acceptance'}
+        with self.assertRaisesRegex(WorkflowError, 'HYGIENE_LEFTOVER'):
+            _hygiene_release(self.project, self.state)
+        self.decisions.write_text('[user] HYGIENE_LEFTOVER ACCEPT '
+                                  f'receipt=x digest={digest(path)} retain this exact fixture\n', encoding='utf-8')
+        self.assertTrue(_hygiene_release(self.project, self.state)['accepted'])
+        self.receipt(retained=2, truncated=False, errors=[])
+        with self.assertRaisesRegex(WorkflowError, 'HYGIENE_LEFTOVER'):
+            _hygiene_release(self.project, self.state)
 
     def git(self, *argv):
         env = {key: value for key, value in os.environ.items()

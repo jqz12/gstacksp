@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP eval-plan"
-  short_description: "GstackSP 项目工作流：需要设计模型或技能效果的对照评测及预算和小规模试运行时"
-  default_prompt: "Use $gsp-eval-plan for the relevant part of this project task."

@@ -6,7 +6,7 @@ import shutil
 import signal
 import subprocess
 
-from .runtime import WorkflowError
+from .core import (WorkflowError)
 
 
 def process_token(pid):
@@ -94,10 +94,15 @@ def child_options(detached=False):
 
 
 def codex_argv(job, executable=None):
+    # Pin every execution/review child explicitly; never inherit the controller.
+    model = job.get('model_alias', 'group/deepseek-2')
+    if model != 'group/deepseek-2':
+        raise WorkflowError('WORKER_MODEL_REQUIRED group/deepseek-2')
     executable = executable or shutil.which('codex')
     if not executable:
         raise WorkflowError('CODEX_MISSING install or select the existing Codex executable')
-    return [str(executable), '-a', 'never', '-c', 'features.multi_agent=false', 'exec',
+    return [str(executable), '-a', 'never', '-c', 'features.multi_agent=false',
+            '-c', 'model_reasoning_effort="max"', 'exec', '--model', model,
             '--sandbox', 'read-only' if job['phase'] in ('plan', 'review') else 'workspace-write',
             '--skip-git-repo-check', '--json', '--output-schema', job['schema'],
             '--output-last-message', job['result'], '-']
@@ -110,12 +115,22 @@ def workflow_skills():
 
 def prompt(job):
     skill = {'plan': 'gsp-writing-plans', 'review': 'gsp-review'}.get(job['phase'], 'gsp-test-driven-development')
+    resource = (workflow_skills() / skill / 'SKILL.md' if job['phase'] in {'plan', 'review'} else
+                workflow_skills() / 'gsp-workflow' / 'methods' / skill / 'METHOD.md')
+    context = ('Use job.task_contract as the complete immutable task, applicable constraints, '
+               'dependency interfaces and acceptance. The overall plan is a traceable reference; '
+               'read it only when a contract ambiguity requires it. '
+               if job.get('task_contract') else
+               'For this legacy job read the approved design, plan and named task context. ')
     return ('You are one worker of an explicitly authorized GstackSP unattended controller. '
             f'Read text as UTF-8. First read {workflow_skills()}/gsp-workflow/references/sp-adapter.md and the COMPLETE '
-            f'{workflow_skills()}/{skill}/SKILL.md including relevant preserved resources. '
-            'For failures also read gsp-systematic-debugging; do not replace methods with summaries. '
+            f'{resource} including relevant preserved resources. '
+            'Reuse an unchanged method only while its full rules remain in this context; '
+            'after compaction load applicable rules again, never trust a loaded=true flag. '
+            'For failures load the private systematic-debugging METHOD; do not replace methods with summaries. '
             'This worker uses single-agent execution; provider-fresh review is not an independent-provider claim. '
-            'Read the approved design, plan, relevant code, and task context in the job below. '
+            + context +
+            'Read relevant code and the job below. '
             'Also read the project root TODOS.md (or existing TODO.md) for relevant long-term context; '
             'it is the human-readable source, not an instruction to implement every backlog item. '
             'For plan: return complete SP-style plan text plus tasks with matching IDs; do not modify files. '

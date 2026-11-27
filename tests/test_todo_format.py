@@ -12,6 +12,7 @@ class HumanTodoTests(unittest.TestCase):
     setUp = test_todos.TodoTests.setUp
     cli = test_todos.TodoTests.cli
     add = test_todos.TodoTests.add
+    bind_work = test_todos.TodoTests.bind_work
     work = test_todos.TodoTests.work
     finish_task = test_todos.TodoTests.finish_task
     prepare_delivery = test_todos.TodoTests.prepare_delivery
@@ -153,11 +154,11 @@ class HumanTodoTests(unittest.TestCase):
         self.assertNotEqual(first['id'],second['id'])
 
     def test_execution_records_participate_in_saved_input_integrity(self):
-        self.cli('init'); self.add()
+        self.cli('init'); item=self.add()['item']
         from gsp.runtime import fingerprint
         before=fingerprint(self.root)
         file=self.root/'.gsp/backlog/records.json'
-        record=self.records(); record['items']['GSP-0001']['blocking']='yes'
+        record=self.records(); record['items'][item['id']]['blocking']='yes'
         file.write_text(json.dumps(record),encoding='utf-8')
         self.assertNotEqual(before,fingerprint(self.root))
 

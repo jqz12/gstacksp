@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP landing-report"
-  short_description: "GstackSP 项目工作流：需要只读查看多个待合并分支或 PR 的状态时"
-  default_prompt: "Use $gsp-landing-report for the relevant part of this project task."

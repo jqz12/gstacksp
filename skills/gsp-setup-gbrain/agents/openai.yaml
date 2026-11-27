@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP setup-gbrain"
-  short_description: "GstackSP 项目工作流：用户选择用 gbrain 作为本地经验之外的可选记忆后端时"
-  default_prompt: "Use $gsp-setup-gbrain for the relevant part of this project task."

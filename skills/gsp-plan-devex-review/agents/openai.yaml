@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP plan-devex-review"
-  short_description: "GstackSP 项目工作流：CLI、SDK、API 或技能计划需要检查使用者上手和错误处理体验时"
-  default_prompt: "Use $gsp-plan-devex-review for the relevant part of this project task."

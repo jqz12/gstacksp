@@ -3,16 +3,38 @@ from pathlib import Path, PurePosixPath
 import re
 import uuid
 
-from .runtime import (WorkflowError, _git_run, atomic, cached_value, contract_hash,
-                      digest, fingerprint, git_identity, inside, is_ancestor,
-                      integration_dependencies, now, read, redact)
+from .core import (WorkflowError, atomic, cached_value, digest, inside, now, read, redact)
+from .git_operations import (_git_run, git_identity, is_ancestor)
+from .workflow_support import (contract_hash, fingerprint, integration_dependencies)
+from .orchestration_types import digest_value
+from .identity_store import IdentityStore, IdentityStoreError
+from .orchestration_types import RequestRef
+from .resource_registry import (
+    ResourceOwner,
+    ResourceRegistry,
+    ResourceRegistryError,
+)
 from .sessions import _save as save_registry
 from .sessions import load_registry
-from .worktree_lifecycle import cleanup_worktree, prepare_worktree
+from .session_context import require_row_capability
+from .task_contracts import compile_task_contract, render_task_contract
+from .plan_quality import write_plan_gate
+from .worktree_lifecycle import (
+    _base,
+    _automatic_location,
+    build_environment,
+    cleanup_worktree,
+    inspect_worktree,
+    prepare_worktree,
+)
+from .worktree_adapters import WorktreeAdapter, WorktreeAdapterError
 
 PLATFORMS = {'codex', 'claude', 'zcode', 'manual', 'other'}
 DISPATCH_MODES = {'auto', 'adapter', 'manual'}
-ACTIVE_DISPATCH = {'adapter-ready', 'running', 'reported', 'manual-required'}
+ACTIVE_DISPATCH = {
+    'workspace-pending', 'adapter-ready', 'running', 'reported',
+    'manual-required',
+}
 CLEANUP_RESULTS = {'archived', 'released', 'removed'}
 
 
@@ -47,16 +69,89 @@ def load_dispatch(project, state):
     for row in data.get('dispatches', []):
         row.setdefault('managed_worktree', False)
         row.setdefault('worktree_mode', 'bound')
-        row.setdefault('worktree_state', 'bound' if row.get('worktree') else 'unknown')
+        row.setdefault(
+            'worktree_state',
+            ('unknown' if row.get('status') == 'preparing' else
+             'bound' if row.get('worktree') else 'unknown'),
+        )
         row.setdefault('base', None)
         row.setdefault('cleanup_attempts', 0)
         row.setdefault('cleanup_error', None)
+        contract = row.get('contract') or row.get('prompt') or row.get('brief')
+        if contract:
+            row['contract'] = contract
+            row.setdefault('brief', contract)
+            row.setdefault('prompt', contract)
+        row.setdefault('contract_uid', None)
+        row.setdefault('content_digest', None)
+        row.setdefault('model_alias', 'group/deepseek-2')
+        row.setdefault('effort', 'max')
+        row.setdefault('resource_request_uid', None)
+        row.setdefault('resource_state', None)
+        row.setdefault('dispatch_ref', None)
+        row.setdefault('execution_slot_request_uid', None)
+        row.setdefault('execution_slot_identity', None)
+        row.setdefault('execution_slot_owner', None)
+        row.setdefault('execution_slot_state', None)
+        row.setdefault('execution_slot_released_at', None)
+        row.setdefault('execution_slot_released_by', None)
+        row.setdefault('execution_slot_release_reason', None)
+        row.setdefault('execution_slot_scope', 'project')
+        row.setdefault('features', {})
+        if isinstance(row.get('features'), dict):
+            row['features'].setdefault('multi_agent', False)
     return data
 
 
 def _save_dispatch(project, state, data):
     machine, _ = _folders(project, state)
     atomic(machine / 'dispatch.json', data)
+
+
+def _pending_dispatch_intent(data):
+    rows = [
+        row for row in data.get('dispatches', [])
+        if row.get('status') == 'preparing'
+    ]
+    if not rows:
+        return None
+    request_uids = {
+        row.get('resource_request_uid') for row in rows
+    }
+    if (
+        len(request_uids) != 1
+        or not isinstance(next(iter(request_uids)), str)
+        or not next(iter(request_uids))
+    ):
+        raise WorkflowError(
+            'DISPATCH_PREPARATION_PENDING multiple prior intents: '
+            + ','.join(sorted(str(value) for value in request_uids))
+        )
+    request_uid = next(iter(request_uids))
+    tasks = [row.get('task') for row in rows]
+    if (
+        any(not isinstance(task, str) or not task for task in tasks)
+        or len(set(tasks)) != len(tasks)
+    ):
+        raise WorkflowError('DISPATCH_PREPARATION_PENDING ' + request_uid)
+    tokens = [row.get('scheduler_token') for row in rows]
+    try:
+        normalized = [
+            ResourceRegistry._normalize_scheduler(token) for token in tokens
+        ]
+    except ResourceRegistryError as exc:
+        raise WorkflowError(
+            'DISPATCH_SCHEDULER_INTENT_INVALID ' + request_uid
+        ) from exc
+    if any(token != normalized[0] for token in normalized[1:]):
+        raise WorkflowError(
+            'DISPATCH_SCHEDULER_INTENT_INVALID ' + request_uid
+        )
+    return {
+        'request_uid': request_uid,
+        'tasks': tasks,
+        'scheduler_token': normalized[0],
+    }
 
 
 def _assignment(values, label):
@@ -145,6 +240,266 @@ def _relative(project, path):
         return path.resolve().relative_to(project.root.resolve()).as_posix()
     except ValueError:
         return str(path.resolve())
+
+
+def _contract_inputs(project, state):
+    texts, paths = {}, {}
+    for kind in ('design', 'plan'):
+        path = project.document(state, kind)
+        try:
+            texts[kind] = path.read_text(encoding='utf-8')
+        except FileNotFoundError:
+            texts[kind] = ''
+        paths[kind] = _relative(project, path)
+    return texts, paths
+
+
+def _task_contract(project,state,task_id,texts,paths):
+    from .contract_store import load_contract
+    contract=load_contract(project,state,task_id,required=state.get('operation_schema')==2)
+    if contract is not None:
+        return contract
+    return compile_task_contract(state,task_id,texts['plan'],texts['design'],source_paths=paths)
+
+
+def _require_dispatch_writes_gate(state, plan, actual_batch):
+    facts = write_plan_gate(
+        state,
+        plan,
+        parallel=len(actual_batch) > 1,
+    )
+    blockers = facts.get('blockers') or []
+    if not blockers:
+        return facts
+    details = []
+    for blocker in blockers:
+        detail = str(blocker.get('code') or 'WRITES_BLOCKED')
+        if blocker.get('task'):
+            detail += ' task=' + str(blocker['task'])
+        if blocker.get('detail'):
+            detail += ': ' + str(blocker['detail'])
+        details.append(detail)
+    raise WorkflowError('DISPATCH_WRITES_GATE ' + ' | '.join(details))
+
+
+def _planned_worktree(project, state, task, requested, mode, pending=None):
+    if requested is not None or mode == 'bind':
+        if requested is None:
+            raise WorkflowError('WORKTREE_PATH_REQUIRED')
+        worktree = Path(requested).resolve()
+        if not worktree.is_dir():
+            raise WorkflowError('WORKTREE_PATH_MISSING ' + str(worktree))
+        adapter = WorktreeAdapter(project.root)
+        try:
+            inspection = adapter.bind(
+                worktree,
+                ownership='bound',
+                binding_uid=(pending or {}).get('id') or 'dispatch-preflight',
+            )
+        except WorktreeAdapterError as exc:
+            legacy_non_git_child = (
+                str(exc).startswith('WORKTREE_NOT_REGISTERED')
+                and inside(project.root, worktree)
+                and worktree != Path(project.root).resolve()
+                and not (worktree / '.git').exists()
+            )
+            if not legacy_non_git_child:
+                raise WorkflowError(str(exc)) from exc
+            inspection = {
+                'path': str(worktree),
+                'branch': None,
+                'head': None,
+                'registered': False,
+                'common_dir': None,
+                'project_uid': None,
+            }
+        return {
+            'worktree': str(worktree),
+            'branch': inspection.get('branch'),
+            'base': inspection.get('head'),
+            'managed_worktree': False,
+            'worktree_mode': 'bound',
+            'binding_verified': bool(inspection.get('registered')),
+            'common_dir': inspection.get('common_dir'),
+            'project_uid': inspection.get('project_uid'),
+            'build_root': None,
+            'build_env': {},
+            'build_mode': 'bound',
+        }
+    worktree, branch = _automatic_location(project, state, task)
+    worktree = worktree.resolve()
+    base = _base(project, state)
+    try:
+        project_inspection = WorktreeAdapter(project.root).inspect(
+            project.root
+        )
+    except WorktreeAdapterError as exc:
+        raise WorkflowError(str(exc)) from exc
+    common_dir = project_inspection['common_dir']
+    project_uid = project.identity().get('id')
+    if not inside(project.root, worktree) or worktree == project.root:
+        raise WorkflowError('WORKTREE_PATH_ESCAPE ' + str(worktree))
+    recovering = (
+        pending is not None
+        and pending.get('status') == 'preparing'
+        and Path(pending.get('worktree') or '').resolve() == worktree
+        and pending.get('branch') == branch
+    )
+    if recovering and (
+        pending.get('base') != base
+        or pending.get('common_dir') != common_dir
+        or pending.get('project_uid') != project_uid
+    ):
+        raise WorkflowError('DISPATCH_WORKTREE_RECOVERY_MISMATCH ' + task['id'])
+    if pending is not None and not recovering:
+        raise WorkflowError('DISPATCH_WORKTREE_RECOVERY_MISMATCH ' + task['id'])
+    if not recovering and worktree.exists() and any(worktree.iterdir()):
+        raise WorkflowError('WORKTREE_PATH_CONFLICT ' + str(worktree))
+    exists = _git_run(
+        project.root, 'show-ref', '--verify', '--quiet',
+        'refs/heads/' + branch,
+    )
+    if exists.returncode == 0 and not recovering:
+        raise WorkflowError('WORKTREE_BRANCH_CONFLICT ' + branch)
+    return {
+        'worktree': str(worktree),
+        'branch': branch,
+        'base': base,
+        'managed_worktree': True,
+        'worktree_mode': 'managed',
+        'binding_verified': True,
+        'common_dir': common_dir,
+        'project_uid': project_uid,
+        **build_environment(project, state, task),
+    }
+
+
+def _batch_resource_request_uid(state, planned, contracts):
+    work_uid = state.get('work_uuid')
+    if not isinstance(work_uid, str) or not work_uid:
+        raise WorkflowError('DISPATCH_WORK_UID_REQUIRED')
+    return digest_value({
+        'schema': 1,
+        'project_id': state.get('project_id'),
+        'work_uid': work_uid,
+        'tasks': [
+            {
+                'task': row['task'],
+                'contract_digest': contracts[row['task']]['content_digest'],
+                'worktree': row['worktree'],
+                'branch': row['branch'],
+                'claimed_paths': row['claimed_paths'],
+                'writes': row['writes'],
+            }
+            for row in planned
+        ],
+    })
+
+
+def _batch_resources(registry, planned):
+    resources = {}
+
+    def add(kind, identity, disposition):
+        canonical = (
+            registry._canonical_branch(identity)
+            if kind == 'branch'
+            else registry._canonical_path(identity)
+        )
+        resources[(kind, canonical)] = (kind, canonical, disposition)
+
+    for row in planned:
+        add(
+            'path', row['worktree'],
+            'delete' if row['managed_worktree'] else 'release',
+        )
+        if row.get('branch'):
+            add('branch', row['branch'], 'release')
+        if row.get('build_root'):
+            add('build_root', row['build_root'], 'delete')
+        for path in row['writes']:
+            add('path', str(Path(row['worktree']) / path), 'release')
+    return list(resources.values())
+
+
+def _ensure_candidate_dispatch_ref(
+    project, state, candidate, contract, planned,
+):
+    dispatch_ref = candidate.get('dispatch_ref')
+    if dispatch_ref is None:
+        dispatch_ref = _allocate_dispatch_ref(
+            project, state, candidate['task'], candidate['id'],
+            contract, planned,
+        )
+        candidate['dispatch_ref'] = dispatch_ref
+    if (
+        not isinstance(dispatch_ref, dict)
+        or not isinstance(dispatch_ref.get('uid'), str)
+        or not dispatch_ref.get('uid')
+    ):
+        raise WorkflowError(
+            'DISPATCH_IDENTITY_ALLOCATION_FAILED missing dispatch UID'
+        )
+    return dispatch_ref
+
+
+def _candidate_execution_slot(candidate, state):
+    dispatch_ref = candidate['dispatch_ref']
+    owner = ResourceOwner(
+        work_uid=state['work_uuid'],
+        session_uid=dispatch_ref['uid'],
+        generation=1,
+    )
+    request_uid = candidate.get('execution_slot_request_uid')
+    if request_uid is None:
+        request_uid = digest_value({
+            'schema': 1,
+            'kind': 'execution-slot',
+            'project_id': state.get('project_id'),
+            'work_uid': state.get('work_uuid'),
+            'dispatch_uid': dispatch_ref['uid'],
+        })
+    return request_uid, owner
+
+
+def _business_request(project, state, logical_key, input_digest, operation_kind):
+    work_uid = state.get('work_uuid')
+    project_uid = IdentityStore(project.root).project_uid()
+    if not isinstance(work_uid, str) or not work_uid:
+        raise WorkflowError('DISPATCH_WORK_UID_REQUIRED')
+    return RequestRef(
+        request_uid=digest_value({
+            'project_uid': project_uid,
+            'logical_key': logical_key,
+            'operation_kind': operation_kind,
+        }),
+        logical_key=logical_key,
+        input_digest=input_digest,
+        project_uid=project_uid,
+        work_uid=work_uid,
+        attempt_uid=None,
+        operation_kind=operation_kind,
+    )
+
+
+def _allocate_dispatch_ref(project, state, task_id, alias, contract, planned):
+    store = IdentityStore(project.root)
+    request = _business_request(
+        project,
+        state,
+        f'dispatch-create:{state["work_uuid"]}:{task_id}:{alias}',
+        digest_value({
+            'contract_digest': contract['content_digest'],
+            'worktree': planned['worktree'],
+            'branch': planned['branch'],
+            'claimed_paths': planned['claimed_paths'],
+            'writes': planned['writes'],
+        }),
+        'dispatch-create',
+    )
+    try:
+        return store.allocate('dispatch', None, request).to_dict()
+    except IdentityStoreError as exc:
+        raise WorkflowError('DISPATCH_IDENTITY_ALLOCATION_FAILED ' + str(exc)) from exc
 
 
 def _rollback_prepared_worktrees(project, prepared):
@@ -330,13 +685,16 @@ def attested_removed_tasks(project, state):
     return cached_value('attested_removed', key, load)
 
 
-def finalize_integration_cleanup(project, state, final_receipt):
+def finalize_integration_cleanup(project, state, final_receipt, binding=None):
     """Record the integration proof, then remove accepted managed children."""
     if final_receipt.get('task') != 'all' or final_receipt.get('status') != 'pass':
         return {'attested': False, 'cleanup': []}
     attestation = _integration_attestation(project, state, final_receipt)
     if attestation is None:
         return {'attested': False, 'cleanup': []}
+    if binding is not None:
+        from .resource_operations import ensure_work_evidence
+        ensure_work_evidence(project,state,binding=binding)
     data = load_dispatch(project, state)
     data['integration_attestation'] = attestation
     _save_dispatch(project, state, data)
@@ -429,17 +787,367 @@ def render_task_prompt(state, task, dispatch):
     ])
 
 
-def dispatch_tasks(project, state, args):
+def _workspace_group_result(state, row, *, idempotent=False):
+    group_uid = row.get('workspace_group_uid')
+    return {
+        'task': state['id'],
+        'batch_size': 1,
+        'workspace_group': {
+            'schema': 1,
+            'mode': 'sequential',
+            'state': row.get('workspace_group_state') or 'pending_host',
+            'group_uid': group_uid,
+            'resource_request_uid': row.get(
+                'workspace_group_resource_request_uid'
+            ),
+            'workspace_root': row.get('worktree'),
+            'branch': row.get('branch'),
+            'host_observation': 'unverified',
+            'idempotent': bool(idempotent),
+        },
+        'dispatches': [row],
+        'pending_action': {
+            'kind': 'register-workspace-group-worker',
+            'task': row['task'],
+            'workspace_root': row.get('worktree'),
+            'branch': row.get('branch'),
+            'contract': row.get('contract'),
+        },
+        'next_action': (
+            'Register one trusted worker context with '
+            '--workspace-group parent; the parent root/branch are reused and '
+            'the new worker receives the sole source-writer lease.'
+        ),
+    }
+
+
+def _dispatch_sequential_parent_group(
+    project, state, args, controller, data, tasks_by_id, requested,
+):
+    """Prepare one sequential worker on the explicit parent workspace."""
+    if len(requested) != 1:
+        raise WorkflowError('WORKSPACE_GROUP_SINGLE_TASK_REQUIRED')
+    task_id = requested[0]
+    task = tasks_by_id.get(task_id)
+    if task is None:
+        raise WorkflowError('DISPATCH_TASK_NOT_FOUND ' + str(task_id))
+    accepted = _accepted_task_ids(state, data)
+    dependencies = set(task.get('depends') or [])
+    if dependencies - accepted:
+        raise WorkflowError('DISPATCH_DEPENDENCY_BLOCKED ' + task_id)
+    if not controller.get('worktree'):
+        raise WorkflowError('WORKSPACE_GROUP_PARENT_ROOT_REQUIRED')
+    document_texts, source_paths = _contract_inputs(project, state)
+    _require_dispatch_writes_gate(
+        state, document_texts['plan'], [task],
+    )
+    try:
+        contract = _task_contract(project,state,task_id,document_texts,source_paths)
+    except ValueError as exc:
+        raise WorkflowError(str(exc)) from exc
+
+    from .workspace_groups import (
+        SessionWorkspaceLeaseAuthority,
+        build_workspace_group,
+    )
+
+    group = build_workspace_group(
+        project.root,
+        project.root,
+        controller['worktree'],
+        project_uid=IdentityStore(project.root).project_uid(),
+        work_uid=state['work_uuid'],
+        parent_binding_uid=controller['binding_uid'],
+        controller_binding_uid=controller['binding_uid'],
+        controller_generation=int(
+            controller.get('controller_generation') or 1
+        ),
+        cancel_generation=int(
+            controller.get('cancel_generation') or 1
+        ),
+    )
+    if any((row.get('topology') or {}).get('workspace_root')
+           and Path(row['topology']['workspace_root']).resolve() != Path(group.workspace_root).resolve()
+           for row in state.get('tasks') or []):
+        raise WorkflowError('WORKSPACE_GROUP_MIXED_TOPOLOGY')
+    if any(row.get('status') in ACTIVE_DISPATCH and row.get('worktree')
+           and Path(row['worktree']).resolve() != Path(group.workspace_root).resolve()
+           for row in data.get('dispatches') or []):
+        raise WorkflowError('WORKSPACE_GROUP_MIXED_TOPOLOGY')
+    lease_authority = SessionWorkspaceLeaseAuthority(
+        project.root, state['id']
+    )
+    # This preview is intentionally before UID/resource/file allocation.  An
+    # unaccepted or currently executing predecessor therefore leaves no new
+    # dispatch, slot or build-root intent behind.
+    preflight = lease_authority.preflight_claim(group, task_uid=task_id)
+    if state.get('inflight') is not None:
+        raise WorkflowError('WORKSPACE_GROUP_EXECUTION_UNKNOWN')
+
+    existing = next(
+        (
+            row for row in reversed(data.get('dispatches', []))
+            if row.get('task') == task_id
+            and row.get('status') not in {'superseded', 'cleaned'}
+        ),
+        None,
+    )
+    if existing is not None:
+        if (existing.get('workspace_group_uid') == group.group_uid
+                and existing.get('content_digest') == contract['content_digest']
+                and existing.get('status') == 'preparing'):
+            return _complete_workspace_group_intent(project,state,data,existing,contract)
+        if (
+            existing.get('workspace_group_uid') == group.group_uid
+            and existing.get('content_digest') == contract['content_digest']
+            and existing.get('status') in {
+                'workspace-pending', 'adapter-ready', 'manual-required',
+                'running', 'reported',
+            }
+        ):
+            return _workspace_group_result(state, existing, idempotent=True)
+        raise WorkflowError('DISPATCH_TASK_EXISTS ' + task_id)
+
+    path_map, common_path = _assignment(
+        getattr(args, 'path', []), 'path',
+    )
+    raw_path = path_map.get(task_id) or common_path
+    if not raw_path:
+        raise WorkflowError('DISPATCH_PATH_REQUIRED ' + task_id)
+    claimed = [_normalize_path(Path(group.workspace_root), raw_path)]
+    writes = contract.get('writes') or claimed
+    build = build_environment(project, state, task)
+    if not build.get('build_root'):
+        raise WorkflowError('WORKSPACE_GROUP_BUILD_ROOT_REQUIRED')
+    target = {
+        'worktree': group.workspace_root,
+        'branch': group.branch,
+        'base': group.base_sha,
+        'managed_worktree': False,
+        'worktree_mode': 'workspace-group',
+        'binding_verified': True,
+        'common_dir': group.common_dir,
+        'project_uid': group.project_uid,
+        **build,
+    }
+    human_dir = project.paths(state['id'])[1] / 'sessions'
+    contract_target = human_dir / f'{task_id}-contract.md'
+    for candidate in data.get('dispatches', []):
+        if candidate.get('status') not in ACTIVE_DISPATCH:
+            continue
+        if candidate.get('worktree') != group.workspace_root:
+            continue
+        candidate_task = candidate.get('task')
+        candidate_worker = candidate.get('source_writer_session_id')
+        worker_row = next(
+            (
+                row for row in preflight['registry'].get('sessions', [])
+                if row.get('id') == candidate_worker
+            ),
+            None,
+        )
+        accepted = (
+            (preflight['registry'].get('tasks') or {})
+            .get(candidate_task, {})
+            .get('acceptance_status') == 'accepted'
+        )
+        if (
+            candidate.get('workspace_group_uid') == group.group_uid
+            and accepted
+            and worker_row is not None
+            and worker_row.get('status') == 'released'
+        ):
+            continue
+        raise WorkflowError('DISPATCH_WORKTREE_CONFLICT ' + task_id)
+    if contract_target.exists() and not getattr(args, 'retry', False):
+        raise WorkflowError('DISPATCH_PROMPT_EXISTS ' + task_id)
+
+    target_map, common_platform = _assignment(
+        getattr(args, 'target', []), 'target',
+    )
+    platform = (
+        target_map.get(task_id) or common_platform
+        or getattr(args, 'platform', None) or 'manual'
+    ).lower()
+    if platform not in PLATFORMS:
+        raise WorkflowError('DISPATCH_PLATFORM_INVALID ' + platform)
+    mode = (
+        getattr(args, 'dispatch_mode', None)
+        or ('auto' if platform == 'codex' else 'manual')
+    ).lower()
+    if mode not in DISPATCH_MODES:
+        raise WorkflowError('DISPATCH_MODE_INVALID ' + mode)
+    dispatch_alias = _next_id(data)
+    planned = {
+        'task': task_id,
+        'worktree': group.workspace_root,
+        'branch': group.branch,
+        'claimed_paths': claimed,
+        'writes': list(writes),
+    }
+    dispatch_ref = _allocate_dispatch_ref(
+        project, state, task_id, dispatch_alias, contract, planned,
+    )
+    candidate = {
+        'id': dispatch_alias,
+        'task': task_id,
+        'session_hint': _next_session_hints(
+            project, state, 1, data,
+        )[0],
+        'platform': platform,
+        'dispatch_mode': mode,
+        'status': 'workspace-pending',
+        'claimed_paths': claimed,
+        'dependencies': sorted(dependencies),
+        'created_at': now(),
+        'updated_at': now(),
+        'thread_id': None,
+        'contract': _relative(project, contract_target),
+        'brief': _relative(project, contract_target),
+        'prompt': _relative(project, contract_target),
+        'contract_uid': contract['contract_uid'],
+        'content_digest': contract['content_digest'],
+        'model_alias': 'group/deepseek-2',
+        'effort': 'max',
+        **target,
+        'workspace_group_mode': 'parent',
+        'workspace_group_uid': group.group_uid,
+        'workspace_group_resource_request_uid': group.resource_request_uid,
+        'workspace_group_state': 'pending_host',
+        'source_writer_session_id': None,
+        'source_writer_binding_uid': None,
+        'host_observation': 'unverified',
+        'dispatch_ref': dispatch_ref,
+        'execution_slot_request_uid': None,
+        'execution_slot_identity': None,
+        'execution_slot_owner': None,
+        'execution_slot_state': None,
+        'execution_slot_released_at': None,
+        'execution_slot_released_by': None,
+        'execution_slot_release_reason': None,
+        'execution_slot_scope': 'project',
+        'features': {'multi_agent': False},
+    }
+    slot_request_uid, slot_owner = _candidate_execution_slot(
+        candidate, state,
+    )
+    candidate['execution_slot_request_uid'] = slot_request_uid
+    candidate['execution_slot_owner'] = {
+        'work_uid': slot_owner.work_uid,
+        'session_uid': slot_owner.session_uid,
+        'generation': slot_owner.generation,
+    }
+    task_resource_request_uid = digest_value({
+        'schema': 1,
+        'kind': 'workspace-group-worker',
+        'group_uid': group.group_uid,
+        'task_uid': task_id,
+        'contract_digest': contract['content_digest'],
+        'build_root': target['build_root'],
+    })
+    candidate['resource_request_uid'] = task_resource_request_uid
+    candidate['resource_state'] = 'intent'
+    candidate['status'] = 'preparing'
+    candidate['scheduler_token'] = getattr(args,'_schedule_token',None)
+    data['dispatches'].append(candidate)
+    _save_dispatch(project,state,data)
+    return _complete_workspace_group_intent(project,state,data,candidate,contract)
+
+
+def _complete_workspace_group_intent(project,state,data,candidate,contract):
+    """Resume the same sequential dispatch after a lost grant/file response."""
+    task_id=candidate['task']
+    task=_task_map(state)[task_id]
+    task_resource_request_uid=candidate['resource_request_uid']
+    slot_request_uid=candidate['execution_slot_request_uid']
+    slot_owner=ResourceOwner(**candidate['execution_slot_owner'])
+    contract_target=project.root/candidate['contract']
+    resources = [{
+        'kind': 'build_root',
+        'identity': candidate['build_root'],
+        'disposition': 'delete',
+    }]
+    registry = ResourceRegistry(project.root)
+    try:
+        reserved = registry.reserve_execution_batch(
+            task_resource_request_uid,
+            slot_owner,
+            resources,
+            [(slot_request_uid, slot_owner)],
+            scheduler=candidate.get('scheduler_token'),
+        )
+    except ResourceRegistryError as exc:
+        raise WorkflowError(
+            'DISPATCH_RESOURCE_CONFLICT ' + str(exc)
+        ) from exc
+    slot = reserved['slots'][slot_request_uid]
+    candidate['execution_slot_identity'] = (
+        slot['resources'][0]['identity']
+    )
+    candidate['execution_slot_state'] = slot['state']
+    candidate['resource_state']=reserved['resources']['state']
+    _save_dispatch(project, state, data)
+    atomic(
+        contract_target,
+        render_task_contract(contract, state, task, candidate),
+    )
+    registry.commit(task_resource_request_uid, slot_owner)
+    candidate['resource_state'] = 'committed'
+    candidate['status'] = 'workspace-pending'
+    _save_dispatch(project, state, data)
+    sessions = load_registry(project, state)
+    sessions.setdefault('tasks', {}).setdefault(task_id, {}).update({
+        'dispatch_id': candidate['id'],
+        'dispatch_status': candidate['status'],
+        'contract': candidate['contract'],
+        'brief': candidate['brief'],
+        'prompt': candidate['prompt'],
+        'platform': candidate['platform'],
+        'dispatch_mode': candidate['dispatch_mode'],
+        'contract_uid': candidate['contract_uid'],
+        'content_digest': candidate['content_digest'],
+        'model_alias': candidate['model_alias'],
+        'effort': candidate['effort'],
+        'dispatch_ref': candidate['dispatch_ref'],
+    })
+    save_registry(project, state, sessions)
+    return _workspace_group_result(state, candidate)
+
+
+def dispatch_tasks(project, state, args, caller_binding=None):
     registry = load_registry(project, state)
     controller = next((row for row in registry.get('sessions', []) if row.get('id') == args.session), None)
     if not controller or controller.get('role') != 'controller' or registry.get('controller_session') != args.session:
         raise WorkflowError('CONTROLLER_LEASE_REQUIRED')
+    require_row_capability(project, controller, 'dispatch', state.get('work_uuid'))
+    from .sessions import require_actor_binding
+    require_actor_binding(caller_binding, controller, 'dispatch', state.get('work_uuid'))
+    from .gate_rules import guard_inputs
+    guard_inputs(project,state,binding=caller_binding,phase='dispatch')
     data = load_dispatch(project, state)
     tasks_by_id = _task_map(state)
     target_map, common_platform = _assignment(getattr(args, 'target', []), 'target')
     path_map, common_path = _assignment(getattr(args, 'path', []), 'path')
     worktree_map, common_worktree = _assignment(getattr(args, 'worktree', []), 'worktree')
     requested = list(getattr(args, 'tasks', []) or [])
+    pending_intent = _pending_dispatch_intent(data)
+    schedule_token = (
+        pending_intent['scheduler_token'] if pending_intent is not None else None
+    )
+    if pending_intent is not None:
+        if requested and set(requested) != set(pending_intent['tasks']):
+            raise WorkflowError(
+                'DISPATCH_PREPARATION_PENDING '
+                + pending_intent['request_uid']
+            )
+        requested = list(pending_intent['tasks'])
+    elif not requested and state.get('operation_schema')==2:
+        from .project_scheduler import preview_schedule
+        schedule=preview_schedule(project,limit=int(getattr(args,'max_parallel',3)))
+        requested=[row['task_id'] for row in schedule['batch'] if row['work_uid']==state['work_uuid']]
+        if not requested:
+            raise WorkflowError('DISPATCH_FAIR_TURN_PENDING no project slot granted to this work')
+        schedule_token={'revision':schedule['revision'],'cursor':{'work_uid':state['work_uuid']}}
     if not requested:
         accepted = _accepted_task_ids(state, data)
         existing = {row.get('task') for row in data.get('dispatches', []) if row.get('status') in ACTIVE_DISPATCH}
@@ -450,141 +1158,511 @@ def dispatch_tasks(project, state, args):
         ]
     if not requested:
         raise WorkflowError('DISPATCH_READY_EMPTY')
-    max_parallel = int(getattr(args, 'max_parallel', 4) or 0)
+    workspace_group = getattr(args, 'workspace_group', None)
+    if pending_intent is not None and any(
+            row.get('status')=='preparing' and row.get('workspace_group_mode')=='parent'
+            for row in data.get('dispatches',[])):
+        workspace_group='parent'
+    if workspace_group not in {None, 'parent'}:
+        raise WorkflowError('WORKSPACE_GROUP_MODE_INVALID')
+    if workspace_group == 'parent':
+        args._schedule_token=schedule_token
+        return _dispatch_sequential_parent_group(
+            project, state, args, controller, data, tasks_by_id, requested,
+        )
+    max_parallel = int(getattr(args, 'max_parallel', 3) or 0)
     if max_parallel < 1 or len(requested) > max_parallel:
         raise WorkflowError('DISPATCH_BATCH_LIMIT')
     if len(set(requested)) != len(requested):
         raise WorkflowError('DISPATCH_TASK_DUPLICATE')
     accepted = _accepted_task_ids(state, data)
-    existing_active = {row.get('task') for row in data.get('dispatches', []) if row.get('status') in ACTIVE_DISPATCH}
-    session_hints = _next_session_hints(project, state, len(requested), data)
-    prepared = []
+    existing_active = {
+        row.get('task'): row for row in data.get('dispatches', [])
+        if row.get('status') in ACTIVE_DISPATCH
+    }
+    document_texts, source_paths = _contract_inputs(project, state)
+    for task_id in requested:
+        if task_id not in tasks_by_id:
+            raise WorkflowError('DISPATCH_TASK_NOT_FOUND ' + str(task_id))
+    _require_dispatch_writes_gate(
+        state,
+        document_texts['plan'],
+        [tasks_by_id[task_id] for task_id in requested],
+    )
+    pending_by_task = {
+        row.get('task'): row for row in data.get('dispatches', [])
+        if row.get('status') == 'preparing'
+    }
     supersede = []
-    allocated = []
-    created_documents = []
-    try:
-        for index, task_id in enumerate(requested):
-            task = tasks_by_id.get(task_id)
-            if not task:
-                raise WorkflowError('DISPATCH_TASK_NOT_FOUND ' + str(task_id))
-            if task_id in existing_active and not getattr(args, 'retry', False):
-                raise WorkflowError('DISPATCH_TASK_EXISTS ' + task_id)
-            dependencies = set(task.get('depends') or [])
-            if dependencies - accepted:
-                raise WorkflowError('DISPATCH_DEPENDENCY_BLOCKED ' + task_id)
-            if dependencies.intersection(requested):
-                raise WorkflowError('DISPATCH_DEPENDENCY_BATCH ' + task_id)
-            platform = (target_map.get(task_id) or common_platform or getattr(args, 'platform', None) or 'manual').lower()
-            if platform not in PLATFORMS:
-                raise WorkflowError('DISPATCH_PLATFORM_INVALID ' + platform)
-            mode = (getattr(args, 'dispatch_mode', None) or ('auto' if platform == 'codex' else 'manual')).lower()
-            if mode not in DISPATCH_MODES:
-                raise WorkflowError('DISPATCH_MODE_INVALID ' + mode)
-            requested_worktree = worktree_map.get(task_id) or common_worktree
-            raw_path = path_map.get(task_id) or common_path
-            if not raw_path:
-                raise WorkflowError('DISPATCH_PATH_REQUIRED ' + task_id)
-            dispatch_id = _next_id(data)
-            status = 'adapter-ready' if mode in {'auto', 'adapter'} and platform != 'manual' else 'manual-required'
-            candidate = {
-                'id': dispatch_id,
-                'task': task_id,
+    planned, contracts = [], {}
+    for index, task_id in enumerate(requested):
+        task = tasks_by_id.get(task_id)
+        if not task:
+            raise WorkflowError('DISPATCH_TASK_NOT_FOUND ' + str(task_id))
+        if task_id in existing_active and not getattr(args, 'retry', False):
+            raise WorkflowError('DISPATCH_TASK_EXISTS ' + task_id)
+        dependencies = set(task.get('depends') or [])
+        if dependencies - accepted:
+            raise WorkflowError('DISPATCH_DEPENDENCY_BLOCKED ' + task_id)
+        if dependencies.intersection(requested):
+            raise WorkflowError('DISPATCH_DEPENDENCY_BATCH ' + task_id)
+        platform = (
+            target_map.get(task_id) or common_platform
+            or getattr(args, 'platform', None) or 'manual'
+        ).lower()
+        if platform not in PLATFORMS:
+            raise WorkflowError('DISPATCH_PLATFORM_INVALID ' + platform)
+        mode = (
+            getattr(args, 'dispatch_mode', None)
+            or ('auto' if platform == 'codex' else 'manual')
+        ).lower()
+        if mode not in DISPATCH_MODES:
+            raise WorkflowError('DISPATCH_MODE_INVALID ' + mode)
+        requested_worktree = worktree_map.get(task_id) or common_worktree
+        raw_path = path_map.get(task_id) or common_path
+        if not raw_path:
+            raise WorkflowError('DISPATCH_PATH_REQUIRED ' + task_id)
+        try:
+            contract = _task_contract(project,state,task_id,document_texts,source_paths)
+        except ValueError as exc:
+            raise WorkflowError(str(exc)) from exc
+        contracts[task_id] = contract
+        target = _planned_worktree(
+            project, state, task, requested_worktree,
+            getattr(args, 'worktree_mode', None)
+            or ('bind' if requested_worktree else 'auto'),
+            pending=pending_by_task.get(task_id),
+        )
+        claimed = [_normalize_path(Path(target['worktree']), raw_path)]
+        writes = contract.get('writes') or claimed
+        for previous in planned:
+            if previous['worktree'] != target['worktree']:
+                continue
+            if any(
+                _overlap(left, right)
+                for left in writes for right in previous['writes']
+            ):
+                raise WorkflowError('DISPATCH_PATH_CONFLICT ' + task_id)
+            raise WorkflowError('DISPATCH_WORKTREE_CONFLICT ' + task_id)
+        for previous in data.get('dispatches', []):
+            if (
+                previous.get('status') not in ACTIVE_DISPATCH
+                or previous.get('worktree') != target['worktree']
+            ):
+                continue
+            if previous.get('task') == task_id and getattr(args, 'retry', False):
+                if previous not in supersede:
+                    supersede.append(previous)
+                continue
+            if any(
+                _overlap(left, right)
+                for left in claimed
+                for right in previous.get('claimed_paths') or []
+            ):
+                raise WorkflowError('DISPATCH_PATH_CONFLICT ' + task_id)
+            raise WorkflowError('DISPATCH_WORKTREE_CONFLICT ' + task_id)
+        planned.append({
+            'task': task_id,
+            'platform': platform,
+            'dispatch_mode': mode,
+            'dependencies': sorted(dependencies),
+            'claimed_paths': claimed,
+            'writes': list(writes),
+            **target,
+        })
+    requested_uid = _batch_resource_request_uid(state, planned, contracts)
+    preparing = [
+        row for row in data.get('dispatches', [])
+        if row.get('status') == 'preparing'
+        and row.get('resource_request_uid') == requested_uid
+    ]
+    if preparing and {row.get('task') for row in preparing} != set(requested):
+        raise WorkflowError('DISPATCH_PREPARATION_PENDING ' + requested_uid)
+    if any(
+        row.get('status') == 'preparing'
+        and row.get('resource_request_uid') != requested_uid
+        and row.get('task') in requested
+        for row in data.get('dispatches', [])
+    ):
+        raise WorkflowError('DISPATCH_PREPARATION_PENDING ' + ','.join(requested))
+    if not preparing and not getattr(args, 'retry', False):
+        human_dir = project.paths(state['id'])[1] / 'sessions'
+        for row in planned:
+            targets = (
+                human_dir / f"{row['task']}-contract.md",
+                human_dir / f"{row['task']}-brief.md",
+                human_dir / f"{row['task']}-prompt.md",
+            )
+            if any(target.exists() for target in targets):
+                raise WorkflowError('DISPATCH_PROMPT_EXISTS ' + row['task'])
+
+    if preparing:
+        candidates = preparing
+    else:
+        session_hints = _next_session_hints(
+            project, state, len(requested), data,
+        )
+        candidates = []
+        for index, row in enumerate(planned):
+            dispatch_alias = _next_id(data)
+            dispatch_ref = _allocate_dispatch_ref(
+                project, state, row['task'], dispatch_alias,
+                contracts[row['task']], row,
+            )
+            status = (
+                'adapter-ready'
+                if row['dispatch_mode'] in {'auto', 'adapter'}
+                and row['platform'] != 'manual'
+                else 'manual-required'
+            )
+            candidates.append({
+                'id': dispatch_alias,
+                'task': row['task'],
                 'session_hint': session_hints[index],
-                'platform': platform,
-                'dispatch_mode': mode,
-                'status': status,
-                'claimed_paths': [],
-                'dependencies': sorted(dependencies),
+                'platform': row['platform'],
+                'dispatch_mode': row['dispatch_mode'],
+                'status': 'preparing',
+                'claimed_paths': row['claimed_paths'],
+                'dependencies': row['dependencies'],
                 'created_at': now(),
                 'updated_at': now(),
                 'thread_id': None,
+                'contract': None,
+                'brief': None,
                 'prompt': None,
-            }
-            prepared_row = prepare_worktree(
-                project, state, task, candidate,
-                requested_path=requested_worktree,
-                mode=getattr(args, 'worktree_mode', None) or ('bind' if requested_worktree else 'auto'),
-            )
-            allocated.append(prepared_row)
-            worktree_path = Path(prepared_row['worktree']).resolve()
-            claimed = [_normalize_path(worktree_path, raw_path)]
-            prepared_row['claimed_paths'] = claimed
-            for previous in prepared:
-                if previous['worktree'] != str(worktree_path):
-                    continue
-                if any(_overlap(left, right) for left in claimed for right in previous['claimed_paths']):
-                    raise WorkflowError('DISPATCH_PATH_CONFLICT ' + task_id)
-                raise WorkflowError('DISPATCH_WORKTREE_CONFLICT ' + task_id)
-            for previous in data.get('dispatches', []):
-                if previous.get('status') not in ACTIVE_DISPATCH or previous.get('worktree') != str(worktree_path):
-                    continue
-                if previous.get('task') == task_id and getattr(args, 'retry', False):
-                    supersede.append(previous)
-                    continue
-                if any(_overlap(left, right) for left in claimed for right in previous.get('claimed_paths') or []):
-                    raise WorkflowError('DISPATCH_PATH_CONFLICT ' + task_id)
-                raise WorkflowError('DISPATCH_WORKTREE_CONFLICT ' + task_id)
-            prepared.append(prepared_row)
-        _, human = _folders(project, state)
-        for row in prepared:
-            task = tasks_by_id[row['task']]
-            prompt_target = human / f"{row['task']}-prompt.md"
-            brief_target = human / f"{row['task']}-brief.md"
-            if prompt_target.exists() or brief_target.exists():
-                if not getattr(args, 'retry', False):
-                    raise WorkflowError('DISPATCH_PROMPT_EXISTS ' + row['task'])
-                for target in (prompt_target, brief_target):
-                    if target.exists():
-                        archive = human / 'history' / f"{target.stem}-{row['id']}{target.suffix}"
-                        target.replace(archive)
-            row['brief'] = _relative(project, brief_target)
-            atomic(brief_target, render_task_prompt(state, task, row).replace('子会话启动提示词', '子会话 Brief', 1))
-            created_documents.append(brief_target)
-            atomic(prompt_target, render_task_prompt(state, task, row))
-            created_documents.append(prompt_target)
-            row['prompt'] = _relative(project, prompt_target)
-            data['dispatches'].append(row)
-    except Exception as exc:
-        for document in reversed(created_documents):
+                'contract_uid': contracts[row['task']]['contract_uid'],
+                'content_digest': contracts[row['task']]['content_digest'],
+                'model_alias': 'group/deepseek-2',
+                'effort': 'max',
+                'worktree': row['worktree'],
+                'branch': row['branch'],
+                'base': row['base'],
+                'managed_worktree': row['managed_worktree'],
+                'worktree_mode': row['worktree_mode'],
+                'binding_verified': row['binding_verified'],
+                'common_dir': row['common_dir'],
+                'project_uid': row['project_uid'],
+                'build_root': row['build_root'],
+                'build_env': row['build_env'],
+                'build_mode': row['build_mode'],
+                'resource_request_uid': requested_uid,
+                'resource_state': 'intent',
+                'dispatch_ref': dispatch_ref,
+                'execution_slot_request_uid': None,
+                'execution_slot_identity': None,
+                'execution_slot_owner': None,
+                'execution_slot_state': None,
+                'execution_slot_released_at': None,
+                'execution_slot_released_by': None,
+                'execution_slot_release_reason': None,
+                'execution_slot_scope': 'project',
+                'features': {'multi_agent': False},
+            })
+
+    resource_registry = ResourceRegistry(project.root)
+    binding = controller.get('context_binding') or {}
+    session_ref = binding.get('session') or {}
+    owner = ResourceOwner(
+        work_uid=state['work_uuid'],
+        session_uid=(
+            session_ref.get('uid')
+            or controller.get('binding_uid')
+            or controller['id']
+        ),
+        generation=int(controller.get('controller_generation') or 1),
+    )
+    slot_requests = []
+    for row in candidates:
+        planned_row = next(
+            item for item in planned if item['task'] == row['task']
+        )
+        _ensure_candidate_dispatch_ref(
+            project, state, row,
+            contracts[row['task']], planned_row,
+        )
+        slot_request_uid, slot_owner = _candidate_execution_slot(
+            row, state,
+        )
+        row['execution_slot_request_uid'] = slot_request_uid
+        row['execution_slot_owner'] = {
+            'work_uid': slot_owner.work_uid,
+            'session_uid': slot_owner.session_uid,
+            'generation': slot_owner.generation,
+        }
+        row['scheduler_token'] = schedule_token
+        row['execution_slot_state'] = 'intent'
+        row['updated_at'] = now()
+        slot_requests.append((slot_request_uid, slot_owner))
+    resources = _batch_resources(resource_registry, planned)
+    if not preparing:
+        data['dispatches'].extend(candidates)
+    # The dispatch intent, including the canonical schedule token, must be
+    # durable before the registry can consume a cursor revision or slot.
+    _save_dispatch(project, state, data)
+    try:
+        reserved_batch = resource_registry.reserve_execution_batch(
+            requested_uid, owner, resources, slot_requests,
+            scheduler=schedule_token,
+        )
+    except ResourceRegistryError as exc:
+        for row in candidates:
+            row['status'] = 'preparation-failed'
+            row['resource_state'] = 'not-granted'
+            row['execution_slot_state'] = 'not-granted'
+            row['updated_at'] = now()
+        _save_dispatch(project, state, data)
+        raise WorkflowError('DISPATCH_RESOURCE_CONFLICT ' + str(exc)) from exc
+    reserved = reserved_batch['resources']
+    for row in candidates:
+        row['resource_state'] = reserved['state']
+        slot = reserved_batch['slots'][row['execution_slot_request_uid']]
+        row['execution_slot_identity'] = (
+            slot['resources'][0]['identity']
+        )
+        row['execution_slot_state'] = slot['state']
+        row['updated_at'] = now()
+    _save_dispatch(project, state, data)
+
+    machine, human = _folders(project, state)
+    rendered = {}
+    for row in candidates:
+        task = tasks_by_id[row['task']]
+        rendered[row['task']] = render_task_contract(
+            contracts[row['task']], state, task, row,
+        )
+    for row in candidates:
+        planned_row = next(item for item in planned if item['task'] == row['task'])
+        task = tasks_by_id[row['task']]
+        managed_existing = (
+            row.get('managed_worktree')
+            and Path(row['worktree']).is_dir()
+        )
+        if managed_existing:
             try:
-                document.unlink(missing_ok=True)
-            except OSError:
-                pass
-        pending = _rollback_prepared_worktrees(project, allocated)
-        if pending:
-            detail = '; '.join(f"{item['path']} {item['cleanup_error']}" for item in pending)
-            raise WorkflowError(f'DISPATCH_ROLLBACK_CLEANUP_PENDING {detail}') from exc
-        raise
+                inspection = WorktreeAdapter(project.root).inspect(
+                    row['worktree']
+                )
+            except WorktreeAdapterError as exc:
+                raise WorkflowError(str(exc)) from exc
+            mismatch = next((
+                field for field in (
+                    'branch', 'base', 'common_dir', 'project_uid',
+                )
+                if (
+                    (field == 'base' and inspection.get('head'))
+                    or inspection.get(field)
+                ) != row.get(field)
+            ), None)
+            if mismatch:
+                raise WorkflowError(
+                    'DISPATCH_WORKTREE_RECOVERY_MISMATCH '
+                    + row['task'] + ':' + mismatch
+                )
+            prepared_row = {
+                **row,
+                'path': inspection['path'],
+                'worktree': inspection['path'],
+                'worktree_state': 'created',
+                'updated_at': now(),
+            }
+        elif row.get('worktree_state') == 'bound':
+            prepared_row = prepare_worktree(
+                project, state, task, row,
+                requested_path=row['worktree'],
+                mode='bind',
+            )
+            mismatch = next((
+                field for field in (
+                    'path', 'worktree', 'branch', 'base',
+                    'managed_worktree', 'worktree_mode', 'binding_verified',
+                    'binding_uid', 'common_dir', 'project_uid',
+                    'cleanup_action', 'deletable', 'host_action',
+                )
+                if prepared_row.get(field) != row.get(field)
+            ), None)
+            if mismatch:
+                raise WorkflowError(
+                    'DISPATCH_WORKTREE_RECOVERY_MISMATCH '
+                    + row['task'] + ':' + mismatch
+                )
+        elif row.get('worktree_state') == 'created':
+            inspection = inspect_worktree(project, row['worktree'])
+            prepared_row = {
+                **row,
+                'path': inspection['path'],
+                'worktree': inspection['path'],
+                'branch': inspection['branch'] or row['branch'],
+                'base': inspection['head'],
+                'worktree_state': 'bound',
+                'updated_at': now(),
+            }
+        else:
+            prepared_row = prepare_worktree(
+                project, state, task, row,
+                requested_path=planned_row['worktree']
+                if not planned_row['managed_worktree'] else None,
+                mode=planned_row['worktree_mode'],
+            )
+        prepared_row['status'] = 'preparing'
+        prepared_row['resource_request_uid'] = requested_uid
+        prepared_row['resource_state'] = reserved['state']
+        schedule_intent = row.get('scheduler_token')
+        row.clear()
+        row.update(prepared_row)
+        if 'scheduler_token' not in row:
+            row['scheduler_token'] = schedule_intent
+        _save_dispatch(project, state, data)
+
+    for row in candidates:
+        contract_target = human / f"{row['task']}-contract.md"
+        relative_contract = _relative(project, contract_target)
+        row.update({
+            'contract': relative_contract,
+            'brief': relative_contract,
+            'prompt': relative_contract,
+            'status': (
+                'adapter-ready'
+                if row['dispatch_mode'] in {'auto', 'adapter'}
+                and row['platform'] != 'manual'
+                else 'manual-required'
+            ),
+            'resource_state': 'committed',
+            'updated_at': now(),
+        })
+        atomic(contract_target, rendered[row['task']])
+    resource_registry.commit(requested_uid, owner)
     for previous in supersede:
         previous['status'] = 'superseded'
         previous['updated_at'] = now()
     _save_dispatch(project, state, data)
-    for row in prepared:
+    for row in candidates:
         registry.setdefault('tasks', {}).setdefault(row['task'], {}).update({
             'dispatch_id': row['id'],
             'dispatch_status': row['status'],
+            'contract': row['contract'],
             'brief': row['brief'],
             'platform': row['platform'],
             'dispatch_mode': row['dispatch_mode'],
             'prompt': row['prompt'],
+            'contract_uid': row['contract_uid'],
+            'content_digest': row['content_digest'],
+            'model_alias': row['model_alias'],
+            'effort': row['effort'],
+            'dispatch_ref': row['dispatch_ref'],
         })
     save_registry(project, state, registry)
     return {
         'task': state['id'],
-        'batch_size': len(prepared),
-        'dispatches': prepared,
+        'batch_size': len(candidates),
+        'dispatches': candidates,
         'next_action': 'Codex host adapter creates threads for adapter-ready requests; user forwards manual-required prompts to ZCode or other manual platforms.',
     }
 
 
+def _inflight_blocks_slot_release(state, task_id):
+    inflight = state.get('inflight')
+    if inflight is None:
+        return False
+    if not isinstance(inflight, dict):
+        return True
+    inflight_task = inflight.get('task')
+    if not isinstance(inflight_task, str) or not inflight_task.strip():
+        return True
+    return inflight_task.strip() in {'all', task_id}
 
-def accept_session_task(project, state, args):
+
+def release_execution_slot_for_report(
+    project, state, task_id, status, session_id,
+):
+    """Release only a terminal worker's slot after its report is durable."""
+    if status not in {'DONE', 'BLOCKED', 'CHANGE_REQUEST'}:
+        return {'released': False, 'reason': 'non-terminal-report'}
+    if _inflight_blocks_slot_release(state, task_id):
+        inflight = state.get('inflight')
+        inflight_task = (
+            inflight.get('task') if isinstance(inflight, dict) else None
+        )
+        return {
+            'released': False,
+            'reason': 'unresolved-inflight',
+            'inflight_task': inflight_task,
+        }
+    registry = load_registry(project, state, create=False)
+    mapping = (registry.get('tasks') or {}).get(task_id) or {}
+    dispatch_id = mapping.get('dispatch_id')
+    if not dispatch_id:
+        return {'released': False, 'reason': 'legacy-without-dispatch'}
+    data = load_dispatch(project, state)
+    row = next(
+        (
+            item for item in data.get('dispatches', [])
+            if item.get('id') == dispatch_id
+            and item.get('status') != 'superseded'
+        ),
+        None,
+    )
+    if row is None:
+        raise WorkflowError(
+            'SESSION_REPORT_DISPATCH_NOT_FOUND ' + str(task_id)
+        )
+    dispatch_ref = row.get('dispatch_ref') or {}
+    if (
+        row.get('task') != task_id
+        or not isinstance(dispatch_ref, dict)
+        or not dispatch_ref.get('uid')
+    ):
+        raise WorkflowError('SESSION_REPORT_SLOT_AUTHORITY_INVALID')
+    request_uid = row.get('execution_slot_request_uid')
+    owner = row.get('execution_slot_owner')
+    if request_uid is None and owner is None:
+        return {'released': False, 'reason': 'legacy-without-slot'}
+    if not request_uid or not isinstance(owner, dict):
+        raise WorkflowError('SESSION_REPORT_SLOT_AUTHORITY_INVALID')
+    if (
+        owner.get('work_uid') != state.get('work_uuid')
+        or owner.get('session_uid') != dispatch_ref.get('uid')
+    ):
+        raise WorkflowError('SESSION_REPORT_SLOT_AUTHORITY_INVALID')
+    try:
+        slot = ResourceRegistry(project.root).release_execution_slot(
+            request_uid,
+            owner,
+            row.get('execution_slot_identity'),
+        )
+    except ResourceRegistryError as exc:
+        raise WorkflowError(
+            'SESSION_REPORT_SLOT_RELEASE_FAILED ' + str(exc)
+        ) from exc
+    changed = (
+        row.get('execution_slot_state') != slot['state']
+        or row.get('execution_slot_released_at') is None
+    )
+    row['execution_slot_state'] = slot['state']
+    if changed:
+        row['execution_slot_released_at'] = now()
+        row['execution_slot_released_by'] = session_id
+        row['execution_slot_release_reason'] = status
+        row['updated_at'] = row['execution_slot_released_at']
+        _save_dispatch(project, state, data)
+    return {
+        'released': True,
+        'request_uid': request_uid,
+        'identity': slot['resources'][0]['identity'],
+        'state': slot['state'],
+    }
+
+
+
+def accept_session_task(project, state, args, caller_binding=None):
     """Accept one completed worker report and trigger owned cleanup."""
     registry = load_registry(project, state)
     controller = next((row for row in registry.get('sessions', [])
                        if row.get('id') == args.session), None)
     if not controller or controller.get('role') != 'controller' or registry.get('controller_session') != args.session:
         raise WorkflowError('CONTROLLER_LEASE_REQUIRED')
+    require_row_capability(project, controller, 'accept', state.get('work_uuid'))
+    from .sessions import require_actor_binding
+    require_actor_binding(caller_binding, controller, 'accept', state.get('work_uuid'))
     task_id = args.task
     data = load_dispatch(project, state)
     rows = [row for row in data.get('dispatches', [])
@@ -737,8 +1815,20 @@ def session_progress(project, state):
     }
 
 
-def watch_session_events(project, state, args):
+def watch_session_events(project, state, args, caller_binding=None):
     registry = load_registry(project, state)
+    controller = next(
+        (row for row in registry.get('sessions', [])
+         if row.get('id') == registry.get('controller_session')),
+        None,
+    )
+    if controller is None:
+        raise WorkflowError('CONTROLLER_LEASE_REQUIRED')
+    require_row_capability(project, controller, 'report', state.get('work_uuid'))
+    from .sessions import require_actor_binding
+    require_actor_binding(
+        caller_binding, controller, 'report', state.get('work_uuid'),
+    )
     adapter = getattr(args, 'adapter', None) or 'manual'
     limit = int(getattr(args, 'limit', 20) or 20)
     if limit < 1:
@@ -770,7 +1860,20 @@ def watch_session_events(project, state, args):
     }
 
 
-def clean_session_worktree(project, state, args):
+def clean_session_worktree(project, state, args, caller_binding=None):
+    registry = load_registry(project, state)
+    controller = next(
+        (row for row in registry.get('sessions', [])
+         if row.get('id') == registry.get('controller_session')),
+        None,
+    )
+    if controller is None:
+        raise WorkflowError('CONTROLLER_LEASE_REQUIRED')
+    require_row_capability(project, controller, 'accept', state.get('work_uuid'))
+    from .sessions import require_actor_binding
+    require_actor_binding(
+        caller_binding, controller, 'accept', state.get('work_uuid'),
+    )
     data = load_dispatch(project, state)
     task_id = args.task
     rows = [row for row in data.get('dispatches', [])
@@ -791,6 +1894,9 @@ def clean_session_worktree(project, state, args):
                          and item.get('result') in {'removed', 'released'}), None)
         if existing:
             return {'task': state['id'], 'cleanup': existing, 'idempotent': True}
+        if caller_binding is not None:
+            from .resource_operations import ensure_work_evidence
+            ensure_work_evidence(project,state,binding=caller_binding)
         cleanup_result = cleanup_worktree(project, row, args.reason, retry=True)
         row.update(cleanup_result)
         cleanup = {

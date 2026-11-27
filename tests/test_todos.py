@@ -1,5 +1,8 @@
 from process_helpers import docfolder
 from process_helpers import document
+from process_helpers import public_main_binding
+from process_helpers import session_binding
+from process_helpers import temporary_env
 """Backlog lifecycle behavior; isolated projects, real verification subprocesses."""
 from contextlib import redirect_stdout, redirect_stderr
 import io
@@ -10,7 +13,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from gsp.runtime import main
+from gsp.runtime import Project, contract_hash, fingerprint, main
 
 
 class TodoTests(unittest.TestCase):
@@ -18,6 +21,17 @@ class TodoTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='gsp-todos-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.home = tempfile.TemporaryDirectory(prefix='gsp-todos-home-')
+        self.addCleanup(self.home.cleanup)
+        codex_home = Path(self.home.name) / '.codex'
+        codex_home.mkdir()
+        self.fixture_env = temporary_env({
+            'HOME': self.home.name,
+            'USERPROFILE': self.home.name,
+            'CODEX_HOME': str(codex_home),
+            'GSP_SESSION_CONTEXT': '',
+        }).start()
+        self.addCleanup(self.fixture_env.stop)
 
     def cli(self, *args, ok=True):
         out, err = io.StringIO(), io.StringIO()
@@ -41,13 +55,33 @@ class TodoTests(unittest.TestCase):
             args += ['--' + key.replace('_', '-'), value]
         return self.cli('todo-add', *args)
 
+    def bind_work(self, run='work'):
+        state = json.loads(
+            (self.root / '.gsp/runs' / run / 'state.json').read_text(encoding='utf-8')
+        )
+        binding = public_main_binding(
+            self.root, state['work_uuid'], thread='todos-' + run,
+        )
+        self.context = self.root / binding.handle_path
+        self.context_env = temporary_env({
+            'GSP_SESSION_CONTEXT': str(self.context),
+        }).start()
+        self.addCleanup(self.context_env.stop)
+
     def work(self):
         self.cli('new', 'work', '--title', 'Fixture implementation')
+        self.bind_work()
         doc = docfolder(self.root,'work')
         document(self.root, 'work', 'design').write_text('# Design\nHandle the configuration path with a meaningful result.\n', encoding='utf-8')
         self.cli('approve', 'work', '--quote', 'SYNTHETIC TEST fixture approval')
         self.cli('task-add', 'work', 'T1', '--title', 'Configuration', '--acceptance', 'Missing configuration handled')
-        document(self.root, 'work', 'plan').write_text('# Plan\nT1 implement and test configuration behavior.\n', encoding='utf-8')
+        document(self.root, 'work', 'plan').write_text(
+            '# Plan\n\n## T1: Configuration\n'
+            'Outcome: Missing configuration is handled and tested.\n'
+            'Convergence: {"requires_slices":false,"single_outcome":'
+            '"Missing configuration is handled and tested."}\n',
+            encoding='utf-8',
+        )
         self.cli('seal-plan', 'work')
         self.cli('scope', 'work', '--off', '--quote', 'SYNTHETIC TEST fixture choice')
         self.cli('advance', 'work', '--to', 'execute')
@@ -62,9 +96,25 @@ class TodoTests(unittest.TestCase):
     def prepare_delivery(self, doc):
         self.finish_task()
         self.cli('run', 'work', '--task', 'all', '--', sys.executable, '-m', 'unittest', '-v')
-        (doc / 'review.md').write_text('# Review\nFixture self-review checked actual task and current follow-ups.\n', encoding='utf-8')
+        project = Project(self.root)
+        state = project.ledger_state('work')
+        reviewer = session_binding(
+            self.root, state['work_uuid'], kind='reviewer',
+            thread='todos-independent-reviewer', capabilities={'report'},
+        )
+        metadata = {
+            'candidate_digest': fingerprint(project.verification_root(state)),
+            'contract_digest': contract_hash(project, state, doc),
+            'reviewer_context': reviewer.handle_path,
+            'findings': [],
+        }
+        (doc / 'review.md').write_text(
+            '# Review\nIndependent specification and quality review checked the task.\n'
+            '<!-- gsp-review-evidence\n' + json.dumps(metadata) + '\n-->\n',
+            encoding='utf-8',
+        )
         self.cli('advance', 'work', '--to', 'review')
-        self.cli('review', 'work', '--reviewer', 'self', '--blocking', '0')
+        self.cli('review', 'work', '--reviewer', 'fresh-context', '--blocking', '0')
         self.cli('advance', 'work', '--to', 'checking')
 
     def test_initialize_creates_project_backlog(self):

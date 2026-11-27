@@ -13,6 +13,7 @@ class MonthLayoutTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        Project(self.root).initialize()
         self.book = Governance(self.root)
 
     def at(self, month, title):
@@ -47,6 +48,7 @@ class MonthLayoutTests(unittest.TestCase):
         project = Project(self.root)
         project.initialize()
         dispatch(project, parser().parse_args(['new', 'fresh', '--title', 'Fresh task']))
+        project.dashboard(project.ledger_state('fresh'))
         text = (self.root/'docs/gsp/README.md').read_text(encoding='utf-8')
         for name in ('plan.md', 'decisions.md', 'delivery.md'):
             self.assertNotIn(name, text)
@@ -55,6 +57,7 @@ class MonthLayoutTests(unittest.TestCase):
         self.assertIn('spec.md', text)
         spec.write_text('# Real specification with acceptance criteria', encoding='utf-8')
         dispatch(project, parser().parse_args(['approve', 'fresh', '--quote', 'approved']))
+        project.dashboard(project.ledger_state('fresh'))
         self.assertIn('plan.md', (self.root/'docs/gsp/README.md').read_text(encoding='utf-8'))
 
     def test_saved_monthly_design_is_protected_without_local_run(self):

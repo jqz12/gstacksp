@@ -6,6 +6,7 @@ it to a task is handled by the runtime layer after an explicit user choice.
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 import os
 import re
 import json
@@ -14,14 +15,119 @@ import subprocess
 from pathlib import Path
 from typing import Iterable
 
-from .runtime import (WorkflowError, cached_value, head_branch, parallel_required,
-                      topology_selected, visible_git_marker)
+from .core import (WorkflowError, cached_value)
+from .git_operations import (head_branch, visible_git_marker)
+from .workflow_support import (parallel_required, topology_selected)
+from .orchestration_types import RequestRef, WorktreeRequest, digest_value
 
 
-_KINDS = {'feature', 'fix', 'docs', 'test', 'refactor', 'chore', 'research'}
+_KINDS = {'codex','feature', 'fix', 'docs', 'test', 'refactor', 'chore', 'research'}
 _INTENT_WORKTREE = {'parallel-multi-task', 'cross-session', 'full-stack'}
 _WORKFLOW_PREFIXES = ('.gsp/', 'docs/gsp/', 'docs/work/', 'docs/superpowers/', '.superpowers/')
 _WORKFLOW_FILES = {'.gitignore', 'TODOS.md', 'TODO.md'}
+
+
+@dataclass(frozen=True)
+class WorkspaceExpectation:
+    """Expected immutable facts for one existing native worktree."""
+
+    project_uid: str
+    work_uid: str | None
+    task_uid: str | None
+    owner: str
+    owner_adapter: str
+    base_sha: str
+    head_sha: str
+    branch: str
+    request_uid: str
+    request_digest: str
+    receipt_digest: str
+    control_root: str
+    source_root: str
+    common_dir: str
+    schema: int = 1
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: dict) -> "WorkspaceExpectation":
+        if not isinstance(value, dict):
+            raise WorkflowError('WORKSPACE_EXPECTATION_INVALID')
+        expected = {
+            'schema', 'project_uid', 'work_uid', 'task_uid', 'owner',
+            'owner_adapter', 'base_sha', 'head_sha', 'branch',
+            'request_uid', 'request_digest', 'receipt_digest',
+            'control_root', 'source_root', 'common_dir',
+        }
+        if set(value) != expected:
+            raise WorkflowError('WORKSPACE_EXPECTATION_INVALID fields')
+        item = cls(**value)
+        item.validate()
+        return item
+
+    def validate(self) -> None:
+        if self.schema != 1:
+            raise WorkflowError('WORKSPACE_EXPECTATION_INVALID schema')
+        for name in (
+            'project_uid', 'owner', 'owner_adapter',
+            'base_sha', 'head_sha', 'branch', 'request_uid',
+            'request_digest', 'receipt_digest', 'control_root',
+            'source_root', 'common_dir',
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise WorkflowError('WORKSPACE_EXPECTATION_INVALID ' + name)
+        if self.work_uid is not None and (
+            not isinstance(self.work_uid, str) or not self.work_uid.strip()
+        ):
+            raise WorkflowError('WORKSPACE_EXPECTATION_INVALID work_uid')
+        if self.task_uid is not None and (
+            not isinstance(self.task_uid, str) or not self.task_uid.strip()
+        ):
+            raise WorkflowError('WORKSPACE_EXPECTATION_INVALID task_uid')
+        for name in ('request_digest', 'receipt_digest'):
+            if re.fullmatch(r'[a-f0-9]{64}', getattr(self, name)) is None:
+                raise WorkflowError('WORKSPACE_EXPECTATION_INVALID ' + name)
+
+
+@dataclass(frozen=True)
+class WorkspaceProof:
+    """Read-only Git and native attachment facts, never a permission grant."""
+
+    project_uid: str
+    work_uid: str | None
+    task_uid: str | None
+    owner: str
+    owner_adapter: str
+    control_root: str
+    source_root: str
+    source_top_level: str
+    common_dir: str
+    source_common_dir: str
+    git_dir: str
+    marker_path: str
+    marker_digest: str
+    backlink_path: str
+    backlink_value: str
+    registered: bool
+    registration_head: str
+    registration_branch: str
+    base_sha: str
+    head: str
+    branch: str
+    detached: bool
+    clean: bool
+    native_operation_id: str
+    attachment_id: str
+    request_uid: str
+    request_digest: str
+    receipt_digest: str
+    verified_at: str
+    schema: int = 1
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 def _run(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -194,6 +300,59 @@ def probe(root: Path, active_tasks: Iterable[dict] | None = None, include_branch
     return cached_value('git_probe', key, load)
 
 
+def workspace_group_binding_projection(state: dict, task_id: str, group, authority: dict) -> dict:
+    """Project group authority into topology facts without mutating either source."""
+    if not hasattr(group, 'to_dict') or not isinstance(authority, dict):
+        raise WorkflowError('WORKSPACE_GROUP_PROJECTION_INPUT_INVALID')
+    group_value = group.to_dict()
+    topology = state.get('git_topology') or {}
+    return {
+        'schema': 1,
+        'work': state.get('id'),
+        'task': task_id,
+        'topology': {
+            'control_root': group_value.get('control_root'),
+            'workspace_root': group_value.get('workspace_root'),
+            'common_dir': group_value.get('common_dir'),
+            'project_uid': group_value.get('project_uid'),
+            'branch': group_value.get('branch'),
+            'base_sha': group_value.get('base_sha'),
+            'mode': group_value.get('mode'),
+            'source': 'workspace_groups.WorkspaceGroup from WorktreeAdapter',
+            'state_binding_present': bool(topology),
+        },
+        'ownership': {
+            'group_uid': group_value.get('group_uid'),
+            'controller_binding_uid': group_value.get('controller_binding_uid'),
+            'source_writer_session_id': authority.get('source_writer_session_id'),
+            'source_writer_binding_uid': authority.get('source_writer_binding_uid'),
+            'source_writer_status': authority.get('source_writer_status'),
+            'source': 'sessions/index.json workspace_leases via SessionWorkspaceLeaseAuthority',
+        },
+        'cleanup_action': {
+            'action': 'release-source-writer',
+            'root_lifecycle': 'parent-workspace-reused',
+            'remove_root': False,
+            'source': 'workspace_groups.release_workspace_group; root/branch resource claim remains',
+        },
+        'verification': {
+            'registered': bool(group_value.get('common_dir')),
+            'project_uid': group_value.get('project_uid'),
+            'resource_state': authority.get('resource_state'),
+            'lease_revision': authority.get('lease_revision'),
+            'source_writer_observed': bool(authority.get('source_writer_session_id')),
+            'host_observation': authority.get('host_observation', 'unverified'),
+            'native_host_receipt': 'NOT_CHECKED',
+            'sources': {
+                'git': 'git worktree registration/common-dir through WorktreeAdapter',
+                'resources': 'ResourceRegistry resource request',
+                'lease': 'sessions/index.json workspace_leases',
+            },
+        },
+        'read_only': True,
+    }
+
+
 def _probe(root: Path, active_tasks: Iterable[dict] | None = None, include_branches: bool = True,
            include_status: bool = True, include_worktrees: bool = True) -> dict:
     """Return a read-only, machine-readable Git topology inventory."""
@@ -307,6 +466,355 @@ def _probe(root: Path, active_tasks: Iterable[dict] | None = None, include_branc
     }
 
 
+def _same_path(left: Path | str, right: Path | str) -> bool:
+    raw_left = str(left)
+    raw_right = str(right)
+    # For facts carried inside a raw host receipt, canonical case is enough:
+    # resolving relative to this process cwd would turn a hostile relative path
+    # into a real local path and weaken the alias/escape check.
+    if not Path(raw_left).is_absolute() or not Path(raw_right).is_absolute():
+        return os.path.normcase(raw_left.replace('/', '\\')).rstrip('\\') == (
+            os.path.normcase(raw_right.replace('/', '\\')).rstrip('\\')
+        )
+    return os.path.normcase(str(Path(left).resolve())) == os.path.normcase(
+        str(Path(right).resolve())
+    )
+
+
+def _strict_expected_path(value: str, code: str) -> Path:
+    path = Path(value)
+    if not path.is_absolute() or '..' in path.parts:
+        raise WorkflowError(code)
+    lexical = os.path.normcase(os.path.abspath(str(path)))
+    canonical = os.path.normcase(str(path.resolve()))
+    if lexical != canonical:
+        raise WorkflowError(code)
+    return path.resolve()
+
+
+def _git_required(root: Path, *args: str, code: str) -> str:
+    try:
+        result = _run(root, *args)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise WorkflowError(code + ' ' + str(exc)) from exc
+    if result.returncode:
+        raise WorkflowError(code + ' ' + (result.stderr.strip() or result.stdout.strip()))
+    return result.stdout.strip()
+
+
+def _native_tool_payload(receipt: dict, key: str) -> dict:
+    envelope = receipt.get(key)
+    value = envelope.get('value') if isinstance(envelope, dict) else None
+    if (
+        not isinstance(envelope, dict)
+        or envelope.get('status') != 'fulfilled'
+        or not isinstance(value, dict)
+        or value.get('isError') is not False
+        or not isinstance(value.get('content'), list)
+        or not value['content']
+    ):
+        raise WorkflowError('NATIVE_RECEIPT_INVALID ' + key)
+    for item in value['content']:
+        if isinstance(item, dict) and item.get('type') == 'text':
+            try:
+                payload = json.loads(item.get('text') or '')
+            except (TypeError, ValueError) as exc:
+                raise WorkflowError('NATIVE_RECEIPT_INVALID ' + key) from exc
+            if isinstance(payload, dict):
+                return payload
+    raise WorkflowError('NATIVE_RECEIPT_INVALID ' + key)
+
+
+def verify_registered_native_workspace(
+    control_root: Path,
+    source_root: Path,
+    request: WorktreeRequest,
+    receipt: dict,
+    expected: WorkspaceExpectation,
+    *,
+    allow_dirty: bool = False,
+    allow_detached: bool = False,
+) -> WorkspaceProof:
+    """Prove one external checkout from Git plus exact native attachment facts.
+
+    This function is intentionally read-only. A receipt is only one input; the
+    returned proof records the independently observed Git registration,
+    backlink, branch, HEAD, base ancestry and cleanliness facts.
+    """
+    if type(allow_dirty) is not bool:
+        raise WorkflowError('NATIVE_ALLOW_DIRTY_INVALID')
+    if not isinstance(expected, WorkspaceExpectation):
+        raise WorkflowError('WORKSPACE_EXPECTATION_REQUIRED')
+    expected.validate()
+    if not isinstance(request, WorktreeRequest) or not isinstance(request.request, RequestRef):
+        raise WorkflowError('WORKTREE_REQUEST_REQUIRED')
+    if not isinstance(receipt, dict):
+        raise WorkflowError('NATIVE_RECEIPT_REQUIRED')
+
+    control = _strict_expected_path(
+        str(control_root), 'NATIVE_CONTROL_ROOT_ALIAS_OR_ESCAPE',
+    )
+    source = _strict_expected_path(
+        str(source_root), 'NATIVE_SOURCE_ROOT_ALIAS_OR_ESCAPE',
+    )
+    expected_control = _strict_expected_path(
+        expected.control_root, 'NATIVE_CONTROL_ROOT_ALIAS_OR_ESCAPE',
+    )
+    expected_source = _strict_expected_path(
+        expected.source_root, 'NATIVE_SOURCE_ROOT_ALIAS_OR_ESCAPE',
+    )
+    common = _strict_expected_path(
+        expected.common_dir, 'NATIVE_COMMON_DIR_ALIAS_OR_ESCAPE',
+    )
+    if not _same_path(control, expected_control):
+        raise WorkflowError('NATIVE_CONTROL_ROOT_MISMATCH')
+    if not _same_path(source, expected_source):
+        raise WorkflowError('NATIVE_SOURCE_ROOT_MISMATCH alias or escape is not accepted')
+    if _same_path(control, source):
+        raise WorkflowError('NATIVE_WORKSPACE_OUTSIDE_CONTROL_REQUIRED')
+    if not control.is_dir() or not source.is_dir():
+        raise WorkflowError('NATIVE_WORKSPACE_MISSING')
+
+    marker = control / '.gsp' / 'project.json'
+    if not marker.is_file():
+        raise WorkflowError('NATIVE_CONTROL_MARKER_MISSING')
+    try:
+        marker_value = json.loads(marker.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError) as exc:
+        raise WorkflowError('NATIVE_CONTROL_MARKER_INVALID') from exc
+    if marker_value.get('id') != expected.project_uid:
+        raise WorkflowError('NATIVE_CONTROL_PROJECT_MISMATCH')
+
+    source_marker = source / '.gsp' / 'project.json'
+    if source_marker.is_file():
+        try:
+            source_identity = json.loads(
+                source_marker.read_text(encoding='utf-8-sig')
+            )
+        except (OSError, ValueError) as exc:
+            raise WorkflowError('NATIVE_SOURCE_MARKER_INVALID') from exc
+        if source_identity.get('id') != expected.project_uid:
+            raise WorkflowError('NATIVE_SOURCE_PROJECT_MISMATCH')
+
+    backlink_path = source / '.git'
+    if not backlink_path.is_file():
+        raise WorkflowError(
+            'NATIVE_WORKSPACE_UNREGISTERED source is not a linked worktree'
+        )
+    try:
+        backlink_text = backlink_path.read_text(encoding='utf-8').strip()
+    except OSError as exc:
+        raise WorkflowError('NATIVE_BACKLINK_INVALID') from exc
+    if not backlink_text.lower().startswith('gitdir:'):
+        raise WorkflowError('NATIVE_BACKLINK_INVALID')
+    raw_git_dir = backlink_text.split(':', 1)[1].strip()
+    backlink_target = (
+        Path(raw_git_dir) if Path(raw_git_dir).is_absolute()
+        else (source / raw_git_dir)
+    ).resolve()
+    if not backlink_target.is_dir():
+        raise WorkflowError('NATIVE_BACKLINK_INVALID missing gitdir')
+
+    control_common_raw = _git_required(
+        control, 'rev-parse', '--git-common-dir',
+        code='NATIVE_CONTROL_GIT_UNVERIFIED',
+    )
+    source_top = Path(_git_required(
+        source, 'rev-parse', '--show-toplevel',
+        code='NATIVE_SOURCE_GIT_UNVERIFIED',
+    )).resolve()
+    source_common_raw = _git_required(
+        source, 'rev-parse', '--git-common-dir',
+        code='NATIVE_SOURCE_GIT_UNVERIFIED',
+    )
+    source_git_raw = _git_required(
+        source, 'rev-parse', '--git-dir',
+        code='NATIVE_SOURCE_GIT_UNVERIFIED',
+    )
+    source_common = (source / source_common_raw).resolve()
+    source_git_dir = (source / source_git_raw).resolve()
+    control_common = (control / control_common_raw).resolve()
+    if not _same_path(source_top, source):
+        raise WorkflowError('NATIVE_SOURCE_TOP_LEVEL_MISMATCH')
+    if not _same_path(control_common, common):
+        raise WorkflowError('NATIVE_CONTROL_COMMON_DIR_MISMATCH')
+    if not _same_path(source_common, common):
+        raise WorkflowError('NATIVE_COMMON_DIR_MISMATCH other repository')
+    if not _same_path(source_git_dir, backlink_target):
+        raise WorkflowError('NATIVE_BACKLINK_MISMATCH')
+    if _git_required(
+        source, 'rev-parse', '--is-bare-repository',
+        code='NATIVE_SOURCE_GIT_UNVERIFIED',
+    ) != 'false':
+        raise WorkflowError('NATIVE_SOURCE_BARE_UNSUPPORTED')
+    if _git_required(
+        source, 'rev-parse', '--is-inside-work-tree',
+        code='NATIVE_SOURCE_GIT_UNVERIFIED',
+    ) != 'true':
+        raise WorkflowError('NATIVE_SOURCE_WORKTREE_UNKNOWN')
+    superproject = _git_required(
+        source, 'rev-parse', '--show-superproject-working-tree',
+        code='NATIVE_SOURCE_GIT_UNVERIFIED',
+    )
+    if superproject:
+        raise WorkflowError('NATIVE_SOURCE_SUBMODULE_UNSUPPORTED')
+
+    raw_worktrees = _git_required(
+        control, 'worktree', 'list', '--porcelain', '-z',
+        code='NATIVE_WORKTREE_LIST_UNVERIFIED',
+    )
+    worktrees = _parse_worktrees(raw_worktrees)
+    registrations = [
+        row for row in worktrees
+        if row.get('path') and _same_path(row['path'], source)
+    ]
+    if len(registrations) != 1:
+        raise WorkflowError('NATIVE_WORKSPACE_UNREGISTERED')
+    registration = registrations[0]
+    branch = _run(source, 'branch', '--show-current')
+    if branch.returncode:
+        raise WorkflowError('NATIVE_SOURCE_GIT_UNVERIFIED ' + branch.stderr.strip())
+    branch_name = branch.stdout.strip()
+    detached=not branch_name and bool(registration.get('detached'))
+    if (not branch_name or registration.get('detached')) and not (allow_detached and detached):
+        raise WorkflowError('NATIVE_WORKSPACE_DETACHED')
+    head = _git_required(
+        source, 'rev-parse', 'HEAD', code='NATIVE_SOURCE_HEAD_UNVERIFIED',
+    )
+    if registration.get('head') != head:
+        raise WorkflowError('NATIVE_REGISTRATION_HEAD_MISMATCH')
+    if registration.get('branch') != (branch_name or None):
+        raise WorkflowError('NATIVE_REGISTRATION_BRANCH_MISMATCH')
+    status = _run(
+        source, 'status', '--porcelain=v1', '-z', '--untracked-files=all',
+    )
+    if status.returncode:
+        raise WorkflowError('NATIVE_SOURCE_STATUS_UNVERIFIED ' + status.stderr.strip())
+    clean = not bool(status.stdout)
+    if not clean and not allow_dirty:
+        raise WorkflowError('NATIVE_WORKSPACE_DIRTY')
+
+    request_digest = digest_value(request.to_dict())
+    receipt_digest = digest_value(receipt)
+    if request.request.project_uid != expected.project_uid:
+        raise WorkflowError('NATIVE_REQUEST_PROJECT_MISMATCH')
+    if request.request.work_uid != expected.work_uid:
+        raise WorkflowError('NATIVE_REQUEST_WORK_MISMATCH')
+    if request.request.request_uid != expected.request_uid:
+        raise WorkflowError('NATIVE_REQUEST_UID_MISMATCH')
+    if request.owner_adapter != expected.owner_adapter:
+        raise WorkflowError('NATIVE_REQUEST_OWNER_MISMATCH')
+    if not _same_path(request.source_root, control):
+        raise WorkflowError('NATIVE_REQUEST_SOURCE_MISMATCH')
+    if request.path_hint and not _same_path(request.path_hint, source):
+        raise WorkflowError('NATIVE_REQUEST_PATH_MISMATCH')
+    if (
+        request.base_sha != expected.base_sha
+        or request.branch != expected.branch
+        or request_digest != expected.request_digest
+    ):
+        raise WorkflowError('NATIVE_REQUEST_CHANGED')
+    if receipt_digest != expected.receipt_digest:
+        raise WorkflowError('NATIVE_RECEIPT_DIGEST_MISMATCH')
+    if (
+        receipt.get('schema') != 1
+        or receipt.get('kind') != 'observed-native-tool-receipts'
+        or receipt.get('request_uid') != expected.request_uid
+    ):
+        raise WorkflowError('NATIVE_RECEIPT_REQUEST_MISMATCH')
+
+    creation = _native_tool_payload(receipt, 'creation_status')
+    operation_id = str(creation.get('operationId') or '').strip()
+    result = creation.get('result') if isinstance(creation, dict) else None
+    if (
+        not operation_id
+        or creation.get('stage') != 'completed'
+        or receipt.get('operation_id') != operation_id
+        or not isinstance(result, dict)
+        or result.get('type') != 'created'
+        or result.get('registrationError') not in (None, '')
+        or not result.get('worktreeGitRoot')
+        or not result.get('worktreeWorkspaceRoot')
+        or not _same_path(result['worktreeGitRoot'], source)
+        or not _same_path(result['worktreeWorkspaceRoot'], source)
+    ):
+        raise WorkflowError('NATIVE_CREATION_RECEIPT_MISMATCH')
+
+    attachments_payload = _native_tool_payload(
+        receipt, 'attachments_after_creation',
+    )
+    attachments = attachments_payload.get('attachments')
+    if not isinstance(attachments, list):
+        raise WorkflowError('NATIVE_ATTACHMENT_RECEIPT_INVALID')
+    matches = []
+    for item in attachments:
+        payload = item.get('payload') if isinstance(item, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        if (
+            item.get('attachmentType') == 'worktree'
+            and item.get('identityKey')
+            and _same_path(item['identityKey'], source)
+            and payload.get('root')
+            and payload.get('workspaceRoot')
+            and _same_path(payload['root'], source)
+            and _same_path(payload['workspaceRoot'], source)
+            and payload.get('sourceCwd')
+            and _same_path(payload['sourceCwd'], control)
+        ):
+            matches.append(item)
+    if len(matches) != 1:
+        raise WorkflowError('NATIVE_ATTACHMENT_MISMATCH')
+    attachment = matches[0]
+    host_owner = str(attachment['payload'].get('hostId') or '')
+    if expected.owner != host_owner:
+        raise WorkflowError('NATIVE_WORKSPACE_OWNER_MISMATCH')
+    if (not detached and expected.branch != branch_name) or expected.branch != request.branch:
+        raise WorkflowError('NATIVE_WORKSPACE_BRANCH_MISMATCH')
+    if expected.head_sha != head:
+        raise WorkflowError('NATIVE_WORKSPACE_HEAD_MISMATCH')
+    ancestry = _run(source, 'merge-base', '--is-ancestor', expected.base_sha, head)
+    if ancestry.returncode:
+        raise WorkflowError('NATIVE_WORKSPACE_BASE_MISMATCH')
+
+    return WorkspaceProof(
+        project_uid=expected.project_uid,
+        work_uid=expected.work_uid,
+        task_uid=expected.task_uid,
+        owner=expected.owner,
+        owner_adapter=expected.owner_adapter,
+        control_root=str(control),
+        source_root=str(source),
+        source_top_level=str(source_top),
+        common_dir=str(common),
+        source_common_dir=str(source_common),
+        git_dir=str(source_git_dir),
+        marker_path=str(marker.resolve()),
+        marker_digest=hashlib.sha256(marker.read_bytes()).hexdigest(),
+        backlink_path=str(backlink_path.resolve()),
+        backlink_value=backlink_text,
+        registered=True,
+        registration_head=str(registration.get('head')),
+        registration_branch=str(registration.get('branch')),
+        base_sha=expected.base_sha,
+        head=head,
+        branch=branch_name or None,
+        detached=detached,
+        clean=clean,
+        native_operation_id=operation_id,
+        attachment_id=str(attachment.get('id') or ''),
+        request_uid=expected.request_uid,
+        request_digest=request_digest,
+        receipt_digest=receipt_digest,
+        verified_at=_now_iso(),
+    )
+
+
+def _now_iso() -> str:
+    from datetime import datetime
+    return datetime.now().astimezone().isoformat(timespec='seconds')
+
+
 def recommend(inventory: dict, context: dict) -> dict:
     """Recommend a mode without mutating Git or pretending to have user consent."""
     risks = list(inventory.get('risks') or [])
@@ -355,7 +863,7 @@ def recommend(inventory: dict, context: dict) -> dict:
 
 def _binding_index(root):
     """Map bound workspace to (run, status, task id) for residue reporting."""
-    from .runtime import read
+    from .core import (read)
     index = {}
     for file in (Path(root) / '.gsp' / 'runs').glob('*/state.json'):
         try:

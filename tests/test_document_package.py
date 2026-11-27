@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+import shutil
 import unittest
 
 
@@ -11,6 +12,12 @@ class PackagePrivacyTests(unittest.TestCase):
         self.assertTrue(hasattr(m,'collect_files'),'package needs an auditable privacy boundary')
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
+            (root/'skills').mkdir()
+            shutil.copyfile(Path(__file__).resolve().parents[1]/'skills/skill-manifest.json',
+                            root/'skills/skill-manifest.json')
+            manifest=m.skill_catalog.load_manifest(root)
+            for entry in m.skill_catalog.public_entries(manifest):
+                (root/entry.payload_root).mkdir(parents=True,exist_ok=True)
             for rel in ['docs/gsp/tasks/private/review.md','docs/work/2026/private/brief.md','research/reports/other/report.json','docs/guide.md','gsp/runtime.py','README.md']:
                 p=root/rel;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('fixture')
             names={p.relative_to(root).as_posix() for p in m.collect_files(root)}

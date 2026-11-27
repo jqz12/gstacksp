@@ -113,6 +113,15 @@ class EvidenceSelectionIntegrationTests(unittest.TestCase):
         self.git('commit', '-qm', 'baseline')
         self.cmd('new', 'work', '--title', '证据选择', '--intent', 'single-task')
         state = self.state()
+        # This published evidence-selection fixture predates the convergence schema.
+        # Keep the product gate intact; only this synthetic work is legacy.
+        state.pop('convergence_schema', None)
+        self.project.write(
+            state,
+            'fixture-legacy-convergence',
+            'legacy evidence-selection fixture created before convergence schema',
+            action_uid='fixture:legacy-convergence:evidence-selection',
+        )
         self.project.document(state, 'design').write_text('# Design\nFixture evidence selection.', encoding='utf-8')
         self.cmd('approve', 'work', '--quote', 'SYNTHETIC fixture approved')
         self.cmd('task-add', 'work', 'T01', '--title', 'Implementation T01', '--acceptance', 'Checks pass')

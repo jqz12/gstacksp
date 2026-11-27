@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP scrape"
-  short_description: "GstackSP 项目工作流：用户需要从可访问网页提取结构化数据时"
-  default_prompt: "Use $gsp-scrape for the relevant part of this project task."

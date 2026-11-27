@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP setup-deploy"
-  short_description: "GstackSP 项目工作流：项目第一次需要配置具体部署目标与验证流程时"
-  default_prompt: "Use $gsp-setup-deploy for the relevant part of this project task."

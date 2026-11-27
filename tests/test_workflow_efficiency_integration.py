@@ -13,7 +13,7 @@ from gsp.build_context import BUILD_LEASE_NAME, compatibility_key
 from gsp.hosts import terminate_owned
 from gsp.runtime import Project, WorkflowError, atomic, dispatch, parser, read
 from tests import test_topology_lifecycle as topology_lifecycle
-from tests.process_helpers import popen, run as run_process
+from tests.process_helpers import popen, run as run_process, session_binding
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,13 +44,29 @@ class WorkflowEfficiencyIntegrationTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / 'project'
         self.root.mkdir()
+        self.contexts = {}
+
+    def bind_legacy_fixture(self, project, state):
+        # These scenarios retain the published execution/lease contract; the
+        # modern convergence declarations have separate normal-entry coverage.
+        state.pop('convergence_schema', None)
+        project.write(state, 'fixture', 'legacy efficiency scenario',
+                      action_uid='fixture:legacy-efficiency')
+        binding=session_binding(project.root,state['work_uuid'],'main','codex','efficiency-main')
+        self.contexts[str(project.root.resolve())]=str(project.root/binding.handle_path)
 
     def call(self, *argv, ok=True, env=None, timeout=120, root=None):
         target = Path(root or self.root)
+        child_env=dict(env if env is not None else clean_environment())
+        child_env.pop('GSP_SESSION_CONTEXT',None)
+        if str(target.resolve()) in self.contexts:
+            child_env['GSP_SESSION_CONTEXT']=self.contexts[str(target.resolve())]
+        child_env.update(HOME=self.tmp.name,USERPROFILE=self.tmp.name,
+                         CODEX_HOME=str(Path(self.tmp.name)/'.codex'))
         result = run_process(
             [sys.executable, str(CLI), '--project', str(target), *argv],
             cwd=target, capture_output=True, text=True, encoding='utf-8',
-            errors='replace', timeout=timeout, env=env or clean_environment())
+            errors='replace', timeout=timeout, env=child_env)
         if ok is True:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         elif ok is False:
@@ -92,6 +108,7 @@ class WorkflowEfficiencyIntegrationTests(unittest.TestCase):
         self.initialize_git()
         self.call('new', self.run_id(), '--title', 'Efficiency integration',
                   '--intent', 'single-task')
+        self.bind_legacy_fixture(Project(self.root),self.state())
         self.document('design').write_text(
             '# Design\nFive tasks exercise public delivery and evidence selection.\n',
             encoding='utf-8')
@@ -201,6 +218,7 @@ class WorkflowEfficiencyIntegrationTests(unittest.TestCase):
 
         cmd('new', 'work', '--title', 'Build integration', '--intent', 'single-task')
         state = read(root / '.gsp' / 'runs' / 'work' / 'state.json')
+        self.bind_legacy_fixture(project,state)
         project.document(state, 'design').write_text(
             '# Design\nBuild context and lease integration.\n', encoding='utf-8')
         cmd('approve', 'work', '--quote', 'SYNTHETIC fixture approval')
@@ -311,7 +329,10 @@ class WorkflowEfficiencyIntegrationTests(unittest.TestCase):
              'run', 'work', '--task', 'T01', '--kind', 'tests', '--timeout', '60',
              '--', sys.executable, str(long_program)],
             cwd=first_root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding='utf-8', env=clean_environment())
+            text=True, encoding='utf-8', env=clean_environment(
+                GSP_SESSION_CONTEXT=self.contexts[str(first_root.resolve())],
+                HOME=self.tmp.name, USERPROFILE=self.tmp.name,
+                CODEX_HOME=str(Path(self.tmp.name)/'.codex')))
         try:
             def current_lease():
                 if not lease_path.is_file():
@@ -357,6 +378,9 @@ class WorkflowEfficiencyIntegrationTests(unittest.TestCase):
         finally:
             if process.poll() is None:
                 terminate_owned(process)
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
 
 
 if __name__ == '__main__':

@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP devex-review"
-  short_description: "GstackSP 项目工作流：工具实现后需要实际验证安装、首次使用、错误与恢复体验时"
-  default_prompt: "Use $gsp-devex-review for the relevant part of this project task."

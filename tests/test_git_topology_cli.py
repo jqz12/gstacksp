@@ -6,9 +6,11 @@ import unittest
 from pathlib import Path
 
 try:
-    from process_helpers import run
+    from process_helpers import public_main_binding, run, temporary_env
 except ModuleNotFoundError:  # direct unittest module invocation from repository root
-    from tests.process_helpers import run
+    from tests.process_helpers import public_main_binding, run, temporary_env
+
+from gsp.runtime import Project
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,8 +20,20 @@ CLI = ROOT / 'scripts' / 'gsp.py'
 class GitTopologyCliTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='gsp-topology-cli-')
+        self.addCleanup(self.tmp.cleanup)
         self.project = Path(self.tmp.name) / 'project'
         self.project.mkdir()
+        self.home = Path(self.tmp.name) / 'home'
+        self.home.mkdir()
+        codex_home = self.home / '.codex'
+        codex_home.mkdir()
+        self.fixture_env = temporary_env({
+            'HOME': str(self.home),
+            'USERPROFILE': str(self.home),
+            'CODEX_HOME': str(codex_home),
+            'GSP_SESSION_CONTEXT': '',
+        }).start()
+        self.addCleanup(self.fixture_env.stop)
         self.git('init', '-q', '-b', 'main')
         self.git('config', 'user.name', 'Topology CLI Test')
         self.git('config', 'user.email', 'topology-cli@example.invalid')
@@ -27,9 +41,6 @@ class GitTopologyCliTests(unittest.TestCase):
         self.git('add', 'README.md')
         self.git('commit', '-qm', 'chore: baseline')
         self.prepare_task()
-
-    def tearDown(self):
-        self.tmp.cleanup()
 
     def git(self, *args):
         result = run(['git', *args], cwd=self.project, capture_output=True, text=True,
@@ -53,6 +64,19 @@ class GitTopologyCliTests(unittest.TestCase):
         self.cli('init')
         self.cli('new', 'task', '--title', '拓扑 CLI 验收')
         state = self.state()
+        state.pop('convergence_schema', None)
+        Project(self.project).write(
+            state, 'fixture', 'legacy topology CLI fixture',
+            action_uid='fixture:legacy-git-topology-cli',
+        )
+        binding = public_main_binding(
+            self.project, state['work_uuid'], thread='topology-cli-main',
+        )
+        self.context = self.project / binding.handle_path
+        self.context_env = temporary_env({
+            'GSP_SESSION_CONTEXT': str(self.context),
+        }).start()
+        self.addCleanup(self.context_env.stop)
         (self.project / state['documents']['design']).write_text(
             '# 拓扑 CLI 验收\n\n确认任务拓扑和工作区绑定。\n', encoding='utf-8')
         self.cli('approve', 'task', '--quote', '批准拓扑 CLI 验收设计')
@@ -95,7 +119,7 @@ class GitTopologyCliTests(unittest.TestCase):
         self.assertEqual(self.git('branch', '--show-current'), 'feature/GSP-000001-T01-拓扑-cli')
 
     def test_worktree_choice_keeps_control_root_and_creates_source_workspace(self):
-        self.cli('topology-select', 'task', '--mode', 'worktree',
+        self.cli('topology-select', 'task', '--mode', 'worktree', '--legacy-worktree',
                  '--branch', 'feature/GSP-000001-T01-拓扑-worktree', '--quote', '选择独立 worktree 隔离')
         state = self.state()
         topology = state['git_topology']

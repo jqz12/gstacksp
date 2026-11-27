@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import stat
 
-from .runtime import inside
+from .core import (inside)
 from .verification_inputs import BUILD_DIRS
 
 

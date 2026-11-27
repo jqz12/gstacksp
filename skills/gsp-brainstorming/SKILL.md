@@ -11,6 +11,8 @@ Artifact layout is adapted, not the method: use the paths returned by GSP status
 
 Use the [output and handoff contract](../gsp-workflow/references/output-handoff.md) for actual results, honestly attributed skills used, evidence, next action and owner. Return nested methods to the current task; continue authorized work without a redundant approval.
 
+Conditional methods are indexed in [methods](../gsp-workflow/references/methods.md). Only when the actual 触发条件 applies, read the complete method; do not load every method by default.
+
 ### GSP stage integration
 
 开始先读项目根 TODOS.md 和既有决定，避免重复提出已延期或已完成工作；非目标不自动变成待办。
@@ -21,7 +23,9 @@ Before handing this stage onward, apply the [artifact fidelity checks](../gsp-wo
 
 Use the same artifact contract to route applicable engineering responsibilities from design to tasks, evidence and current documentation: data/recovery, configuration/dependencies, integration, project materials, delivery and maintenance. Expand only the topics triggered by this change; no extra mandatory table, document set or skill sequence. Headless plan workers return self-reviewed content; the controller owns registration and sealing.
 
-Stage transitions use the unified controller: preview with `<gsp> handoff <id> --to <stage>` and advance with `<gsp> advance <id> --to <stage>`. Read `next_skill` and pending gates; do not treat chat text as a handoff or mutate workflow state around a failed advance.
+Stage transitions follow [stage-transitions](../gsp-workflow/references/stage-transitions.md); a routine advance is one business operation and active preview is optional.
+
+Cross-session and recovery follow [cross-session](../gsp-workflow/references/cross-session.md). Read it only when that mode or recovery is active.
 
 <!-- sp-preserved-body:begin -->
 # Brainstorming

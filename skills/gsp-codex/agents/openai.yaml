@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP codex"
-  short_description: "GstackSP 项目工作流：需要由另一可用宿主或模型提供独立代码或方案意见时"
-  default_prompt: "Use $gsp-codex for the relevant part of this project task."

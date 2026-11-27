@@ -15,11 +15,11 @@
 | subagent-driven-development | upstream/skills/subagent-driven-development/ORIGINAL.md |
 | dispatching-parallel-agents | upstream/skills/dispatching-parallel-agents/ORIGINAL.md |
 | using-git-worktrees | upstream/skills/using-git-worktrees/ORIGINAL.md |
-| test-driven-development | gsp-test-driven-development |
-| systematic-debugging | gsp-systematic-debugging |
+| test-driven-development | `gsp-workflow/methods/gsp-test-driven-development/METHOD.md`（execute 条件方法） |
+| systematic-debugging | `gsp-workflow/methods/gsp-systematic-debugging/METHOD.md`（execute 条件方法） |
 | requesting-code-review | gsp-review 主文及原版 code-reviewer.md |
 | receiving-code-review | upstream/skills/receiving-code-review/ORIGINAL.md |
-| verification-before-completion | gsp-verify |
+| verification-before-completion | gsp-review 的 verify 条件方法 |
 | finishing-a-development-branch | gsp-ship |
 | writing-skills | gsp-writing-skills |
 | diagnosing-superpowers | gsp-diagnosing-superpowers，仅用户指定会话诊断时使用 |
@@ -42,13 +42,13 @@ SP 的 progress.md 是每个计划、每个工作树的 scratch ledger，不是�
 
 ## 宿主和 Windows 的必要适配
 
-原版工具映射仅是参考，实际宿主工具契约优先。不得因模型/effort 建议改全局配置；覆盖仅在宿主允许、用户授权或明确角色能力需要时使用。当前 full-history fork 不允许覆盖模型；需独立上下文时使用最小 task brief。等待按宿主限制并及时通知，不机械阻塞 5–10 分钟。不可用代理按原版允许的自查降级，如实标明，不假称独立。
+当前默认且唯一支持的集成宿主是 Codex。Codex 原生聊天、代理、历史、压缩/恢复、模型参数和 worktree 是运行事实源；GSP 保存业务关联、必要证据和验收，不另造会话数据库或代理运行时。Goal 仅在用户明确创建目标时使用。`drive-*` 只作为用户明确要求的 legacy 兼容入口。原版工具映射仍是参考，实际 Codex 工具契约优先；不得因模型/effort 建议改全局配置，覆盖仅在宿主允许、用户授权或明确角色能力需要时使用。等待按宿主限制并及时通知，不机械阻塞 5–10 分钟。不可用代理按原版允许的自查降级，如实标明，不假称独立。
 
 原版部分脚本已有 Git Bash/cygpath 适配，并非全都不可用；但完整保留不代表已做 Windows 实机认证。依赖 Bash/Node/Graphviz 的辅助工具启用前检测，按显式解释器调用，包括无扩展名脚本的内部依赖。Windows 子进程隐藏窗口。视觉 companion 需接受及实际工具；能力缺失如实降级，不假造原型或浏览器验证。审查临时目录用宿主临时位置，保留不改工作树/index/HEAD 的约束。
 
-## 授权、冻结与阶段衔接
+## 授权、工作区与阶段衔接
 
-用户当前要求优先。首次实现冻结问一次，已有指示不重问。worktree 按需；选用时保持原版已有隔离探测、忽略规则、子模块处理、基线和归属清理。按项目实际依赖配置安装，不机械认为 pyproject.toml 就必须用 Poetry。冻结与 worktree 均不等于沙箱。
+用户当前要求优先。目录冻结已退役，旧 freeze 状态只作历史读取。worktree 按需；选用时保持原版已有隔离探测、忽略规则、子模块处理、基线和归属清理。按项目实际依赖配置安装，不机械认为 pyproject.toml 就必须用 Poetry。worktree 与资源租约均不等于沙箱。
 
 默认先讨论确认设计。对同一已确认内容不重复批准，改变设计仍需核对范围。只有真实无人值守授权才按有依据的推荐连续处理普通技术选择；不能削弱设计质量、测试、审查和失败上限。默认到交付准备。原版自动提交示例、固定收尾菜单、英语 discard 口令不能替代或扩大真实授权；已有精确推送/合并/删除授权不重问，付费、部署、消息等按实际范围。未提交或不归属本任务的文件不擅自删除。
 
@@ -58,10 +58,10 @@ SP 的 progress.md 是每个计划、每个工作树的 scratch ledger，不是�
 
 - brainstorming：读根待办；保留完整讨论、设计、builder check；确认后 approve。
 - writing-plans：保留完整任务粒度、全局约束、Review Focus、spec coverage；根待办按需关联，完整 task-add 后 seal-plan。按风险使用 autoplan/UI/devex，不叠加 GS 四阶段。
-- execute：resume 核对，不重复已完成任务；CLI 登记和证据；后台显式读取 driver.md 并 drive-init/start，不能和当前会话并发写。原生 run 持续写脱敏日志、进度与终态，长命令用 run-status 观察；相同空等待最多两次，第三次前检查日志、进程或产物。真实构建环境以 Popen 注入和回执为准，不把 prompt 文本当环境证明。
+- execute：resume 核对，不重复已完成任务；默认使用 Codex 原生聊天、代理、历史和 worktree，CLI 只登记业务身份、契约与证据。只有用户明确要求脱离会话连续执行时才把 driver.md 的 `drive-*` 当作 legacy 兼容入口，不能和当前会话并发写。原生 run 持续写脱敏日志、进度与终态，长命令用 run-status 观察；相同空等待最多两次，第三次前检查日志、进程或产物。真实构建环境以 Popen 注入和回执为准，不把 prompt 文本当环境证明。
 - review：请求和接收反馈两份原文均需使用；审查 SHA 范围覆盖整个任务而非机械 HEAD~1。独立审查保留完整模板，自查注明限制；review.md 保存范围、结论、发现和未覆盖，再 CLI review 登记。审查者先核对已有证据，仅具体疑点补跑，不无意义重复全套。
 - verify/ship：核对根待办、真实证据、最终 all 回归、当前整体审查后 ready。原版 evidence-before-claims 保留；证据按命令入口和有效集合选择，适用失败、截断日志、输入/契约/epoch/workspace 变化与篡改继续阻止完成，不能旧日志冒充当前验证。observe-head 无变化是 no-op，status --brief 和 run-status 都不是交付证明。外部动作完成后补交付，不预先称成功。
-- learn/context：经验有来源追加，本地保存；save/resume 管恢复。不默认向 gbrain 外发。
+- context：Codex 原生聊天历史和压缩负责会话延续，save/resume 只恢复经核验的 GSP 业务绑定和证据。既有经验历史与 gbrain 配置保持原样，不因技能退役迁移或外发。
 
 ## 维护要求
 

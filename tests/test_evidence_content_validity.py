@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gsp.runtime import Project, WorkflowError, atomic, dispatch, evidence_for, parser, read
+from gsp.runtime import Project, WorkflowError, dispatch, evidence_for, parser, read
 from tests.process_helpers import run
 
 
@@ -34,9 +34,6 @@ class EvidenceContentValidityTests(unittest.TestCase):
     def state(self):
         return read(self.root / '.gsp/runs/work/state.json')
 
-    def save_state(self, state):
-        atomic(self.root / '.gsp/runs/work/state.json', state)
-
     def setup_git(self):
         self.git('init', '-q', '-b', 'main')
         (self.root / 'source.txt').write_text('baseline', encoding='utf-8')
@@ -46,6 +43,15 @@ class EvidenceContentValidityTests(unittest.TestCase):
     def prepare(self):
         self.cmd('new', 'work', '--title', '证据内容自证', '--intent', 'single-task')
         state = self.state()
+        # This published evidence-validity fixture predates the convergence schema.
+        # Keep the product gate intact; only this synthetic work is legacy.
+        state.pop('convergence_schema', None)
+        self.project.write(
+            state,
+            'fixture-legacy-convergence',
+            'legacy evidence-validity fixture created before convergence schema',
+            action_uid='fixture:legacy-convergence:evidence-content-validity',
+        )
         self.project.document(state, 'design').write_text('# Design\nFixture evidence content validity.', encoding='utf-8')
         self.cmd('approve', 'work', '--quote', 'SYNTHETIC fixture approved')
         self.cmd('task-add', 'work', 'T01', '--title', 'Implementation T01', '--acceptance', 'Checks pass')
@@ -87,7 +93,13 @@ class EvidenceContentValidityTests(unittest.TestCase):
         self.done('T01')
         state = self.state()
         state['inflight'] = {'id': 'fixture-run', 'kind': 'check', 'task': 'T01', 'at': '2026-11-22T00:00:00+00:00'}
-        self.save_state(state)
+        # Simulate a durable unknown execution without bypassing the journal.
+        self.project.write(
+            state,
+            'fixture-unknown-execution',
+            'preserve an unknown execution for recovery',
+            action_uid='fixture:evidence-content-validity:unknown-execution',
+        )
         report = self.project.paths('work')[1] / 'recovery-fixture.md'
         report.write_text('# Recovery\nFixture unknown execution investigated as failed.', encoding='utf-8')
         self.cmd('recover-run', 'work', '--evidence', str(report), '--outcome', 'failed')

@@ -1,4 +1,5 @@
 """Per-command validation cache boundaries and fail-closed phase checks."""
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -60,6 +61,17 @@ class ValidationContextUnitTests(unittest.TestCase):
             context.assert_unchanged()
         context.begin_phase('final')
         context.assert_unchanged()
+
+    def test_state_snapshot_uses_content_digest_not_stat_metadata(self):
+        context = self.context()
+        initial_stat = self.state_file.stat()
+        self.state_file.write_text('{"status":"waiting"}', encoding='utf-8')
+        os.utime(
+            self.state_file,
+            ns=(initial_stat.st_atime_ns, initial_stat.st_mtime_ns),
+        )
+        with self.assertRaisesRegex(WorkflowError, 'VALIDATION_STATE_CHANGED'):
+            context.assert_unchanged()
 
     def test_atomic_write_invalidates_active_context(self):
         context = self.context()

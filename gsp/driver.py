@@ -1,5 +1,6 @@
 """Durable local headless controller. Host prose never directly completes a task."""
 from argparse import Namespace
+import copy
 from contextlib import contextmanager
 import json
 import math
@@ -11,9 +12,14 @@ import threading
 import time
 import uuid
 
-from .runtime import (Project, WorkflowError, atomic, digest, dispatch, fingerprint, inside,
-                      locked, now, read, redact, run_check, sha, slug)
+from .core import (WorkflowError, atomic, digest, inside, now, read, redact, sha)
+from .project import (Project)
+from .workflow_locks import (locked)
+from .workflow_operations import (dispatch)
+from .workflow_support import (fingerprint, run_check, slug, stable_action_uid)
 from .hosts import child_options, codex_argv, identity, is_alive, prompt, terminate_owned
+from .codex_worker_adapter import run_worker
+from .command_execution import execute_command
 
 
 def _object(properties):
@@ -47,13 +53,40 @@ class Driver:
             raise WorkflowError('DRIVER_PROJECT_MISMATCH')
         return self.data
 
-    def save(self, event):
+    def _append_event(self, record):
+        path = self.folder / 'events.jsonl'
+        event_uid = record.get('event_uid')
+        if event_uid:
+            if path.exists():
+                for raw in path.read_text(encoding='utf-8').splitlines():
+                    try:
+                        existing = json.loads(raw)
+                    except (TypeError, ValueError):
+                        continue
+                    if not isinstance(existing, dict) or existing.get('event_uid') != event_uid:
+                        continue
+                    keys = ('at', 'event', 'revision', 'dispatches', 'reason')
+                    if any(existing.get(key) != record.get(key) for key in keys):
+                        raise WorkflowError('DRIVER_EVENT_CONFLICT ' + event_uid)
+                    return False
+        with path.open('a', encoding='utf-8') as stream:
+            stream.write(json.dumps(record, ensure_ascii=False) + '\n')
+        return True
+
+    def save(self, event, event_uid=None, event_at=None):
         self.data['updated'] = now()
         self.data['revision'] = self.data.get('revision', 0) + 1
+        record = {
+            'at': event_at or now(),
+            'event': event,
+            'revision': self.data['revision'],
+            'dispatches': self.data['dispatches'],
+            'reason': self.data.get('reason'),
+        }
+        if event_uid:
+            record['event_uid'] = event_uid
         atomic(self.file, self.data)
-        with (self.folder / 'events.jsonl').open('a', encoding='utf-8') as stream:
-            stream.write(json.dumps({'at': now(), 'event': event, 'revision': self.data['revision'],
-                                     'dispatches': self.data['dispatches'], 'reason': self.data.get('reason')}) + '\n')
+        self._append_event(record)
         self.report()
 
     def report(self):
@@ -68,7 +101,145 @@ class Driver:
                 f"- 任务与证据：[交付](delivery.md)、[审查](review.md)、[计划]({self.project.document_link(read(self.run / 'state.json'), 'plan', self.doc)})、[规格]({self.project.document_link(read(self.run / 'state.json'), 'design', self.doc)})。\n\n"
                 '恢复入口：先 drive-status 查看当前 gate/attempt；等待普通答复用 drive-answer，'
                 '执行未知先检查进程/现场并写报告再 drive-recover，之后 drive-start。不要直接重置状态或消耗计数。\n')
-        atomic(self.doc / 'driver-report.md', text)
+        path = self.doc / 'driver-report.md'
+        if path.exists() and path.read_text(encoding='utf-8') == text:
+            return False
+        atomic(path, text)
+        return True
+
+    def _recovery_request(self, report, reason):
+        binding = json.dumps(
+            self.data.get('binding'), ensure_ascii=False, sort_keys=True, separators=(',', ':')
+        ).encode('utf-8')
+        return {
+            'evidence': str(report),
+            'evidence_sha256': sha(report.read_bytes()),
+            'reason': redact(reason),
+            'reason_sha256': sha(reason.encode('utf-8')),
+            'binding_sha256': sha(binding),
+        }
+
+    @staticmethod
+    def _recovery_event(event, revision, dispatches, reason, event_at, event_uid):
+        return {
+            'at': event_at,
+            'event': event,
+            'revision': revision,
+            'dispatches': dispatches,
+            'reason': reason,
+            'event_uid': event_uid,
+        }
+
+    def _pending_recovery_request_matches(self, pending, request):
+        if pending.get('request') != request:
+            raise WorkflowError('RECOVERY_INPUT_CHANGED pending recovery request differs')
+
+    def _recovery_plan_proof(self, state):
+        plan = self.project.document(state, 'plan').resolve()
+        try:
+            relative = plan.relative_to(self.project.root.resolve()).as_posix()
+        except ValueError as exc:
+            raise WorkflowError('RECOVERY_PLAN_CHANGED plan path escapes the project') from exc
+        sealed = bool(state.get('plan_seal'))
+        if sealed:
+            try:
+                self.project.valid_plan(state, self.doc)
+            except (WorkflowError, OSError, TypeError, KeyError) as exc:
+                raise WorkflowError('RECOVERY_PLAN_CHANGED sealed plan is no longer valid') from exc
+        exists = plan.is_file()
+        if plan.exists() and not exists:
+            raise WorkflowError('RECOVERY_PLAN_CHANGED plan path is not a file')
+        try:
+            content_sha256 = sha(plan.read_bytes()) if exists else None
+        except OSError as exc:
+            raise WorkflowError('RECOVERY_PLAN_CHANGED plan bytes cannot be read') from exc
+        proof = {
+            'schema': 1,
+            'path': relative,
+            'sealed': sealed,
+            'exists': exists,
+            'sha256': content_sha256,
+        }
+        if sealed:
+            proof['seal_sha256'] = state['plan_seal'].get('sha256')
+            proof['tasks_sha256'] = state['plan_seal'].get('tasks_sha256')
+        return proof
+
+    def _pending_recovery_plan_matches(self, pending, state):
+        frozen = pending.get('plan_proof')
+        if not isinstance(frozen, dict) or frozen.get('schema') != 1:
+            raise WorkflowError('RECOVERY_PLAN_CHANGED pending recovery has no frozen plan proof')
+        if frozen != self._recovery_plan_proof(state):
+            raise WorkflowError('RECOVERY_PLAN_CHANGED physical plan differs from recovery intent')
+
+    def _recovery_operation(self, action_uid):
+        from .identity_store import IdentityStore
+        from .operation_journal import project_write_logical_key
+        key = project_write_logical_key(self.task, action_uid)
+        return IdentityStore(self.project.root).operation_for_logical_key(key)
+
+    def _repair_pending_recovery_projection(self, pending):
+        self._append_event(pending['prepared_event'])
+        self.report()
+
+    def _repair_completed_recovery_projection(self, record):
+        self._append_event(record['prepared_event'])
+        self._append_event(record['completed_event'])
+        self.report()
+
+    def _accepted_recovery_workflow(self, pending):
+        from .identity_store import IdentityStore
+        from .operation_journal import project_write_logical_key
+
+        state_file = self.run / 'state.json'
+        current = sha(state_file.read_bytes())
+        if current == pending['expected_state_digest']:
+            return current
+        store = IdentityStore(self.project.root)
+        key = project_write_logical_key(self.task, pending['action_uid'])
+        operation = store.operation_for_logical_key(key)
+        if operation is None or operation.get('expected_state_digest') != pending['expected_state_digest']:
+            raise WorkflowError('RECOVERY_STATE_CHANGED workflow advanced outside the frozen operation')
+        accepted = {
+            value for value in (
+                operation.get('new_state_digest'),
+                operation.get('result_ref'),
+            ) if value
+        }
+        candidate = store.get_operation_candidate(operation['operation_uid'])
+        if candidate is not None:
+            accepted.add(candidate.candidate_digest)
+        if current not in accepted:
+            raise WorkflowError('RECOVERY_STATE_CHANGED workflow differs from the frozen operation')
+        return current
+
+    def _completed_recovery_noop(self, request):
+        if self.data.get('pending_recovery'):
+            return None
+        recoveries = self.data.get('recoveries') or []
+        if not recoveries:
+            return None
+        record = recoveries[-1]
+        if (record.get('request') != request
+                or record.get('completed_driver_revision') != self.data.get('revision')
+                or record.get('completed_status') != self.data.get('status')
+                or self.data.get('pending')
+                or self.data.get('pending_check')
+                or self.stop_requested()):
+            return None
+        if sha((self.run / 'state.json').read_bytes()) != record.get('workflow_result_digest'):
+            return None
+        operation = self._recovery_operation(record.get('action_uid'))
+        if (operation is None or operation.get('operation_uid') != record.get('operation_uid')
+                or operation.get('phase') != 'committed'):
+            return None
+        return record
+
+    def _recovery_is_required(self):
+        return (self.data.get('status') in ('waiting', 'blocked', 'stopped')
+                or bool(self.data.get('pending'))
+                or bool(self.data.get('pending_check'))
+                or bool(self.data.get('pending_fix')))
 
     def initialize(self, args):
         with locked(self.project.root):
@@ -78,8 +249,6 @@ class Driver:
             self.project.valid_design(state, doc)
             if state['mode'] != 'unattended' or not state.get('mode_quote'):
                 raise WorkflowError('UNATTENDED_AUTHORIZATION_REQUIRED create the task with actual unattended authorization')
-            if state['scope']['mode'] == 'pending':
-                raise WorkflowError('SCOPE_PENDING')
             if state.get('plan_seal'):
                 self.project.valid_plan(state, doc)
             checks = read(args.checks)
@@ -151,47 +320,121 @@ class Driver:
         remaining = self.data['deadline'] - time.time()
         if remaining <= 0:
             raise WorkflowError('DEADLINE_EXCEEDED')
-        args = Namespace(task=task, kind=self.data['config']['check_kind'], argv=self.data['config']['checks'],
-                         timeout=min(self.data['config']['timeout'], remaining), runner=self.run_owned_check)
+        argv = list(self.data['config']['checks'])
+        source_root = (
+            self.project.verification_root(state)
+            if task == 'all'
+            else self.project.workspace_root(state, task_id=task)
+        )
+        from .build_context import command_environment, resolve_context
+        build_context = resolve_context(
+            self.project, state, task, argv, os.environ, source_root=source_root,
+        )
+        command_env = command_environment(os.environ, build_context)
+
+        def runner(command, timeout, **context):
+            return self.run_owned_check(
+                command, timeout,
+                source_root=context.get('source_root', source_root),
+                env=context.get('env', command_env),
+                build_context=context.get('build_context', build_context),
+                on_started=context.get('on_started'),
+            )
+
+        args = Namespace(
+            task=task, kind=self.data['config']['check_kind'], argv=argv,
+            timeout=min(self.data['config']['timeout'], remaining),
+            runner=runner,
+        )
         return run_check(self.project, state, self.run, args)
 
     def stop_requested(self):
         return (self.folder/'stop.json').exists() or read(self.file).get('stop_requested', False)
 
-    def run_owned_check(self, argv, timeout):
-        process = subprocess.Popen(argv, cwd=self.project.root, stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, encoding='utf-8', errors='replace', **child_options())
-        try:
-            self.data['pending_check'] = identity(process.pid)
-            self.save('check-started')
-            deadline = min(time.time()+timeout, self.data['deadline'])
-            while True:
-                if self.stop_requested():
-                    raise WorkflowError('STOP_REQUESTED check terminated; inspect partial changes')
-                remaining=deadline-time.time()
-                if remaining <= 0:
-                    raise WorkflowError('CHECK_TIMEOUT outcome unknown; inspect partial changes')
-                try:
-                    stdout,stderr=process.communicate(timeout=min(.1,remaining))
-                    break
-                except subprocess.TimeoutExpired:
-                    pass
+    def run_owned_check(self, argv, timeout, *, source_root=None, env=None,
+                        build_context=None, on_started=None):
+        remaining = min(timeout, self.data['deadline'] - time.time())
+        if remaining <= 0:
+            raise WorkflowError('DEADLINE_EXCEEDED')
+        source_root = Path(source_root or self.project.root).resolve()
+        command_env = dict(os.environ if env is None else env)
+        folder = self.folder / 'checks' / uuid.uuid4().hex
+        started = {}
+
+        def attach_started(process):
+            with locked(self.project.root):
+                self.load()
+                self.data['pending_check'] = identity(process.pid)
+                self.save('check-started')
+                started['driver_digest'] = digest(self.file)
+            if on_started is not None:
+                on_started(process)
+
+        def cancel_check():
+            if self.stop_requested():
+                return ('STOP_REQUESTED check terminated; inspect partial changes')
+            return None
+
+        execution = execute_command(
+            argv, source_root, command_env, remaining, folder,
+            {
+                'task': self.task,
+                'argv': [redact(value) for value in argv],
+                'build_context': {
+                    key: (build_context or {}).get(key)
+                    for key in ('mode', 'root', 'provenance', 'compatibility_key')
+                },
+            },
+            on_started=attach_started,
+            cancel_check=cancel_check,
+        )
+        if ('driver_digest' in started
+                and digest(self.file) != started['driver_digest']):
+            raise WorkflowError(
+                'CONTROL_CHANGED driver bookkeeping changed during check')
+        status = execution.get('status')
+        if status == 'cancelled':
+            raise WorkflowError(
+                execution.get('cancel_reason')
+                or 'STOP_REQUESTED check terminated; inspect partial changes')
+        if status == 'timeout':
+            raise WorkflowError(
+                'CHECK_TIMEOUT outcome unknown; inspect partial changes')
+        if execution.get('process_alive'):
+            raise WorkflowError(
+                'CHECK_EXECUTION_UNKNOWN process identity is still alive')
+        integrity = execution.get('log_integrity') or {}
+        if any((value or {}).get('truncated') for value in integrity.values()):
+            raise WorkflowError(
+                'CHECK_LOG_TRUNCATED outcome unknown; inspect partial evidence')
+        code = execution.get('returncode')
+        if status not in {'completed', 'failed'} or code is None:
+            raise WorkflowError(
+                'CHECK_EXECUTION_UNKNOWN missing terminal outcome')
+        stdout = Path(execution['stdout_path']).read_text(
+            encoding='utf-8', errors='replace')
+        stderr = Path(execution['stderr_path']).read_text(
+            encoding='utf-8', errors='replace')
+        with locked(self.project.root):
+            self.load()
             self.data['pending_check'] = None
             self.save('check-exited')
-            return subprocess.CompletedProcess(argv,process.returncode,stdout,stderr)
-        except BaseException:
-            terminate_owned(process)
-            process.communicate()
-            raise
+        return subprocess.CompletedProcess(argv, code, stdout, stderr)
 
     def next(self):
         with locked(self.project.root):
             self.load()
+            pending_recovery = self.data.get('pending_recovery')
+            if pending_recovery:
+                state, _, _ = self.project.state(self.task, recovery=True)
+                self._pending_recovery_plan_matches(pending_recovery, state)
             if self.stop_requested():
                 self.data.update(status='stopped', reason='STOP_REQUESTED')
                 self.save('stopped')
                 return {'action': 'stopped'}
+            if pending_recovery:
+                self._repair_pending_recovery_projection(pending_recovery)
+                return {'action': 'recovery-pending', 'reason': 'RECOVERY_PENDING'}
             if self.data['status'] == 'completed':
                 state, _, _ = self.project.state(self.task)
                 if state['status'] != 'ready':
@@ -262,6 +505,9 @@ class Driver:
                     return self.block('FIX_LIMIT')
             if self.data['dispatches'] >= self.data['config']['max_dispatches']:
                 return self.block('DISPATCH_LIMIT')
+            if task is not None:
+                from .gate_rules import guard_inputs
+                guard_inputs(self.project,state,task['id'],phase='dispatch')
             if key:
                 self.data['fix_rounds'][key] = self.data['fix_rounds'].get(key, 0) + 1
             ident = uuid.uuid4().hex
@@ -277,6 +523,19 @@ class Driver:
                    'checks': self.data['config']['checks'], 'check_kind': self.data['config']['check_kind'],
                    'schema': str(folder / 'schema.json'), 'result': str(folder / 'response.json'),
                    'job_file': str(folder / 'job.json'), 'at': now(), 'worker': None}
+            if task is not None:
+                from .dispatch import _task_contract, _contract_inputs
+                texts,paths=_contract_inputs(self.project,state)
+                job['task_contract'] = _task_contract(self.project,state,task['id'],texts,paths)
+                job['model_alias'] = 'group/deepseek-2'
+                job['effort'] = 'max'
+                if self.data['config']['adapter'] == 'codex':
+                    from .codex_worker_adapter import correction_context
+                    try:
+                        job['native_resume_id'] = correction_context(
+                            job, self.data.get('native_contexts') or {}, correcting=bool(key))
+                    except ValueError as exc:
+                        return self.gate('NATIVE_CONTEXT_REQUIRED', str(exc))
             atomic(folder / 'schema.json', RESULT_SCHEMA)
             atomic(folder / 'job.json', job)
             self.data.update(pending=job, status='running', reason=None)
@@ -350,6 +609,17 @@ class Driver:
                 self.data.update(phase='execute', pending_fix=None, plan_findings=[])
             elif job['phase'] in ('execute', 'fix-task'):
                 receipt, passed = self.check(state, job['task']['id'])
+                # The check persists short driver bookkeeping while the long
+                # command lock is suspended. Reload that bounded update and
+                # clear the accepted attempt on the current object.
+                self.load()
+                pending = self.data.get('pending') or {}
+                if pending.get('id') != job['id'] or self.data.get('pending_check'):
+                    return self.gate(
+                        'CONTROL_CHANGED',
+                        'Driver bookkeeping changed while the accepted check ran.',
+                    )
+                self.data['pending'] = None
                 if passed:
                     dispatch(self.project, Namespace(command='task-done', id=self.task, task=job['task']['id']))
                     self.data['pending_fix'] = None
@@ -492,48 +762,135 @@ class Driver:
         argv = config['host_command'] if config['adapter'] == 'command' else codex_argv(job, config['codex_bin'])
         env = dict(os.environ, GSP_DRIVER_JOB=job['job_file'], GSP_DRIVER_RESULT=job['result'])
         folder = Path(job['result']).parent
-        with (folder / 'stdout.log').open('w', encoding='utf-8') as stdout, (folder / 'stderr.log').open('w', encoding='utf-8') as stderr:
-            process = subprocess.Popen(argv, cwd=self.project.root, env=env, stdin=subprocess.PIPE,
-                                       stdout=stdout, stderr=stderr, text=True, encoding='utf-8', **child_options())
+        remaining = min(
+            config['timeout'],
+            self.data['deadline'] - time.time(),
+        )
+        if remaining <= 0:
+            raise WorkflowError('DEADLINE_EXCEEDED')
+        slot=None
+        if config['adapter']=='codex':
+            from .resource_registry import ResourceRegistry,ResourceOwner,ResourceRegistryError
+            from .orchestration_scheduler import aggregate_usage
+            with locked(self.project.root):
+                self.load()
+                usage=aggregate_usage([event for row in self.data.get('native_usage',[])
+                                       for event in row.get('events',[])])
+                if usage.get('remaining_budget')==0:
+                    raise WorkflowError('NATIVE_BUDGET_EXHAUSTED')
+                state=self.project.ledger_state(self.task)
+                owner=ResourceOwner(state['work_uuid'],'native-worker:'+job['id'],
+                                    int(state.get('controller_generation') or 1))
+                request_uid='native-worker:'+job['id']
+                try:
+                    granted=ResourceRegistry(self.project.root).reserve_execution_slot(request_uid,owner)
+                except ResourceRegistryError as exc:
+                    raise WorkflowError(str(exc)) from exc
+                slot={'request_uid':request_uid,'owner':vars(owner),
+                      'identity':granted['resources'][0]['identity']}
+                job['execution_slot']=slot
+                self.data['pending']['execution_slot']=slot
+                self.save('native-capacity-reserved')
+        started = {}
+
+        def on_started(process):
+            with locked(self.project.root):
+                self.load()
+                self.data['pending']['worker'] = identity(process.pid)
+                self.save('host-started')
+                started['driver_digest'] = digest(self.file)
+
+        def cancel_check():
+            if self.stop_requested():
+                return ('STOP_REQUESTED host terminated; inspect partial changes '
+                        'before recovery')
+            return None
+
+        prompt_text = prompt(job)
+        metadata = {
+            'task': (job.get('task') or {}).get('id'),
+            'job': job['id'],
+            'argv': [redact(value) for value in argv],
+        }
+        if config['adapter'] == 'command':
+            execution = execute_command(
+                argv, self.project.root, env, remaining, folder, metadata,
+                on_started=on_started, input_data=prompt_text.encode('utf-8'),
+                cancel_check=cancel_check,
+            )
+            worker_status = None
+        else:
+            worker = run_worker(
+                job, self.project.root, env, remaining, folder, prompt_text,
+                executable=config['codex_bin'],
+                thread_id=job.get('native_resume_id'),
+                on_started=on_started, cancel_check=cancel_check,
+            )
+            execution = worker['execution']
+            worker_status = worker.get('status')
+            # Failed quality is distinct from a live/unknown host. A confirmed
+            # process terminal can release capacity without accepting its work.
+            if (slot and not execution.get('process_alive')
+                    and type(execution.get('returncode')) is int
+                    and execution.get('status') in {'completed','failed'}
+                    and worker_status in {'completed','failed'}):
+                ResourceRegistry(self.project.root).release_execution_slot(
+                    slot['request_uid'],slot['owner'],identity=slot['identity'])
+                ResourceRegistry(self.project.root).release(slot['request_uid'],slot['owner'])
+
+        if ('driver_digest' in started
+                and digest(self.file) != started['driver_digest']):
+            raise WorkflowError(
+                'CONTROL_CHANGED driver bookkeeping changed during host execution')
+        if execution.get('status') == 'cancelled':
+            raise WorkflowError(
+                execution.get('cancel_reason')
+                or 'STOP_REQUESTED host terminated; inspect partial changes')
+        if execution.get('status') == 'timeout':
+            raise WorkflowError('HOST_TIMEOUT outcome unknown; inspect partial changes')
+        if execution.get('launch_error') and execution.get('process_identity') is None:
+            raise WorkflowError(
+                'HOST_LAUNCH_FAILED outcome unknown; inspect partial changes')
+        if execution.get('process_alive'):
+            raise WorkflowError(
+                'HOST_EXECUTION_UNKNOWN process identity is still alive')
+        integrity = execution.get('log_integrity') or {}
+        if any((value or {}).get('truncated') for value in integrity.values()):
+            raise WorkflowError(
+                'HOST_LOG_TRUNCATED outcome unknown; inspect partial evidence')
+        if worker_status not in (None, 'completed'):
+            raise WorkflowError(
+                'HOST_EXECUTION_UNKNOWN worker evidence status ' + worker_status)
+        code = execution.get('returncode')
+        if execution.get('status') != 'completed' and code in (None, 0):
+            raise WorkflowError(
+                'HOST_EXECUTION_UNKNOWN missing terminal outcome')
+        if config['adapter'] == 'codex':
+            from .codex_worker_adapter import context_key
+            native_id = worker.get('native_session_id')
             try:
-                with locked(self.project.root):
-                    self.load()
-                    self.data['pending']['worker'] = identity(process.pid)
-                    self.save('host-started')
-                    expected_driver = digest(self.file)
-                # A wedged host may never read stdin. Keep timeout/stop monitoring
-                # independent of pipe capacity, including for large task context.
-                input_errors = []
-                def feed():
-                    try:
-                        process.stdin.write(prompt(job))
-                        process.stdin.close()
-                    except (OSError, ValueError) as exc:
-                        input_errors.append(str(exc))
-                feeder = threading.Thread(target=feed, daemon=True)
-                feeder.start()
-                deadline = min(time.time() + config['timeout'], self.data['deadline'])
-                while process.poll() is None:
-                    if self.stop_requested():
-                        terminate_owned(process)
-                        raise WorkflowError('STOP_REQUESTED host terminated; inspect partial changes before recovery')
-                    if time.time() >= deadline:
-                        terminate_owned(process)
-                        raise WorkflowError('HOST_TIMEOUT outcome unknown; inspect partial changes')
-                    time.sleep(.1)
-                feeder.join(timeout=1)
-                if feeder.is_alive() or input_errors:
-                    raise WorkflowError('HOST_INPUT_INCOMPLETE inspect host stdin failure')
-                if digest(self.file) != expected_driver:
-                    raise WorkflowError('CONTROL_CHANGED driver bookkeeping changed during host execution')
-                code = process.returncode
-            except BaseException:
-                terminate_owned(process)
-                raise
-        # Logs remain local. Common credential patterns are redacted; no upload occurs.
-        for name in ('stdout.log', 'stderr.log'):
-            file = folder / name
-            atomic(file, redact(file.read_text(encoding='utf-8', errors='replace')))
+                native_id = str(uuid.UUID(native_id))
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise WorkflowError('NATIVE_CONTEXT_REQUIRED completed worker has no exact native identity') from exc
+            with locked(self.project.root):
+                self.load()
+                self.data['pending']['native_session_id'] = native_id
+                usage_record={'job_id':job['id'],'native_session_id':native_id,
+                              'events':worker.get('usage_events') or [],
+                              'requested_model':'group/deepseek-2','requested_effort':'max'}
+                records=self.data.setdefault('native_usage',[])
+                previous=next((row for row in records if row.get('job_id')==job['id']),None)
+                if previous is not None and previous!=usage_record:
+                    raise WorkflowError('NATIVE_USAGE_CHANGED inspect the original response records')
+                if previous is None:
+                    records.append(usage_record)
+                key = context_key(job)
+                if key:
+                    self.data.setdefault('native_contexts', {})[key] = {
+                        'native_session_id': native_id, 'model_alias': 'group/deepseek-2',
+                        'effort': 'max', 'last_job': job['id'],
+                    }
+                self.save('native-context-recorded')
         self.submit(job['id'], job['result'], code)
 
     def rejected_plan_for_recovery(self, state, pending):
@@ -564,54 +921,255 @@ class Driver:
         except (WorkflowError, OSError, ValueError, KeyError, TypeError) as exc:
             raise WorkflowError('PLAN_REJECTION_MISMATCH inspect rejected attempt: ' + str(exc)) from exc
 
+    def _capacity_recovery(self,job,*,release=False):
+        slot=(job or {}).get('execution_slot')
+        if not slot:
+            return
+        from .resource_registry import ResourceRegistry
+        from .codex_worker_adapter import _verified_log
+        path=Path(job['result']).parent/'command-result.json'
+        if not inside(self.folder,path) or path.is_symlink() or not path.is_file():
+            raise WorkflowError('NATIVE_CAPACITY_RECOVERY_UNKNOWN original terminal evidence required')
+        terminal=read(path)
+        if (terminal.get('process_alive') or terminal.get('status') not in
+                {'completed','failed','timeout','cancelled','launch-failed'}
+                or type(terminal.get('returncode')) is not int
+                or not all(_verified_log(terminal,name) for name in ('stdout','stderr'))):
+            raise WorkflowError('NATIVE_CAPACITY_RECOVERY_UNKNOWN terminal/log evidence is incomplete')
+        process=(job or {}).get('worker')
+        if not isinstance(process,dict) or not process.get('pid') or not process.get('token') or is_alive(process):
+            raise WorkflowError('NATIVE_CAPACITY_RECOVERY_UNKNOWN process identity is live or unknown')
+        if release:
+            registry=ResourceRegistry(self.project.root)
+            registry.release_execution_slot(slot['request_uid'],slot['owner'],identity=slot['identity'])
+            registry.release(slot['request_uid'],slot['owner'])
+
     def recover(self, args):
         report = Path(args.evidence).resolve()
         if not inside(self.project.root, report) or not report.is_file() or not args.reason.strip():
             raise WorkflowError('RECOVERY_EVIDENCE_REQUIRED local investigation report and reason required')
+        reason = args.reason.strip()
         self.load()
+        request = self._recovery_request(report, reason)
+        pending_recovery = self.data.get('pending_recovery')
+        if pending_recovery:
+            self._pending_recovery_request_matches(pending_recovery, request)
+            if self.stop_requested():
+                raise WorkflowError('RECOVERY_INPUT_CHANGED stop request appeared during recovery')
+        elif not self._recovery_is_required() and self._completed_recovery_noop(request) is None:
+            raise WorkflowError('RECOVERY_NOT_REQUIRED no interrupted driver operation to recover')
+
         lease = read(self.lease) if self.lease.exists() else None
         if lease and (lease.get('task') != self.task or is_alive(lease)):
             raise WorkflowError('DRIVER_BUSY live or another task owner cannot be recovered')
         worker = (self.data.get('pending') or {}).get('worker')
         if is_alive(worker) or is_alive(self.data.get('pending_check')):
             raise WorkflowError('WORKER_ACTIVE inspect/wait for the recorded worker before recovery')
-        lock = self.project.meta / 'writer.lock'
-        if lock.exists():
-            writer = read(lock)
-            if not lease or writer.get('pid') != lease.get('pid') or is_alive(writer):
-                raise WorkflowError('WRITER_LOCK_RECOVERY_REQUIRED inspect its distinct owner')
-            lock.unlink()  # Exact verified dead driver-owned lock, never age-based stealing.
-        if lease:
-            self.lease.unlink()
+
         with locked(self.project.root):
             self.load()
-            state, _, _ = self.project.state(self.task)
+            pending_recovery = self.data.get('pending_recovery')
+            if pending_recovery:
+                self._pending_recovery_request_matches(pending_recovery, request)
+                if self.stop_requested():
+                    raise WorkflowError('RECOVERY_INPUT_CHANGED stop request appeared during recovery')
+            else:
+                completed = self._completed_recovery_noop(request)
+                if completed is not None:
+                    self._repair_completed_recovery_projection(completed)
+                    return {
+                        'action': 'no-change',
+                        'status': 'already-recovered',
+                        'epoch': completed.get('verification_epoch'),
+                        'operation_uid': completed.get('operation_uid'),
+                    }
+                if not self._recovery_is_required():
+                    raise WorkflowError('RECOVERY_NOT_REQUIRED no interrupted driver operation to recover')
+
+            lease = read(self.lease) if self.lease.exists() else None
+            if lease and (lease.get('task') != self.task or is_alive(lease)):
+                raise WorkflowError('DRIVER_BUSY live or another task owner cannot be recovered')
+            worker = (self.data.get('pending') or {}).get('worker')
+            if is_alive(worker) or is_alive(self.data.get('pending_check')):
+                raise WorkflowError('WORKER_ACTIVE inspect/wait for the recorded worker before recovery')
+
+            if pending_recovery and lease is not None:
+                lease_digest = sha(json.dumps(
+                    lease, ensure_ascii=False, sort_keys=True, separators=(',', ':')
+                ).encode('utf-8'))
+                if lease_digest != pending_recovery.get('stale_lease_sha256'):
+                    raise WorkflowError('RECOVERY_INPUT_CHANGED stale driver lease changed')
+
+            state, _, _ = self.project.state(self.task, recovery=True)
             self.project.valid_design(state, self.doc)
             if state['design_approval']['sha256'] != self.data['binding']['design']:
                 raise WorkflowError('DESIGN_RECONFIGURATION_REQUIRED do not rebind approval through recovery')
             pending = self.data.get('pending')
-            rejected_plan = self.rejected_plan_for_recovery(state, pending)
-            sealed_plan = state.get('plan_seal') and self.data['phase'] == 'plan'
-            if sealed_plan:
-                self.project.valid_plan(state, self.doc)
-            interrupted_check = state.pop('inflight', None)
-            state['verification_epoch'] = state.get('verification_epoch', 0) + 1
-            state['review'] = None
-            state['status'] = 'needs-verification'
-            self.project.write(state, 'driver-recovery', args.reason)
-            if rejected_plan:
-                self.data.update(phase='plan', pending_fix='plan', plan_findings=rejected_plan['findings'])
-            elif pending and pending['phase'] == 'review':
-                self.data['phase'] = 'verify'
-            elif state.get('plan_seal') and state['tasks'] and all(t['status'] == 'done' for t in state['tasks']):
-                self.data.update(phase='verify', pending_fix=None, plan_findings=[])
-            elif sealed_plan:
-                self.data.update(phase='execute', pending_fix=None, plan_findings=[])
-            check_process=self.data.get('pending_check')
-            self.data.update(status='runnable', gate=None, reason=None, pending=None, pending_check=None, stop_requested=False)
-            (self.folder/'stop.json').unlink(missing_ok=True)
-            self.data.setdefault('recoveries', []).append({'at': now(), 'evidence': str(report), 'sha256': digest(report), 'reason': redact(args.reason), 'attempt': pending, 'interrupted_check': interrupted_check, 'check_process':check_process})
-            self.save('recovered')
+            self._capacity_recovery(pending)
+            if pending_recovery:
+                self._pending_recovery_plan_matches(pending_recovery, state)
+                if self.data.get('revision') != pending_recovery.get('prepared_revision'):
+                    raise WorkflowError('RECOVERY_STATE_CHANGED driver state advanced during recovery')
+                self._repair_pending_recovery_projection(pending_recovery)
+            else:
+                plan_proof = self._recovery_plan_proof(state)
+                rejected_plan = self.rejected_plan_for_recovery(state, pending)
+                sealed_plan = state.get('plan_seal') and self.data['phase'] == 'plan'
+                if sealed_plan:
+                    self.project.valid_plan(state, self.doc)
+                candidate = copy.deepcopy(state)
+                interrupted_check = candidate.pop('inflight', None)
+                candidate['verification_epoch'] = candidate.get('verification_epoch', 0) + 1
+                candidate['review'] = None
+                candidate['status'] = 'needs-verification'
+                driver_updates = {
+                    'status': 'runnable',
+                    'gate': None,
+                    'reason': None,
+                    'pending': None,
+                    'pending_check': None,
+                    'stop_requested': False,
+                }
+                if rejected_plan:
+                    driver_updates.update(
+                        phase='plan', pending_fix='plan', plan_findings=rejected_plan['findings']
+                    )
+                elif pending and pending['phase'] == 'review':
+                    driver_updates['phase'] = 'verify'
+                elif candidate.get('plan_seal') and candidate['tasks'] and all(
+                        task['status'] == 'done' for task in candidate['tasks']):
+                    driver_updates.update(phase='verify', pending_fix=None, plan_findings=[])
+                elif sealed_plan:
+                    driver_updates.update(phase='execute', pending_fix=None, plan_findings=[])
+
+                recoveries = self.data.get('recoveries') or []
+                sequence = len(recoveries) + 1
+                previous_incident_uid = (
+                    recoveries[-1].get('incident_uid') if recoveries else None
+                )
+                expected_state_digest = sha((self.run / 'state.json').read_bytes())
+                incident_material = {
+                    'task': self.task,
+                    'sequence': sequence,
+                    'previous_incident_uid': previous_incident_uid,
+                    'driver_revision': self.data.get('revision', 0),
+                    'driver_status': self.data.get('status'),
+                    'driver_reason': self.data.get('reason'),
+                    'driver_gate': self.data.get('gate'),
+                    'attempt': pending,
+                    'expected_state_digest': expected_state_digest,
+                    'request': request,
+                    'plan_proof': copy.deepcopy(plan_proof),
+                }
+                incident_uid = stable_action_uid('driver-recovery-incident', incident_material)
+                action_uid = stable_action_uid('driver-recovery', incident_uid)
+                prepared_revision = self.data.get('revision', 0) + 1
+                completed_revision = prepared_revision + 1
+                prepared_at = now()
+                completed_at = now()
+                prepared_event_uid = stable_action_uid(
+                    'driver-recovery-prepared-event', incident_uid
+                )
+                completed_event_uid = stable_action_uid(
+                    'driver-recovery-completed-event', incident_uid
+                )
+                lease_digest = (
+                    sha(json.dumps(
+                        lease, ensure_ascii=False, sort_keys=True, separators=(',', ':')
+                    ).encode('utf-8'))
+                    if lease is not None else None
+                )
+                check_process = self.data.get('pending_check')
+                recovery_record = {
+                    'at': completed_at,
+                    'incident_uid': incident_uid,
+                    'sequence': sequence,
+                    'previous_incident_uid': previous_incident_uid,
+                    'action_uid': action_uid,
+                    'request': request,
+                    'evidence': str(report),
+                    'sha256': request['evidence_sha256'],
+                    'reason': request['reason'],
+                    'attempt': copy.deepcopy(pending),
+                    'interrupted_check': copy.deepcopy(interrupted_check),
+                    'check_process': copy.deepcopy(check_process),
+                    'verification_epoch': candidate['verification_epoch'],
+                    'expected_state_digest': expected_state_digest,
+                    'plan_proof': copy.deepcopy(plan_proof),
+                }
+                pending_recovery = {
+                    'incident_uid': incident_uid,
+                    'action_uid': action_uid,
+                    'request': request,
+                    'expected_state_digest': expected_state_digest,
+                    'candidate_state': candidate,
+                    'driver_updates': driver_updates,
+                    'recovery_record': recovery_record,
+                    'prepared_revision': prepared_revision,
+                    'completed_revision': completed_revision,
+                    'stale_lease_sha256': lease_digest,
+                    'plan_proof': copy.deepcopy(plan_proof),
+                    'prepared_event': self._recovery_event(
+                        'recovery-prepared', prepared_revision, self.data['dispatches'],
+                        self.data.get('reason'), prepared_at, prepared_event_uid,
+                    ),
+                    'completed_event': self._recovery_event(
+                        'recovered', completed_revision, self.data['dispatches'],
+                        None, completed_at, completed_event_uid,
+                    ),
+                }
+                self.data['pending_recovery'] = pending_recovery
+                self.save(
+                    'recovery-prepared',
+                    event_uid=prepared_event_uid,
+                    event_at=prepared_at,
+                )
+
+            self._pending_recovery_plan_matches(pending_recovery, state)
+            self._accepted_recovery_workflow(pending_recovery)
+            self.project.write(
+                copy.deepcopy(pending_recovery['candidate_state']),
+                'driver-recovery',
+                pending_recovery['request']['reason'],
+                action_uid=pending_recovery['action_uid'],
+            )
+            operation = self._recovery_operation(pending_recovery['action_uid'])
+            if operation is None or operation.get('phase') != 'committed':
+                raise WorkflowError('RECOVERY_OPERATION_UNRESOLVED project write did not commit')
+
+            lease = read(self.lease) if self.lease.exists() else None
+            if lease and (lease.get('task') != self.task or is_alive(lease)):
+                raise WorkflowError('DRIVER_BUSY live or another task owner cannot be completed')
+            worker = (self.data.get('pending') or {}).get('worker')
+            if is_alive(worker) or is_alive(self.data.get('pending_check')):
+                raise WorkflowError('WORKER_ACTIVE inspect/wait for the recorded worker before recovery')
+            if lease is not None:
+                lease_digest = sha(json.dumps(
+                    lease, ensure_ascii=False, sort_keys=True, separators=(',', ':')
+                ).encode('utf-8'))
+                if lease_digest != pending_recovery.get('stale_lease_sha256'):
+                    raise WorkflowError('RECOVERY_INPUT_CHANGED stale driver lease changed')
+                self.lease.unlink()
+
+            record = copy.deepcopy(pending_recovery['recovery_record'])
+            self._capacity_recovery(record.get('attempt'),release=True)
+            record.update({
+                'operation_uid': operation['operation_uid'],
+                'workflow_result_digest': sha((self.run / 'state.json').read_bytes()),
+                'completed_driver_revision': pending_recovery['completed_revision'],
+                'completed_status': 'runnable',
+                'prepared_event': copy.deepcopy(pending_recovery['prepared_event']),
+                'completed_event': copy.deepcopy(pending_recovery['completed_event']),
+            })
+            self.data.update(copy.deepcopy(pending_recovery['driver_updates']))
+            self.data.setdefault('recoveries', []).append(record)
+            self.data.pop('pending_recovery', None)
+            (self.folder / 'stop.json').unlink(missing_ok=True)
+            self.save(
+                'recovered',
+                event_uid=pending_recovery['completed_event']['event_uid'],
+                event_at=pending_recovery['completed_event']['at'],
+            )
             return self.data
 
     def status(self):

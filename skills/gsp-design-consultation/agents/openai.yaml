@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP design-consultation"
-  short_description: "GstackSP 项目工作流：新界面需要确定视觉体系、字体、色彩、布局和交互基调时"
-  default_prompt: "Use $gsp-design-consultation for the relevant part of this project task."

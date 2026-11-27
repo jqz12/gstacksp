@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP autoplan"
-  short_description: "GstackSP 项目工作流：复杂或有风险的实施计划需要在开发前进行范围与工程审查时"
-  default_prompt: "Use $gsp-autoplan for the relevant part of this project task."

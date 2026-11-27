@@ -4,16 +4,15 @@
 
 ## 统一阶段控制器
 
-阶段转换必须先通过控制器预览，再由控制器推进：
+常规推进只调用一次 `advance`；同一业务操作完成当前可判定预检、必要版本复核和阶段推进：
 
 ```powershell
-python <gsp> --project <项目> handoff <任务> --to <阶段>
 python <gsp> --project <项目> advance <任务> --to <阶段>
 ```
 
-`handoff` 只读并返回当前阶段、目标阶段、阻塞码、必需动作、下一技能、绑定文档和证据；`advance` 只有在所有前置条件满足时才写入状态、事件和 `handoffs.jsonl`。技能不能通过聊天文本或直接跳过控制器宣称进入下一阶段。失败推进不得改变状态；旧任务没有历史 handoff 时允许预览，但不能伪造过去的交接记录。
+`advance` 只有在当前前置条件满足时才写入状态、事件和必要转换记录。`handoff` 仅用于需要主动预览下一阶段、阻塞项、绑定文档或责任转移的场合，不能成为每一步的机械前置命令。技能不能通过聊天文本或直接跳过控制器宣称进入下一阶段。失败推进不得改变状态；旧任务没有历史 handoff 时允许只读预览，但不能伪造过去的交接记录。
 
-控制器的阶段顺序为 `design → plan → execute → review → checking → ready → ship`。设计批准、计划封存、scope 选择、任务证据、整体审查、最终回归和输入指纹分别由对应阶段验证；外部 commit、push、merge、部署仍需独立授权。
+控制器的阶段顺序为 `design → plan → execute → review → checking → ready → ship`。设计批准、计划封存、真实工作位置/写集、任务证据、整体审查、最终回归和输入指纹分别由对应阶段验证；外部 commit、push、merge、部署仍需独立授权。
 
 新建任务默认启用 controller mode：`seal-plan` 只封存计划，`task-start`、`review` 和 `ready` 在没有对应 `advance` 记录时拒绝执行。旧的 `--legacy-layout` 任务保留兼容行为，并不代表新任务可以绕过控制器。
 
@@ -30,11 +29,11 @@ python <gsp> --project <项目> advance <任务> --to <阶段>
 
 ## 条件化接续
 
-Git health 是工作流入口检查的一部分。AI 优先读取 health 输出的短 `route`/`handoff`，根据 `next_skill` 接续；不把完整报告塞入上下文。`clean` 且无用户决策时继续当前阶段，`needs-decision` 或 `blocked` 时只展示 route 指定的一项决策并记录一次；脏工作区、分支不匹配、detached HEAD、无仓库或未知状态使用 `gsp-git`。`gsp-git` 返回后回到 workflow，由 workflow 选择 brainstorming、execute、verify 或 ship，不重复询问同一 Git 问题。
+Git health 是工作流入口检查的一部分。AI 优先读取 health 输出的短 `route`/`handoff`，根据规范化后的 `next_skill` 接续；不把完整报告塞入上下文。`clean` 且无用户决策时继续当前阶段，`needs-decision` 或 `blocked` 时只展示 route 指定的一项决策并记录一次；脏工作区、分支不匹配、detached HEAD、无仓库或未知状态在 `gsp-ship` 中按触发加载 git 条件方法。方法返回后回到 workflow，由 workflow 选择 brainstorming、execute、review 或 ship，不重复询问同一 Git 问题。
 
 执行长命令时，阶段更新要给出真实日志路径、证据 ID、进程身份或 `run-status` 结果，并说明命令仍在运行还是已有终态。`run-status`、`status --brief` 和观察类输出只是运行/账本快照，不能替代最终交付验证。相同空等待最多两次；第三次前必须查看日志、检查进程或读取产物。没有宿主事件时标记 `unknown`/`NOT_CHECKED`，不虚构用户中止或已拦截等待。
 
-- 当前目标内、已有授权、依赖满足：按现有模式继续下一阶段，不在可继续的阶段提前结束并等用户提醒。嵌套技能如freeze/TDD/browse/learn完成后返回调用者，失败按原任务进入调试/修复/阻塞。
+- 当前目标内、已有授权、依赖满足：按现有模式继续下一阶段，不在可继续的阶段提前结束并等用户提醒。条件方法完成后返回调用者，失败按原任务进入调试/修复/阻塞。
 - 仅报告或只读授权：交付发现和推荐整改范围，不自动执行修改。需要用户设计选择、新授权或手工操作时，准确说明所需动作、原因和来源，给命令/入口；已有选择不重问。
 - 已明确授权连续执行或无人值守：同一已确认设计不重批，不因计划写完或固定收尾菜单机械等待；实质设计变更、超出授权或无法可靠推进仍按契约停下。普通会话不得擅自记录为无人值守。
 - 当前需求完成：给一个有依据的推荐下一步及依赖；不能擅自启动另一个需求、付费实验、发布或清理。独立导出/查询任务可以结束，无需硬接其他技能。

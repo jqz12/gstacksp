@@ -2,8 +2,10 @@
 
 from pathlib import Path
 import re
-from .runtime import WorkflowError, _git_run, git_identity, inside, now
+from .core import (WorkflowError, inside, now)
+from .git_operations import (_git_run, git_identity)
 from .build_policy import load_policy, remove_tree, tree_size
+from .worktree_adapters import WorktreeAdapter, WorktreeAdapterError
 
 
 TERMINAL_STATES = {"removed", "released"}
@@ -114,7 +116,7 @@ def build_environment(project, state, task):
 def _build_root_referenced(project, relative, exclude_id):
     if not relative:
         return False
-    from .runtime import read
+    from .core import (read)
     for file in Path(project.meta).glob('runs/*/sessions/dispatch.json'):
         try:
             data = read(file)
@@ -134,22 +136,38 @@ def prepare_worktree(project, state, task, dispatch, requested_path=None, mode="
         if requested_path is None:
             raise WorkflowError("WORKTREE_PATH_REQUIRED")
         path = Path(requested_path).resolve()
-        if not inside(project.root, path):
-            raise WorkflowError("WORKTREE_PATH_ESCAPE " + str(path))
         if not path.is_dir():
             raise WorkflowError("WORKTREE_PATH_MISSING " + str(path))
+        adapter = WorktreeAdapter(project.root)
         try:
-            inspection = inspect_worktree(project, path)
-        except WorkflowError as exc:
-            if not str(exc).startswith("WORKTREE_NOT_REGISTERED") and not str(exc).startswith("WORKTREE_IDENTITY_INVALID"):
-                raise
-            # Legacy callers may bind an already-created source directory that
-            # is managed by their host rather than by Git. It is always
-            # non-owned and is never removed by the lifecycle adapter.
+            inspection = adapter.bind(
+                path,
+                ownership="bound",
+                binding_uid=dispatch.get("id"),
+            )
+        except WorktreeAdapterError as exc:
+            marker = path / ".git"
+            legacy_non_git_child = (
+                str(exc).startswith("WORKTREE_NOT_REGISTERED")
+                and inside(project.root, path)
+                and path != Path(project.root).resolve()
+                and not marker.exists()
+            )
+            if not legacy_non_git_child:
+                raise WorkflowError(str(exc)) from exc
             inspection = {
-                "path": str(path), "branch": None, "head": None,
-                "detached": False, "registered": False,
+                "path": str(path),
+                "branch": None,
+                "head": None,
+                "detached": False,
+                "registered": False,
+                "binding_uid": dispatch.get("id"),
+                "cleanup_action": "release",
+                "deletable": False,
+                "host_action": None,
             }
+        except WorkflowError:
+            raise
         return {
             **dispatch,
             "path": inspection["path"],
@@ -159,6 +177,12 @@ def prepare_worktree(project, state, task, dispatch, requested_path=None, mode="
             "managed_worktree": False,
             "worktree_mode": "bound",
             "binding_verified": inspection["registered"],
+            "binding_uid": inspection.get("binding_uid"),
+            "common_dir": inspection.get("common_dir"),
+            "project_uid": inspection.get("project_uid"),
+            "cleanup_action": inspection.get("cleanup_action", "release"),
+            "deletable": False,
+            "host_action": inspection.get("host_action"),
             "worktree_state": "bound",
             "cleanup_attempts": 0,
             "cleanup_error": None,
@@ -235,6 +259,25 @@ def cleanup_worktree(project, dispatch, reason, retry=False):
     state = dispatch.get("worktree_state")
     if state in TERMINAL_STATES:
         return {**dispatch, "result": state, "idempotent": True}
+    if (
+        dispatch.get("worktree_mode") == "native"
+        or dispatch.get("cleanup_action") == "archive"
+    ):
+        return {
+            **_pending(dispatch, _command_error(
+                "WORKTREE_HOST_ARCHIVE_PENDING",
+                detail="native worktree must be archived by its host",
+            )),
+            "worktree_mode": "native",
+            "cleanup_action": "archive",
+            "pending_host_action": {
+                "schema": 1,
+                "kind": "worktree-archive",
+                "state": "pending",
+                "binding_uid": dispatch.get("binding_uid"),
+                "path": dispatch.get("path") or dispatch.get("worktree"),
+            },
+        }
     if not dispatch.get("managed_worktree", False):
         return {
             **dispatch,
@@ -250,9 +293,26 @@ def cleanup_worktree(project, dispatch, reason, retry=False):
         return _pending(dispatch, _command_error("WORKTREE_PATH_MISSING"))
     path = Path(raw_path).resolve()
     if not path.exists():
-        _remove_build_root(project, dispatch)
-        result = {**dispatch, "worktree_state": "removed", "result": "removed", "updated_at": now(), "idempotent": True}
-        return result
+        proof = dispatch.get("worktree_disposition") or {}
+        proven = (
+            proof.get("action") == "remove"
+            and proof.get("state") == "completed"
+            and proof.get("verified_absent") is True
+            and proof.get("path")
+            and Path(proof["path"]).resolve() == path
+        )
+        if proven:
+            return {
+                **dispatch,
+                "worktree_state": "removed",
+                "result": "removed",
+                "updated_at": now(),
+                "idempotent": True,
+            }
+        return _pending(dispatch, _command_error(
+            "WORKTREE_PATH_MISSING",
+            detail="missing worktree has no verified removal proof",
+        ))
     status = _git_run(path, "status", "--porcelain", "-uall")
     if status.returncode:
         return _pending(dispatch, _command_error("WORKTREE_STATUS_FAILED", status))
@@ -281,6 +341,14 @@ def cleanup_worktree(project, dispatch, reason, retry=False):
         "updated_at": now(),
         "idempotent": False,
         "cleanup_error": None,
+        "worktree_disposition": {
+            "schema": 1,
+            "action": "remove",
+            "state": "completed",
+            "path": str(path),
+            "verified_absent": not path.exists(),
+            "completed_at": now(),
+        },
     }
     if prune.returncode:
         result["cleanup_error"] = _command_error("WORKTREE_PRUNE_FAILED", prune)

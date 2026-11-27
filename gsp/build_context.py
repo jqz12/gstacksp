@@ -13,7 +13,7 @@ import sys
 
 from .build_policy import load_policy
 from .hosts import identity, is_alive
-from .runtime import WorkflowError, atomic, now, read
+from .core import (WorkflowError, atomic, now, read)
 
 
 BUILD_LEASE_NAME = '.gsp-build-lease.json'

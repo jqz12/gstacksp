@@ -85,6 +85,24 @@ class CommandExecutionTests(unittest.TestCase):
         self.assertNotEqual(result['returncode'], 0)
         self.assertTrue((self.folder / 'command-result.json').is_file())
 
+    def test_cancel_check_terminates_without_waiting_for_timeout(self):
+        calls = {'count': 0}
+
+        def cancel_check():
+            calls['count'] += 1
+            return ('STOP_REQUESTED fixture stop' if calls['count'] >= 2 else None)
+
+        started = time.monotonic()
+        result = self.run_script(
+            "import time\ntime.sleep(10)\n", timeout=9,
+            cancel_check=cancel_check,
+        )
+        self.assertEqual(result['status'], 'cancelled')
+        self.assertEqual(result['interruption'], 'cancelled')
+        self.assertEqual(result['cancel_reason'], 'STOP_REQUESTED fixture stop')
+        self.assertFalse(result['process_alive'])
+        self.assertLess(time.monotonic() - started, 5)
+
     def test_launch_failure_is_not_pass(self):
         result = execute_command(['definitely-not-a-real-executable-xyz'], self.root,
                                  dict(os.environ), 5, self.folder, {'task': 'T01'})
@@ -185,6 +203,61 @@ class CommandExecutionTests(unittest.TestCase):
         self.assertIn('<REDACTED>', json.dumps(progress))
         self.assertNotIn('env', progress)
         self.assertEqual(result['status'], 'completed')
+
+    def test_default_stdin_remains_a_closed_device(self):
+        result = self.run_script(
+            "import sys\n"
+            "print(repr(sys.stdin.buffer.read()))\n")
+        self.assertEqual(result['status'], 'completed')
+        self.assertIn("b''", self.read('stdout.txt'))
+        self.assertIsNone(result['input'])
+
+    def test_bounded_input_is_sent_through_a_pipe(self):
+        result = self.run_script(
+            "import sys\n"
+            "data = sys.stdin.buffer.read()\n"
+            "sys.stdout.write(data.decode('utf-8') + '\\n')\n",
+            input_data='hello from piped stdin',
+        )
+        self.assertEqual(result['status'], 'completed')
+        self.assertIn('hello from piped stdin', self.read('stdout.txt'))
+        self.assertTrue(result['input']['complete'])
+        self.assertEqual(result['input']['written'], result['input']['bytes'])
+
+    def test_child_early_close_unblocks_input_writer(self):
+        result = self.run_script(
+            "import sys\n"
+            "sys.stdin.buffer.read(1)\n",
+            timeout=5,
+            input_data=b'x' * (256 * 1024),
+        )
+        self.assertEqual(result['status'], 'failed')
+        self.assertLess(result['duration_s'], 4.5)
+        self.assertIsNotNone(result['input'])
+        self.assertFalse(result['input']['complete'])
+
+    def test_timeout_closes_the_input_pipe_and_terminates_child(self):
+        result = self.run_script(
+            "import time\n"
+            "time.sleep(10)\n",
+            timeout=.5,
+            input_data=b'x' * (256 * 1024),
+        )
+        self.assertEqual(result['status'], 'timeout')
+        self.assertLess(result['duration_s'], 5)
+        self.assertIsNotNone(result['input'])
+
+    def test_input_larger_than_the_limit_is_rejected_before_launch(self):
+        from gsp.command_execution import MAX_INPUT_BYTES
+        from gsp.runtime import WorkflowError
+
+        with patch('gsp.command_execution.subprocess.Popen') as popen:
+            with self.assertRaisesRegex(WorkflowError, 'COMMAND_INPUT_TOO_LARGE'):
+                self.run_script(
+                    "print('never')",
+                    input_data=b'x' * (MAX_INPUT_BYTES + 1),
+                )
+        popen.assert_not_called()
 
 
 if __name__ == '__main__':

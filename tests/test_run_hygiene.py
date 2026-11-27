@@ -43,7 +43,17 @@ class RunHygieneTests(unittest.TestCase):
         self.git('add', '.gitignore', 'README.md')
         self.git('commit', '-qm', 'baseline')
         self.cmd('new', 'work', '--title', 'Hygiene', '--size', 'small')
-        self.project.document(self.state(), 'design').write_text(
+        state = self.state()
+        # This published run-hygiene fixture predates the convergence schema.
+        # Keep the product gate intact; only this synthetic work is legacy.
+        state.pop('convergence_schema', None)
+        self.project.write(
+            state,
+            'fixture-legacy-convergence',
+            'legacy run-hygiene fixture created before convergence schema',
+            action_uid='fixture:legacy-convergence:run-hygiene',
+        )
+        self.project.document(state, 'design').write_text(
             '# Design\nFixture design long enough for approval.\n', encoding='utf-8')
         self.cmd('approve', 'work', '--quote', 'SYNTHETIC fixture design')
         self.cmd('task-add', 'work', 'T01', '--title', 'Hygiene run',

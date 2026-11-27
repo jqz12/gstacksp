@@ -3,6 +3,8 @@ import sys
 import unittest
 from pathlib import Path
 
+from gsp import skill_catalog
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -24,7 +26,11 @@ class SkillStorageHygieneTests(unittest.TestCase):
             self.assertIn(needle, text)
 
     def test_verify_skill_blocks_unexplained_leftovers(self):
-        text = self.text('skills/gsp-verify/SKILL.md')
+        manifest = skill_catalog.load_manifest(ROOT)
+        path = skill_catalog.entry_for(
+            manifest, 'verify',
+        ).internal_method_path
+        text = self.text(path)
         for needle in ('HYGIENE_LEFTOVER', 'git_clean', 'branch_merged'):
             self.assertIn(needle, text)
 

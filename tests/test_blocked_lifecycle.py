@@ -1,13 +1,14 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 try:
-    from process_helpers import run
+    from process_helpers import run, session_binding
 except ModuleNotFoundError:
-    from tests.process_helpers import run
+    from tests.process_helpers import run, session_binding
 
 from gsp.documents import Governance
 
@@ -28,8 +29,20 @@ class BlockedLifecycleCliTests(unittest.TestCase):
         (self.project / 'README.md').write_text('# blocked\n', encoding='utf-8')
         self.git('add', 'README.md')
         self.git('commit', '-qm', 'chore: baseline')
+        self.context = None
         self.cli('init')
-        self.cli('new', 'work', '--title', '阻塞终态')
+        self.cli('new', 'work', '--title', '阻塞终态', '--intent', 'cross-session')
+        state = self.read_state()
+        binding = session_binding(
+            self.project, state['work_uuid'], 'main', 'codex', 'blocked-main',
+        )
+        self.context = self.project / binding.handle_path
+        self.cli(
+            'session-register', 'work', '--role', 'controller',
+            '--host', 'codex', '--thread', 'blocked-main',
+            '--write-mode', 'write', '--path', '.',
+            '--context', str(self.context),
+        )
 
     def git(self, *args):
         result = run(['git', *args], cwd=self.project, capture_output=True, text=True, encoding='utf-8')
@@ -38,12 +51,25 @@ class BlockedLifecycleCliTests(unittest.TestCase):
 
     def cli(self, *args, ok=True):
         result = run([sys.executable, str(CLI), '--project', str(self.project), *args],
-                     capture_output=True, text=True, encoding='utf-8')
+                     capture_output=True, text=True, encoding='utf-8',
+                     env=self.cli_env())
         if ok:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         else:
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
+
+    def cli_env(self):
+        env = os.environ.copy()
+        env.pop('GSP_SESSION_CONTEXT', None)
+        if self.context is not None:
+            env['GSP_SESSION_CONTEXT'] = str(self.context)
+        env.update({
+            'HOME': self.tmp.name,
+            'USERPROFILE': self.tmp.name,
+            'CODEX_HOME': str(Path(self.tmp.name) / '.codex'),
+        })
+        return env
 
     def read_state(self):
         return json.loads((self.project / '.gsp/runs/work/state.json').read_text(encoding='utf-8'))
@@ -104,8 +130,7 @@ class BlockedLifecycleCliTests(unittest.TestCase):
         (self.project / state['documents']['plan']).write_text(
             '# Plan\nT01 implementation and checks.', encoding='utf-8')
         self.cli('seal-plan', 'work')
-        self.cli('scope', 'work', '--off', '--quote', 'SYNTHETIC no freeze')
-        self.cli('topology-select', 'work', '--mode', 'worktree', '--quote', 'SYNTHETIC isolated child')
+        self.cli('topology-select', 'work', '--mode', 'worktree', '--legacy-worktree', '--quote', 'SYNTHETIC isolated child')
         workspace = Path(self.read_state()['git_topology']['workspace_root'])
         self.cli('block', 'work', '--reason', 'abandon after rework')
         self.git('worktree', 'remove', '--force', str(workspace))

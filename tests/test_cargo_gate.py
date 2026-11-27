@@ -30,7 +30,8 @@ class CargoGateTests(unittest.TestCase):
                 root=Path(folder);project=runtime.Project(root)
                 state={'id':'cargo','tasks':[{'id':'T1','status':'running'}],'scope':{'mode':'off'},'evidence':[]}
                 args=argparse.Namespace(task='T1',argv=['cargo','test'],timeout=30,kind='tests',runner=lambda a,t:subprocess.CompletedProcess(a,exit_code,summary,''))
-                with patch.object(runtime,'snapshot',return_value={}),patch.object(project,'write'),patch.object(runtime,'contract_hash',return_value='contract'):
+                with patch.object(runtime,'snapshot',return_value={}),patch.object(project,'write'),patch.object(runtime,'contract_hash',return_value='contract'), \
+                        patch('gsp.resource_lifecycle.register_build_resource',return_value=None):
                     receipt,ok=runtime.run_check(project,state,root/'.gsp/runs/cargo',args)
                 self.assertEqual(receipt['status'],expected)
                 self.assertEqual(ok,expected=='pass')

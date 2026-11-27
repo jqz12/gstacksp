@@ -6,6 +6,7 @@ It never survives a command, and beginning a new phase drops every cached
 value so the final gate re-reads source content, receipts and log digests.
 """
 from datetime import datetime, timezone
+import hashlib
 from pathlib import Path
 
 
@@ -56,10 +57,12 @@ class ValidationContext:
         if self._state_path is None:
             return {}
         try:
-            stat = self._state_path.stat()
-        except OSError:
+            content = self._state_path.read_bytes()
+        except FileNotFoundError:
             return {str(self._state_path): None}
-        return {str(self._state_path): [stat.st_mtime_ns, stat.st_size]}
+        except OSError as exc:
+            return {str(self._state_path): 'error:' + type(exc).__name__}
+        return {str(self._state_path): hashlib.sha256(content).hexdigest()}
 
     def get(self, namespace, key, loader):
         token = (namespace, key)
@@ -86,7 +89,7 @@ class ValidationContext:
             return
         changed = sorted(path for path in set(current) | set(self._phase_state)
                          if current.get(path) != self._phase_state.get(path))
-        from .runtime import WorkflowError
+        from .core import (WorkflowError)
         raise WorkflowError('VALIDATION_STATE_CHANGED ' + ', '.join(changed))
 
     def summary(self):

@@ -11,7 +11,7 @@ import re
 import stat
 import subprocess
 
-from .runtime import WorkflowError, inside
+from .core import (WorkflowError, inside)
 
 DEFAULT_POLICY = {
     'version': 1,

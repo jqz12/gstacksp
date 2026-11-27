@@ -1,5 +1,6 @@
 """Plans that create build or temporary output must declare its lifecycle."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from gsp.plan_quality import check_plan, hygiene_needed, hygiene_section
+from tests.process_helpers import session_binding
 
 
 def plan(extra_body='', hygiene=None):
@@ -26,6 +28,7 @@ Windows, Python 3.10+.
 ## Review Focus
 Inspect cleanup boundaries in T01.
 ## Task T01: Temporary output
+Convergence: {{"schema":1,"requires_slices":false,"single_outcome":true,"small":true}}
 **Files:** Modify tests/helper.py.
 **Interfaces:**
 - Consumes: unittest.
@@ -85,16 +88,21 @@ class PlanHygieneTests(unittest.TestCase):
     def test_large_size_blocks_through_the_cli(self):
         with tempfile.TemporaryDirectory(prefix='gsp-plan-hygiene-') as directory:
             root = Path(directory)
+            env=os.environ.copy()
+            env.pop('GSP_SESSION_CONTEXT',None)
+            env.update(HOME=directory,USERPROFILE=directory,CODEX_HOME=str(root/'.codex'))
 
             def cli(*args):
                 return subprocess.run(
                     [sys.executable, str(ROOT / 'scripts' / 'gsp.py'),
                      '--project', directory, *args],
-                    capture_output=True, text=True, encoding='utf-8')
+                    capture_output=True, text=True, encoding='utf-8', env=env)
 
             self.assertEqual(cli('init').returncode, 0)
             self.assertEqual(cli('new', 'sample', '--title', 'Large task', '--size', 'large').returncode, 0)
             state = json.loads((root / '.gsp' / 'runs' / 'sample' / 'state.json').read_text(encoding='utf-8'))
+            binding=session_binding(root,state['work_uuid'],'main','codex','plan-hygiene')
+            env['GSP_SESSION_CONTEXT']=str(root/binding.handle_path)
             design = root / state['documents']['design']
             design.write_text('# Design\nLarge fixture design with enough prose.\n', encoding='utf-8')
             self.assertEqual(cli('approve', 'sample', '--quote', 'SYNTHETIC approved').returncode, 0)

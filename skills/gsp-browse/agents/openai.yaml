@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP browse"
-  short_description: "GstackSP 项目工作流：前端或网页任务需要实际打开页面、交互、截图或查看运行错误时"
-  default_prompt: "Use $gsp-browse for the relevant part of this project task."

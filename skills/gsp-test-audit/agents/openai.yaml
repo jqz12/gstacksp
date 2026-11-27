@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP test-audit"
-  short_description: "GstackSP 项目工作流：已有测试套件需要判断低价值、重复或缺失行为覆盖时"
-  default_prompt: "Use $gsp-test-audit for the relevant part of this project task."

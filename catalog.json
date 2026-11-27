@@ -1,6 +1,7 @@
 {
-  "schema": 1,
+  "schema": 2,
   "version": "0.9.9",
+  "manifest": "skills/skill-manifest.json",
   "skills": [
     {
       "name": "gsp-workflow",
@@ -9,61 +10,6 @@
         "SP:using-superpowers",
         "GS:careful",
         "GS:guard"
-      ],
-      "generated": false
-    },
-    {
-      "name": "gsp-git",
-      "pack": "core",
-      "sources": [
-        "GSP:git-lifecycle",
-        "SP:using-git-worktrees",
-        "SP:finishing-a-development-branch"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-document-governance",
-      "pack": "optional",
-      "sources": [
-        "GSP:document-governance"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-health",
-      "pack": "core",
-      "sources": [
-        "GS:health",
-        "GS:gstack-doctor"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-code-quality",
-      "pack": "core",
-      "sources": [
-        "GSP:code-quality",
-        "GS:health",
-        "GS:test-audit",
-        "SP:verification-before-completion"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-context-restore",
-      "pack": "core",
-      "sources": [
-        "GS:context-restore"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-freeze",
-      "pack": "core",
-      "sources": [
-        "GS:freeze",
-        "GS:unfreeze"
       ],
       "generated": true
     },
@@ -84,32 +30,6 @@
       "generated": true
     },
     {
-      "name": "gsp-autoplan",
-      "pack": "core",
-      "sources": [
-        "GS:autoplan",
-        "GS:plan-ceo-review",
-        "GS:plan-eng-review"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-plan-tune",
-      "pack": "core",
-      "sources": [
-        "GS:plan-tune"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-eval-plan",
-      "pack": "core",
-      "sources": [
-        "GS:eval-plan"
-      ],
-      "generated": true
-    },
-    {
       "name": "gsp-execute",
       "pack": "core",
       "sources": [
@@ -117,40 +37,6 @@
         "SP:subagent-driven-development",
         "SP:dispatching-parallel-agents",
         "SP:using-git-worktrees"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-test-driven-development",
-      "pack": "core",
-      "sources": [
-        "SP:test-driven-development"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-systematic-debugging",
-      "pack": "core",
-      "sources": [
-        "SP:systematic-debugging",
-        "GS:investigate"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-browse",
-      "pack": "core",
-      "sources": [
-        "GS:browse"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-qa",
-      "pack": "core",
-      "sources": [
-        "GS:qa",
-        "GS:qa-only"
       ],
       "generated": true
     },
@@ -165,15 +51,6 @@
       "generated": true
     },
     {
-      "name": "gsp-verify",
-      "pack": "core",
-      "sources": [
-        "SP:verification-before-completion",
-        "GS:verify"
-      ],
-      "generated": true
-    },
-    {
       "name": "gsp-ship",
       "pack": "core",
       "sources": [
@@ -184,236 +61,28 @@
       "generated": true
     },
     {
-      "name": "gsp-learn",
-      "pack": "core",
+      "name": "gsp-health",
+      "pack": "optional",
       "sources": [
-        "GS:learn"
+        "GS:health",
+        "GS:gstack-doctor"
       ],
       "generated": true
     },
     {
-      "name": "gsp-context-save",
-      "pack": "core",
+      "name": "gsp-document-governance",
+      "pack": "optional",
       "sources": [
-        "GS:context-save"
+        "GSP:document-governance"
       ],
       "generated": true
     },
     {
       "name": "gsp-writing-skills",
-      "pack": "core",
+      "pack": "optional",
       "sources": [
         "SP:writing-skills",
         "GS:write-skill"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-design-consultation",
-      "pack": "optional",
-      "sources": [
-        "GS:design-consultation"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-design-shotgun",
-      "pack": "optional",
-      "sources": [
-        "GS:design-shotgun"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-diagram",
-      "pack": "optional",
-      "sources": [
-        "GS:diagram"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-plan-design-review",
-      "pack": "optional",
-      "sources": [
-        "GS:plan-design-review"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-plan-devex-review",
-      "pack": "optional",
-      "sources": [
-        "GS:plan-devex-review"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-captain",
-      "pack": "optional",
-      "sources": [
-        "GS:captain"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-open-gstack-browser",
-      "pack": "optional",
-      "sources": [
-        "GS:open-gstack-browser"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-setup-browser-cookies",
-      "pack": "optional",
-      "sources": [
-        "GS:setup-browser-cookies"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-scrape",
-      "pack": "optional",
-      "sources": [
-        "GS:scrape"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-skillify",
-      "pack": "optional",
-      "sources": [
-        "GS:skillify"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-design-review",
-      "pack": "optional",
-      "sources": [
-        "GS:design-review"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-benchmark",
-      "pack": "optional",
-      "sources": [
-        "GS:benchmark"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-devex-review",
-      "pack": "optional",
-      "sources": [
-        "GS:devex-review"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-test-audit",
-      "pack": "optional",
-      "sources": [
-        "GS:test-audit"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-cso",
-      "pack": "optional",
-      "sources": [
-        "GS:cso"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-codex",
-      "pack": "optional",
-      "sources": [
-        "GS:codex",
-        "GS:claude-code"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-benchmark-models",
-      "pack": "optional",
-      "sources": [
-        "GS:benchmark-models"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-modernize",
-      "pack": "optional",
-      "sources": [
-        "GS:modernize"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-document-generate",
-      "pack": "optional",
-      "sources": [
-        "GS:document-generate"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-make-pdf",
-      "pack": "optional",
-      "sources": [
-        "GS:make-pdf"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-land-and-deploy",
-      "pack": "optional",
-      "sources": [
-        "GS:land-and-deploy"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-setup-deploy",
-      "pack": "optional",
-      "sources": [
-        "GS:setup-deploy"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-landing-report",
-      "pack": "optional",
-      "sources": [
-        "GS:landing-report"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-canary",
-      "pack": "optional",
-      "sources": [
-        "GS:canary"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-setup-gbrain",
-      "pack": "optional",
-      "sources": [
-        "GS:setup-gbrain"
-      ],
-      "generated": true
-    },
-    {
-      "name": "gsp-sync-gbrain",
-      "pack": "optional",
-      "sources": [
-        "GS:sync-gbrain"
       ],
       "generated": true
     },
@@ -424,6 +93,434 @@
         "SP:diagnosing-superpowers"
       ],
       "generated": true
+    }
+  ],
+  "methods": [
+    {
+      "name": "gsp-design-consultation",
+      "owner": "brainstorming",
+      "path": "skills/gsp-workflow/methods/gsp-design-consultation/METHOD.md",
+      "resource_digest": "24ecf683f5200ae8d4a2e24e84c58cc86f2d5fdbbbb144f0a077952b60f258e0",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-design-shotgun",
+      "owner": "brainstorming",
+      "path": "skills/gsp-workflow/methods/gsp-design-shotgun/METHOD.md",
+      "resource_digest": "b249a7d1a0161dc8497e2ac3852d8c08e9dba8ca7170d952b5ca23bc315c462e",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-autoplan",
+      "owner": "writing-plans",
+      "path": "skills/gsp-workflow/methods/gsp-autoplan/METHOD.md",
+      "resource_digest": "c39a35f1fe51f3ddf450fc07a6a42d7ec0f52679083f128c1dfc74d8065b8347",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-plan-tune",
+      "owner": "writing-plans",
+      "path": "skills/gsp-workflow/methods/gsp-plan-tune/METHOD.md",
+      "resource_digest": "7bd2197c95f2f5d594619db638026c8b8a6a5927346688707830417097c62fc7",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-plan-design-review",
+      "owner": "writing-plans",
+      "path": "skills/gsp-workflow/methods/gsp-plan-design-review/METHOD.md",
+      "resource_digest": "6532b85789f2ddfb7a228cc202d95995b2d69e20bd37113f76b702d8571bbfd7",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-plan-devex-review",
+      "owner": "writing-plans",
+      "path": "skills/gsp-workflow/methods/gsp-plan-devex-review/METHOD.md",
+      "resource_digest": "ef8e32d6546dd371a16c65f134ffd9e4e913c02292cdb16a3a8ec42f8cb08358",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-test-driven-development",
+      "owner": "execute",
+      "path": "skills/gsp-workflow/methods/gsp-test-driven-development/METHOD.md",
+      "resource_digest": "4b799b93a6a64adbc31460c19157c41ef545d73d285a8c4bc8c4ffde06990584",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-systematic-debugging",
+      "owner": "execute",
+      "path": "skills/gsp-workflow/methods/gsp-systematic-debugging/METHOD.md",
+      "resource_digest": "676b66f9a755e86ea7ea537ba230a97a18e2fd81b76edd3a3fe5a092b5ed2b3f",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-code-quality",
+      "owner": "execute",
+      "path": "skills/gsp-workflow/methods/gsp-code-quality/METHOD.md",
+      "resource_digest": "121ef50f61d0efe28a236050184a58cb753e319e6c601dbe9484d179a1996199",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-browse",
+      "owner": "execute",
+      "path": "skills/gsp-workflow/methods/gsp-browse/METHOD.md",
+      "resource_digest": "8804729cc42df41e4eea680da2d46a00e93141f73911ad6e3213ef962b1af889",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-qa",
+      "owner": "execute",
+      "path": "skills/gsp-workflow/methods/gsp-qa/METHOD.md",
+      "resource_digest": "637a3f9f0599add3d8317c29bdb1bd43d7e95f38bdc04057db958db1c2ea77b6",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-open-gstack-browser",
+      "owner": "execute",
+      "path": "skills/gsp-workflow/methods/gsp-open-gstack-browser/METHOD.md",
+      "resource_digest": "6f2300a8186385d48c7d364412cf8bba8b25f80d35a0ec4d61a183258ff65eac",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-setup-browser-cookies",
+      "owner": "execute",
+      "path": "skills/gsp-workflow/methods/gsp-setup-browser-cookies/METHOD.md",
+      "resource_digest": "80a699a177be7c9594fa3f64b0dba46c8e22487c2328d3fe5810c0a9197243c6",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-benchmark",
+      "owner": "execute",
+      "path": "skills/gsp-workflow/methods/gsp-benchmark/METHOD.md",
+      "resource_digest": "335209ed88d3002454d531dd2b6f4a9aeb10ff8fbbc84cb3501f0d29d145c8a1",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-document-generate",
+      "owner": "execute",
+      "path": "skills/gsp-workflow/methods/gsp-document-generate/METHOD.md",
+      "resource_digest": "b40c183f6490521286e4eb5040424ccaaf2a828f6bacacc8c2d0dcadd8b23965",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-verify",
+      "owner": "review",
+      "path": "skills/gsp-workflow/methods/gsp-verify/METHOD.md",
+      "resource_digest": "5506be72d084ae2e8bb4f16945aa5df49b6c8bdc187f5fee37ce6e9c04c2d127",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-design-review",
+      "owner": "review",
+      "path": "skills/gsp-workflow/methods/gsp-design-review/METHOD.md",
+      "resource_digest": "c0b8d32b7a7468b22a07e213d58d2df8eb56d366e7fe102066fb46d90c3d1cd9",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-devex-review",
+      "owner": "review",
+      "path": "skills/gsp-workflow/methods/gsp-devex-review/METHOD.md",
+      "resource_digest": "b6b00761a190e4510b73889a26cfaa3895d9458cb989ce30dc5e9174569b7ddb",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-git",
+      "owner": "ship",
+      "path": "skills/gsp-workflow/methods/gsp-git/METHOD.md",
+      "resource_digest": "7dd1b1f2d4708bed5c01fb7fb646a20eaae8349d7f0d173060c1cb1c2cdc881d",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-land-and-deploy",
+      "owner": "ship",
+      "path": "skills/gsp-workflow/methods/gsp-land-and-deploy/METHOD.md",
+      "resource_digest": "92a51e8ce903fbdf25255e3aa3358c3f3e6ffdca55b26dda8f616e2a3e3f7eb9",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-setup-deploy",
+      "owner": "ship",
+      "path": "skills/gsp-workflow/methods/gsp-setup-deploy/METHOD.md",
+      "resource_digest": "c49d118da3172c6f668498e7089216a7098ebec3f669614ea8698117b7b214b4",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-landing-report",
+      "owner": "ship",
+      "path": "skills/gsp-workflow/methods/gsp-landing-report/METHOD.md",
+      "resource_digest": "7bf48c46a69a914e6204e9fd5d42bb162af294a1ab74ad0b233bb1983d6796e0",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-canary",
+      "owner": "ship",
+      "path": "skills/gsp-workflow/methods/gsp-canary/METHOD.md",
+      "resource_digest": "fc5090bcfb1ac65ef3c0c27bbbb4125748eb2c356475602cec5f9b763d31e231",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-modernize",
+      "owner": "ship",
+      "path": "skills/gsp-workflow/methods/gsp-modernize/METHOD.md",
+      "resource_digest": "398e4b31639eccc6061f798bc436fff7932d38f7121509659fcaaed5fe2961ec",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-context-save",
+      "owner": "workflow",
+      "path": "skills/gsp-workflow/references/contract.md",
+      "resource_digest": "ce3822fe8fe985cb966d1c4cb59113a730ec5ea03bcc2b9f15e060be312a367b",
+      "shared_artifact": true
+    },
+    {
+      "name": "gsp-context-restore",
+      "owner": "workflow",
+      "path": "skills/gsp-workflow/references/contract.md",
+      "resource_digest": "ce3822fe8fe985cb966d1c4cb59113a730ec5ea03bcc2b9f15e060be312a367b",
+      "shared_artifact": true
+    },
+    {
+      "name": "gsp-scrape",
+      "owner": "workflow",
+      "path": "skills/gsp-workflow/methods/gsp-scrape/METHOD.md",
+      "resource_digest": "06f643d20fdadec512bf3c1436440a83909e67a19025d83d6ef12c04abe1eb03",
+      "shared_artifact": false
+    },
+    {
+      "name": "gsp-skillify",
+      "owner": "writing-skills",
+      "path": "skills/gsp-workflow/methods/gsp-skillify/METHOD.md",
+      "resource_digest": "652820906d9b98fd2f8e73da27a39e909b3d74c69bd81b5592f9450a0c4f0cfc",
+      "shared_artifact": false
+    }
+  ],
+  "retired": [
+    {
+      "name": "gsp-git",
+      "kind": "internalized-method",
+      "replacement": "gsp-ship",
+      "path": "skills/gsp-workflow/methods/gsp-git/METHOD.md"
+    },
+    {
+      "name": "gsp-code-quality",
+      "kind": "internalized-method",
+      "replacement": "gsp-execute",
+      "path": "skills/gsp-workflow/methods/gsp-code-quality/METHOD.md"
+    },
+    {
+      "name": "gsp-context-restore",
+      "kind": "internalized-method",
+      "replacement": "gsp-workflow",
+      "path": "skills/gsp-workflow/references/contract.md"
+    },
+    {
+      "name": "gsp-freeze",
+      "kind": "deleted",
+      "replacement": "gsp-workflow"
+    },
+    {
+      "name": "gsp-autoplan",
+      "kind": "internalized-method",
+      "replacement": "gsp-writing-plans",
+      "path": "skills/gsp-workflow/methods/gsp-autoplan/METHOD.md"
+    },
+    {
+      "name": "gsp-plan-tune",
+      "kind": "internalized-method",
+      "replacement": "gsp-writing-plans",
+      "path": "skills/gsp-workflow/methods/gsp-plan-tune/METHOD.md"
+    },
+    {
+      "name": "gsp-eval-plan",
+      "kind": "deleted",
+      "replacement": "gsp-writing-plans"
+    },
+    {
+      "name": "gsp-test-driven-development",
+      "kind": "internalized-method",
+      "replacement": "gsp-execute",
+      "path": "skills/gsp-workflow/methods/gsp-test-driven-development/METHOD.md"
+    },
+    {
+      "name": "gsp-systematic-debugging",
+      "kind": "internalized-method",
+      "replacement": "gsp-execute",
+      "path": "skills/gsp-workflow/methods/gsp-systematic-debugging/METHOD.md"
+    },
+    {
+      "name": "gsp-browse",
+      "kind": "internalized-method",
+      "replacement": "gsp-execute",
+      "path": "skills/gsp-workflow/methods/gsp-browse/METHOD.md"
+    },
+    {
+      "name": "gsp-qa",
+      "kind": "internalized-method",
+      "replacement": "gsp-execute",
+      "path": "skills/gsp-workflow/methods/gsp-qa/METHOD.md"
+    },
+    {
+      "name": "gsp-verify",
+      "kind": "internalized-method",
+      "replacement": "gsp-review",
+      "path": "skills/gsp-workflow/methods/gsp-verify/METHOD.md"
+    },
+    {
+      "name": "gsp-learn",
+      "kind": "deleted",
+      "replacement": "gsp-workflow"
+    },
+    {
+      "name": "gsp-context-save",
+      "kind": "internalized-method",
+      "replacement": "gsp-workflow",
+      "path": "skills/gsp-workflow/references/contract.md"
+    },
+    {
+      "name": "gsp-design-consultation",
+      "kind": "internalized-method",
+      "replacement": "gsp-brainstorming",
+      "path": "skills/gsp-workflow/methods/gsp-design-consultation/METHOD.md"
+    },
+    {
+      "name": "gsp-design-shotgun",
+      "kind": "internalized-method",
+      "replacement": "gsp-brainstorming",
+      "path": "skills/gsp-workflow/methods/gsp-design-shotgun/METHOD.md"
+    },
+    {
+      "name": "gsp-diagram",
+      "kind": "deleted",
+      "replacement": "gsp-brainstorming"
+    },
+    {
+      "name": "gsp-plan-design-review",
+      "kind": "internalized-method",
+      "replacement": "gsp-writing-plans",
+      "path": "skills/gsp-workflow/methods/gsp-plan-design-review/METHOD.md"
+    },
+    {
+      "name": "gsp-plan-devex-review",
+      "kind": "internalized-method",
+      "replacement": "gsp-writing-plans",
+      "path": "skills/gsp-workflow/methods/gsp-plan-devex-review/METHOD.md"
+    },
+    {
+      "name": "gsp-captain",
+      "kind": "deleted",
+      "replacement": "gsp-execute"
+    },
+    {
+      "name": "gsp-open-gstack-browser",
+      "kind": "internalized-method",
+      "replacement": "gsp-execute",
+      "path": "skills/gsp-workflow/methods/gsp-open-gstack-browser/METHOD.md"
+    },
+    {
+      "name": "gsp-setup-browser-cookies",
+      "kind": "internalized-method",
+      "replacement": "gsp-execute",
+      "path": "skills/gsp-workflow/methods/gsp-setup-browser-cookies/METHOD.md"
+    },
+    {
+      "name": "gsp-scrape",
+      "kind": "internalized-method",
+      "replacement": "gsp-workflow",
+      "path": "skills/gsp-workflow/methods/gsp-scrape/METHOD.md"
+    },
+    {
+      "name": "gsp-skillify",
+      "kind": "internalized-method",
+      "replacement": "gsp-writing-skills",
+      "path": "skills/gsp-workflow/methods/gsp-skillify/METHOD.md"
+    },
+    {
+      "name": "gsp-design-review",
+      "kind": "internalized-method",
+      "replacement": "gsp-review",
+      "path": "skills/gsp-workflow/methods/gsp-design-review/METHOD.md"
+    },
+    {
+      "name": "gsp-benchmark",
+      "kind": "internalized-method",
+      "replacement": "gsp-execute",
+      "path": "skills/gsp-workflow/methods/gsp-benchmark/METHOD.md"
+    },
+    {
+      "name": "gsp-devex-review",
+      "kind": "internalized-method",
+      "replacement": "gsp-review",
+      "path": "skills/gsp-workflow/methods/gsp-devex-review/METHOD.md"
+    },
+    {
+      "name": "gsp-test-audit",
+      "kind": "deleted",
+      "replacement": "gsp-review"
+    },
+    {
+      "name": "gsp-cso",
+      "kind": "deleted",
+      "replacement": "gsp-review"
+    },
+    {
+      "name": "gsp-codex",
+      "kind": "deleted",
+      "replacement": "gsp-execute"
+    },
+    {
+      "name": "gsp-benchmark-models",
+      "kind": "deleted",
+      "replacement": "gsp-review"
+    },
+    {
+      "name": "gsp-modernize",
+      "kind": "internalized-method",
+      "replacement": "gsp-ship",
+      "path": "skills/gsp-workflow/methods/gsp-modernize/METHOD.md"
+    },
+    {
+      "name": "gsp-document-generate",
+      "kind": "internalized-method",
+      "replacement": "gsp-execute",
+      "path": "skills/gsp-workflow/methods/gsp-document-generate/METHOD.md"
+    },
+    {
+      "name": "gsp-make-pdf",
+      "kind": "deleted",
+      "replacement": "gsp-ship"
+    },
+    {
+      "name": "gsp-land-and-deploy",
+      "kind": "internalized-method",
+      "replacement": "gsp-ship",
+      "path": "skills/gsp-workflow/methods/gsp-land-and-deploy/METHOD.md"
+    },
+    {
+      "name": "gsp-setup-deploy",
+      "kind": "internalized-method",
+      "replacement": "gsp-ship",
+      "path": "skills/gsp-workflow/methods/gsp-setup-deploy/METHOD.md"
+    },
+    {
+      "name": "gsp-landing-report",
+      "kind": "internalized-method",
+      "replacement": "gsp-ship",
+      "path": "skills/gsp-workflow/methods/gsp-landing-report/METHOD.md"
+    },
+    {
+      "name": "gsp-canary",
+      "kind": "internalized-method",
+      "replacement": "gsp-ship",
+      "path": "skills/gsp-workflow/methods/gsp-canary/METHOD.md"
+    },
+    {
+      "name": "gsp-setup-gbrain",
+      "kind": "deleted",
+      "replacement": "gsp-workflow"
+    },
+    {
+      "name": "gsp-sync-gbrain",
+      "kind": "deleted",
+      "replacement": "gsp-workflow"
     }
   ],
   "excluded": [

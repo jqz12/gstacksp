@@ -2,6 +2,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+import shutil
 
 from gsp.git_topology import branch_name
 from gsp.runtime import Project, WorkflowError
@@ -122,6 +123,109 @@ class WorktreeLifecycleTests(unittest.TestCase):
 
         with self.assertRaisesRegex(WorkflowError, "WORKTREE_BRANCH_CONFLICT"):
             prepare_worktree(self.project, self.state, self.task(), self.dispatch())
+
+    def test_external_same_common_dir_worktree_is_verified_and_bound(self):
+        external = Path(self.tmp.name) / "external-worktree"
+        self.git("worktree", "add", "-b", "feature/external", str(external))
+
+        result = prepare_worktree(
+            self.project,
+            self.state,
+            self.task("T02"),
+            self.dispatch("T02"),
+            requested_path=external,
+            mode="bind",
+        )
+        self.assertEqual(result["worktree_mode"], "bound")
+        self.assertTrue(result["binding_verified"])
+        self.assertEqual(result["cleanup_action"], "release")
+        self.assertFalse(result["deletable"])
+
+    def test_other_repository_and_unregistered_git_copy_are_rejected(self):
+        other = Path(self.tmp.name) / "other"
+        other.mkdir()
+        self.git("init", "-q", "-b", "main", cwd=other)
+        (other / "README.md").write_text("# other\n", encoding="utf-8")
+        self.git("add", "README.md", cwd=other)
+        self.git("commit", "-qm", "other baseline", cwd=other)
+        with self.assertRaisesRegex(WorkflowError, "WORKTREE_COMMON_DIR_MISMATCH"):
+            prepare_worktree(
+                self.project,
+                self.state,
+                self.task("T02"),
+                self.dispatch("T02"),
+                requested_path=other,
+                mode="bind",
+            )
+
+        copy = self.root / "git-copy"
+        copy.mkdir()
+        (copy / ".git").write_text("gitdir: ../.git\n", encoding="utf-8")
+        with self.assertRaisesRegex(WorkflowError, "WORKTREE_NOT_REGISTERED"):
+            prepare_worktree(
+                self.project,
+                self.state,
+                self.task("T03"),
+                self.dispatch("T03"),
+                requested_path=copy,
+                mode="bind",
+            )
+
+    def test_plain_non_git_child_directory_remains_bound_compatible(self):
+        plain = self.root / "plain-source"
+        plain.mkdir()
+        result = prepare_worktree(
+            self.project,
+            self.state,
+            self.task("T02"),
+            self.dispatch("T02"),
+            requested_path=plain,
+            mode="bind",
+        )
+        self.assertEqual(result["worktree_mode"], "bound")
+        self.assertFalse(result["binding_verified"])
+        cleaned = cleanup_worktree(self.project, result, "accepted")
+        self.assertEqual(cleaned["result"], "released")
+        self.assertTrue(plain.exists())
+
+    def test_native_and_managed_missing_have_explicit_dispositions(self):
+        native = {
+            **self.dispatch("T02"),
+            "path": str(self.root),
+            "worktree": str(self.root),
+            "managed_worktree": False,
+            "worktree_mode": "native",
+            "cleanup_action": "archive",
+            "worktree_state": "accepted",
+        }
+        pending = cleanup_worktree(self.project, native, "accepted")
+        self.assertEqual(pending["result"], "cleanup-pending")
+        self.assertEqual(
+            pending["pending_host_action"]["kind"], "worktree-archive"
+        )
+
+        managed = prepare_worktree(
+            self.project, self.state, self.task(), self.dispatch()
+        )
+        shutil.rmtree(managed["path"])
+        missing = cleanup_worktree(self.project, managed, "accepted")
+        self.assertEqual(missing["result"], "cleanup-pending")
+        self.assertEqual(
+            missing["cleanup_error"]["code"], "WORKTREE_PATH_MISSING"
+        )
+
+        proven = {
+            **managed,
+            "worktree_disposition": {
+                "action": "remove",
+                "state": "completed",
+                "path": managed["path"],
+                "verified_absent": True,
+            },
+        }
+        repeated = cleanup_worktree(self.project, proven, "retry")
+        self.assertEqual(repeated["result"], "removed")
+        self.assertTrue(repeated["idempotent"])
 
 
 if __name__ == "__main__":

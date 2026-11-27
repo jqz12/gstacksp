@@ -9,7 +9,8 @@ import subprocess
 from urllib.parse import unquote
 import uuid
 
-from .runtime import WorkflowError, atomic, digest, git_identity, inside, now, read, redact, sha
+from .core import (WorkflowError, atomic, digest, inside, now, read, redact, sha)
+from .git_operations import (git_identity)
 from .project_assets import is_link, scan_assets
 from .routing import route_for
 
@@ -27,7 +28,8 @@ def _git_unknown(exc):
 
 def git_route(root):
     """Read-only Git classification and compact next-skill handoff."""
-    from .runtime import Project, visible_git_marker
+    from .git_operations import (visible_git_marker)
+    from .project import (Project)
     from .git_topology import bound_task_for_path
     context_path = Path(root).resolve()
     try:
@@ -67,7 +69,8 @@ def git_route(root):
         topology = None
         topology_condition = None
         if active:
-            from .runtime import Project, topology_required, topology_selected
+            from .project import (Project)
+            from .workflow_support import (topology_required, topology_selected)
             project = Project(root)
             try:
                 state, _, _ = project.active_state(context_path=context_path)
@@ -195,7 +198,7 @@ def audit(root, report_dir=None, max_files=100000, max_bytes=2_000_000):
         if len(paths)>1: finding('ambiguous-number',paths[0],number+' requires UUID disambiguation',severity='ERROR',related=paths[1:])
     # Legacy runtime bindings are checked without calling state(), which could
     # invalidate delivery and write into the supposedly read-only target.
-    from .runtime import Project
+    from .project import (Project)
     project=Project(root)
     states=[]
     if inside(root,root/'.gsp/runs'):

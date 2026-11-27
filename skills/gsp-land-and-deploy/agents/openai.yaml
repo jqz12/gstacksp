@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP land-and-deploy"
-  short_description: "GstackSP 项目工作流：交付已准备且用户授权合并或部署到具体环境时"
-  default_prompt: "Use $gsp-land-and-deploy for the relevant part of this project task."

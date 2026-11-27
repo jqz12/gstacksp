@@ -1,5 +1,6 @@
 import json
 import io
+import os
 from argparse import Namespace
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
@@ -8,8 +9,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from process_helpers import run, document
-from gsp.plan_quality import check_plan
+from process_helpers import run, document, session_binding, temporary_env
+from gsp.plan_quality import check_plan, inspect_plan, write_plan_gate
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,6 +27,7 @@ Windows, Python 3.10+.
 Preserve existing links; inspect their targets in {task}.
 ## Task {task}: Label
 **Files:** Modify docs/README.md.
+Convergence: {{"requires_slices":false,"single_outcome":"links intact"}}
 **Interfaces:**
 - Consumes: N/A — no program interface changes, read existing prose.
 - Produces: N/A — only a corrected label, no exported API.
@@ -35,6 +37,63 @@ Preserve existing links; inspect their targets in {task}.
 ## Self-Review
 Coverage, steps, type consistency, failure cases and proportion checked.
 '''
+
+
+def write_plan(first, second, depends=None):
+    depends = depends or []
+    first = json.dumps(first)
+    second = json.dumps(second)
+    return f'''# Two task plan
+**Goal:** Exercise scheduling writes.
+**Architecture:** Reuse plan quality.
+**Tech Stack:** Python.
+**Spec:** [spec](spec.md)
+## Global Constraints
+Conservative conflict checks.
+## Review Focus
+Review both tasks.
+## Task T01: First
+**Files:** Modify shared source.
+**Writes:** {{"paths":[{first}]}}
+**Interfaces:**
+- Consumes: N/A.
+- Produces: N/A.
+- [ ] Implement T01.
+- [ ] Run: python -m unittest tests.test_plan_quality
+  Expected: exit 0.
+## Task T02: Second
+**Files:** Modify shared source.
+**Writes:** {{"paths":[{second}]}}
+**Interfaces:**
+- Consumes: T01 output when ordered.
+- Produces: N/A.
+- [ ] Implement T02.
+- [ ] Run: python -m unittest tests.test_plan_quality
+  Expected: exit 0.
+## Self-Review
+Paths, dependencies and verification reviewed.
+'''
+
+
+class PlanProject:
+    def __init__(self, root, state, plan):
+        self.root = root
+        self._state = state
+        self._plan = plan
+
+    def identity(self):
+        return {'id': 'project'}
+
+    def paths(self, task_id):
+        run = self.root / '.gsp/runs' / task_id
+        run.mkdir(parents=True, exist_ok=True)
+        (run / 'state.json').write_text(
+            json.dumps(self._state), encoding='utf-8',
+        )
+        return run, self._plan.parent
+
+    def document(self, state, kind):
+        return self._plan
 
 
 class PlanQualityTests(unittest.TestCase):
@@ -99,14 +158,111 @@ class PlanQualityTests(unittest.TestCase):
             self.assertFalse(result['structural_ok'])
             self.assertIn('GLOBAL_CONSTRAINTS_MISSING', {row['code'] for row in result['findings']})
 
+    def _inspect(self, plan, depends=()):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        path = root / 'plan.md'
+        path.write_text(plan, encoding='utf-8')
+        state = {
+            'id': 'sample',
+            'project_id': 'project',
+            'work_uuid': 'work',
+            'tasks': [
+                {'id': 'T01', 'title': 'First', 'acceptance': 'works',
+                 'depends': []},
+                {'id': 'T02', 'title': 'Second', 'acceptance': 'works',
+                 'depends': list(depends)},
+            ],
+        }
+        return inspect_plan(PlanProject(root, state, path), 'sample')
+
+    def test_inspect_plan_rejects_unordered_parent_child_write_conflict(self):
+        result = self._inspect(write_plan('src/shared', 'SRC\\shared\\file.py'))
+        self.assertFalse(result['structural_ok'])
+        self.assertEqual(result['write_coverage']['status'], 'COMPLETE')
+        self.assertIn('WRITE_CONFLICT', {row['code'] for row in result['findings']})
+        self.assertFalse(result['write_coverage']['edit_allowlist'])
+        self.assertFalse(result['write_coverage']['parallel_verified'])
+
+    def test_inspect_plan_allows_declared_ordered_shared_write(self):
+        result = self._inspect(
+            write_plan('src/shared', 'src/shared/file.py'), depends=['T01'],
+        )
+        self.assertTrue(result['structural_ok'], result)
+        self.assertEqual(result['write_conflicts'], [])
+        self.assertEqual(result['write_coverage']['status'], 'COMPLETE')
+        self.assertTrue(result['write_coverage']['parallel_verified'])
+
+    def test_inspect_plan_rejects_invalid_windows_drive_path(self):
+        result = self._inspect(write_plan('C:\\work\\one.py', 'src/two.py'))
+        self.assertFalse(result['structural_ok'])
+        self.assertIn(
+            'WRITE_PATH_INVALID',
+            {row['code'] for row in result['findings']},
+        )
+        self.assertEqual(result['write_coverage']['status'], 'INCOMPLETE')
+        self.assertFalse(result['write_coverage']['parallel_verified'])
+
+    def test_unknown_legacy_coverage_is_not_parallel_verified(self):
+        result = self._inspect('# Legacy plan\nKeep compatibility.')
+        self.assertEqual(result['write_coverage']['status'], 'NOT_CHECKED')
+        self.assertEqual(
+            result['write_coverage']['reason'],
+            'TASK_CONTRACT_CONTEXT_REQUIRED',
+        )
+        self.assertFalse(result['write_coverage']['parallel_verified'])
+
+    def test_fenced_writes_example_is_ignored_by_the_shared_parser(self):
+        text = write_plan('src/real-one', 'src/real-two')
+        text = text.replace(
+            '**Writes:** {"paths":["src/real-one"]}',
+            '```markdown\n'
+            '**Writes:** {"paths":["src/fenced-example"]}\n'
+            '```\n'
+            '**Writes:** {"paths":["src/real-one"]}',
+        )
+        state = {
+            'id': 'sample',
+            'project_id': 'project',
+            'work_uuid': 'work',
+            'tasks': [
+                {'id': 'T01', 'title': 'First', 'acceptance': 'works',
+                 'depends': []},
+                {'id': 'T02', 'title': 'Second', 'acceptance': 'works',
+                 'depends': []},
+            ],
+        }
+        gate = write_plan_gate(state, text, parallel=True)
+        self.assertEqual(gate['blockers'], [])
+        self.assertTrue(gate['coverage']['parallel_verified'])
+        self.assertEqual(gate['conflicts'], [])
+
     def test_cli_read_only_and_checked_seal(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            env = os.environ.copy()
+            env.pop('GSP_SESSION_CONTEXT', None)
+            env.update({
+                'HOME': directory,
+                'USERPROFILE': directory,
+                'CODEX_HOME': str(root / '.codex'),
+            })
             def cli(*args):
                 return run([sys.executable, str(ROOT/'scripts/gsp.py'), '--project', directory, *args],
-                           capture_output=True, text=True, encoding='utf-8')
+                           capture_output=True, text=True, encoding='utf-8',
+                           env=env)
             self.assertEqual(cli('init').returncode, 0)
             self.assertEqual(cli('new', 'sample', '--title', 'Example').returncode, 0)
+            state = json.loads(
+                (root/'.gsp/runs/sample/state.json').read_text(
+                    encoding='utf-8',
+                )
+            )
+            binding = session_binding(
+                root, state['work_uuid'], 'main', 'codex', 'plan-main',
+            )
+            env['GSP_SESSION_CONTEXT'] = str(root / binding.handle_path)
             document(root, 'sample', 'design').write_text('# Design\nChange the label, preserve links.', encoding='utf-8')
             self.assertEqual(cli('approve', 'sample', '--quote', 'SYNTHETIC approval').returncode, 0)
             self.assertEqual(cli('task-add', 'sample', 'T1', '--title', 'Label', '--acceptance', 'links intact').returncode, 0)
@@ -143,13 +299,28 @@ class PlanQualityTests(unittest.TestCase):
                     raise AssertionError('unbounded plan read before size validation')
                 return original(path, *args, **kwargs)
             stderr = io.StringIO()
-            with patch.object(Path, 'read_text', guarded), redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            direct_env = {
+                key: env[key]
+                for key in (
+                    'GSP_SESSION_CONTEXT', 'HOME', 'USERPROFILE', 'CODEX_HOME',
+                )
+            }
+            with (
+                temporary_env(direct_env),
+                patch.object(Path, 'read_text', guarded),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+            ):
                 code = main(['--project', directory, 'seal-plan', 'sample', '--check-structure'])
             self.assertEqual(code, 1)
             self.assertIn('PLAN_TOO_LARGE', stderr.getvalue())
             plan.write_text(complete(), encoding='utf-8')
             # Driver and other pre-existing internal callers omit argparse's new field.
-            result, ok = dispatch(Project(directory), Namespace(command='seal-plan', id='sample'))
+            with temporary_env(direct_env):
+                result, ok = dispatch(
+                    Project(directory),
+                    Namespace(command='seal-plan', id='sample'),
+                )
             self.assertTrue(ok)
             self.assertEqual(result['event'], 'seal-plan')
 

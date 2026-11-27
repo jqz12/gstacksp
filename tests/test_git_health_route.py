@@ -23,11 +23,11 @@ class GitHealthRouteTests(unittest.TestCase):
 
     def test_dirty_and_untracked_routes_to_gsp_git(self):
         root=self.repo(); (root/'README.md').write_text('changed',encoding='utf-8'); (root/'new.txt').write_text('new',encoding='utf-8')
-        r=git_route(root); self.assertEqual(r['next_skill'],'gsp-git'); self.assertTrue(r['user_decision_required']); self.assertEqual(r['decision_kind'],'worktree')
+        r=git_route(root); self.assertEqual(r['next_skill'],'gsp-ship'); self.assertTrue(r['user_decision_required']); self.assertEqual(r['decision_kind'],'worktree')
 
     def test_non_repository_is_explicit_decision(self):
         with tempfile.TemporaryDirectory() as d:
-            r=git_route(Path(d)); self.assertEqual(r['status'],'not-a-repository'); self.assertEqual(r['next_skill'],'gsp-git'); self.assertTrue(r['blocking'])
+            r=git_route(Path(d)); self.assertEqual(r['status'],'not-a-repository'); self.assertEqual(r['next_skill'],'gsp-ship'); self.assertTrue(r['blocking'])
 
     def test_strict_health_returns_nonzero_for_detached_route(self):
         root=self.repo(); subprocess.run(['git','checkout','--quiet','--detach','HEAD'],cwd=root,check=True)

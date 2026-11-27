@@ -7,7 +7,8 @@ import re
 import sys
 import uuid
 
-from .runtime import WorkflowError, atomic, digest, locked, now, read, sha
+from .core import (WorkflowError, atomic, digest, now, read, sha)
+from .workflow_locks import (locked)
 from .user_install import UserInstall, publish
 from .codex_hooks import EVENTS
 

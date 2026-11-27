@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP test-driven-development"
-  short_description: "GstackSP 项目工作流：实现或修复可自动验证的行为，需要可靠回归测试时"
-  default_prompt: "Use $gsp-test-driven-development for the relevant part of this project task."

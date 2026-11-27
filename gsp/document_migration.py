@@ -11,7 +11,7 @@ from urllib.parse import unquote
 import uuid
 
 from .document_health import SKIP
-from .runtime import WorkflowError, atomic, digest, inside, now, read, sha
+from .core import (WorkflowError, atomic, digest, inside, now, read, sha)
 
 
 def safe(root,rel):
@@ -91,7 +91,7 @@ def move(root,source,destination,apply=False):
                     'backup':p.read_text(encoding='utf-8-sig') if p.exists() else None,'after':sha(value.encode()),'text':value})
     active=root/'.gsp/active.json'
     if active.exists():
-        from .runtime import Project
+        from .project import (Project)
         project=Project(root);state,_,_=project.active_state()
         if state.get('scope',{}).get('mode')=='frozen':
             for op in ops:project.scope_path(state,op['path'])

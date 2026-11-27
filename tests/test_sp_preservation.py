@@ -16,11 +16,14 @@ class PreservationTests(unittest.TestCase):
         self.assertEqual(result['shortened_bodies'], 0)
 
     def test_full_tdd_method_and_dependencies_are_installed(self):
-        text = (ROOT/'skills/gsp-test-driven-development/SKILL.md').read_text(encoding='utf-8')
+        from gsp import skill_catalog
+        manifest = skill_catalog.load_manifest(ROOT)
+        text = (ROOT/skill_catalog.entry_for(manifest, 'test-driven-development').internal_method_path).read_text(encoding='utf-8')
         self.assertIn('## The Iron Law', text)
         self.assertIn('## Red-Green-Refactor', text)
         self.assertTrue((ROOT/'skills/gsp-workflow/upstream/skills/test-driven-development/writing-good-tests.md').is_file())
         self.assertTrue((ROOT/'skills/gsp-workflow/upstream/skills/subagent-driven-development/references/fix-loop.md').is_file())
+        self.assertFalse((ROOT/'skills/gsp-test-driven-development/SKILL.md').exists())
         # Originals are readable resources, never extra discoverable skill entries.
         self.assertEqual(list((ROOT/'skills/gsp-workflow/upstream').rglob('SKILL.md')), [])
 

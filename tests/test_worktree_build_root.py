@@ -8,9 +8,13 @@ from argparse import Namespace
 from pathlib import Path
 
 from gsp.dispatch import render_task_prompt
-from gsp.runtime import Project, atomic
+from gsp.runtime import Project, atomic, dispatch, parser, read
 from gsp.sessions import register_session, write_brief
 from gsp.worktree_lifecycle import cleanup_worktree, prepare_worktree
+try:
+    from process_helpers import session_binding
+except ModuleNotFoundError:
+    from tests.process_helpers import session_binding
 
 
 class WorktreeBuildRootTests(unittest.TestCase):
@@ -26,21 +30,34 @@ class WorktreeBuildRootTests(unittest.TestCase):
         self.git('add', '.gitignore', 'README.md')
         self.git('commit', '-qm', 'baseline')
         head = self.git('rev-parse', 'HEAD')
-        self.state = {
-            'id': 'cross-session-build-root',
-            'number': 'GSP-000021',
-            'title': 'managed build root',
-            'tasks': [
-                {'id': 'T01', 'title': 'build root one', 'role': 'implementation'},
-                {'id': 'T02', 'title': 'build root two', 'role': 'implementation'},
-            ],
-            'git_topology': {
-                'workspace_root': str(self.root),
-                'branch': 'main',
-                'head': head,
-                'base_head': head,
-            },
+        result, success = dispatch(
+            self.project,
+            parser().parse_args([
+                'new', 'cross-session-build-root',
+                '--title', 'Managed build root', '--intent', 'single-task',
+            ]),
+        )
+        self.assertTrue(success, result)
+        state = read(
+            self.root / '.gsp' / 'runs' / 'cross-session-build-root' / 'state.json'
+        )
+        state['tasks'] = [
+            {'id': 'T01', 'title': 'build root one', 'role': 'implementation'},
+            {'id': 'T02', 'title': 'build root two', 'role': 'implementation'},
+        ]
+        state['git_topology'] = {
+            'workspace_root': str(self.root),
+            'branch': 'main',
+            'head': head,
+            'base_head': head,
         }
+        self.project.write(
+            state, 'fixture-build-root', 'two implementation tasks and topology',
+            action_uid='fixture:build-root:tasks',
+        )
+        self.state = read(
+            self.root / '.gsp' / 'runs' / 'cross-session-build-root' / 'state.json'
+        )
 
     def git(self, *argv):
         env = {key: value for key, value in os.environ.items()
@@ -69,7 +86,8 @@ class WorktreeBuildRootTests(unittest.TestCase):
     def test_two_worktrees_get_independent_build_roots(self):
         first = self.prepare('T01')
         second = self.prepare('T02')
-        self.assertTrue(first['build_root'].startswith('.gsp/build/GSP-000021/'))
+        self.assertTrue(first['build_root'].startswith(
+            f'.gsp/build/{self.state["number"]}/'))
         self.assertNotEqual(first['build_root'], second['build_root'])
         for row in (first, second):
             self.assertEqual(row['build_mode'], 'managed')
@@ -129,14 +147,21 @@ class WorktreeBuildRootTests(unittest.TestCase):
 
     def test_session_brief_includes_the_build_environment(self):
         row = self.prepare('T01')
+        main = session_binding(
+            self.root, self.state['work_uuid'], 'main', 'manual', 'main-thread',
+        )
         register_session(self.project, self.state, Namespace(
-            session='S01', role='controller', host='manual', thread=None, task=None,
-            branch=None, worktree=None, write_mode='read-only', path=[], takeover=False,
-            reason=''))
+            session='S01', role='controller', host='manual', thread='main-thread',
+            task=None, branch=None, worktree=None, write_mode='read-only', path=[],
+            takeover=False, reason='', context=str(self.root / main.handle_path)))
+        worker = session_binding(
+            self.root, self.state['work_uuid'], 'child', 'manual', 'worker-thread',
+        )
         register_session(self.project, self.state, Namespace(
-            session='S02', role='worker', host='manual', thread=None, task='T01',
-            branch=row['branch'], worktree=row['worktree'], write_mode='write',
-            path=['src'], takeover=False, reason=''))
+            session='S02', role='worker', host='manual', thread='worker-thread',
+            task='T01', branch=row['branch'], worktree=row['worktree'],
+            write_mode='write', path=['src'], takeover=False, reason='',
+            context=str(self.root / worker.handle_path)))
         result = write_brief(self.project, self.state, Namespace(
             session='S01', owner='S02', task='T01', title='Build root brief',
             objective='Use the managed build root.', path=[], interface=[], test=[],

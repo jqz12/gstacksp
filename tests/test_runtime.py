@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
-from process_helpers import run, popen
+from process_helpers import run, popen, session_binding
 import sys
 import tempfile
 import time
@@ -71,9 +71,10 @@ class LegacyWorkflowTests(unittest.TestCase):
         self.assertEqual(state['review']['reviewer'], 'fresh-context')
 
     def test_first_git_repository_requires_explicit_reconciliation(self):
-        self.task()
+        self.task(with_git=False)
         result=run(['git','-C',str(self.project),'init','-b','main'],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
+        self.reissue_context()
         self.assertIn('BRANCH_MISMATCH',self.cli('status','login',ok=False).stderr)
         self.cli('decision','login','--text','Do not silently adopt','--source','agent',ok=False)
         self.cli('observe-head','login','--reason','SYNTHETIC checked newly initialized repository at the same physical project root')
@@ -82,35 +83,74 @@ class LegacyWorkflowTests(unittest.TestCase):
         self.assertIsNone(state['head_reconciliation']['previous']['root'])
 
     def test_first_parent_git_repository_cannot_be_adopted_as_project_root(self):
-        self.task()
+        self.task(with_git=False)
         result=run(['git','-C',self.tmp.name,'init','-b','main'],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertIn('BRANCH_MISMATCH',self.cli('observe-head','login','--reason','SYNTHETIC parent repository mismatch',ok=False).stderr)
+        self.reissue_context()
+        self.assertIn('CONTROL_ROOT_TOPOLOGY_UNSUPPORTED',self.cli('observe-head','login','--reason','SYNTHETIC parent repository mismatch',ok=False).stderr)
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='gsp-test-')
         self.project = Path(self.tmp.name) / 'project with spaces'
         self.project.mkdir()
+        self.context = None
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def cli(self, *args, ok=True):
         r = run([sys.executable, str(CLI), '--project', str(self.project), *args],
-                           text=True, encoding='utf-8', capture_output=True)
+                text=True, encoding='utf-8', capture_output=True, env=self.cli_env())
         if ok:
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         else:
             self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
         return r
 
-    def task(self):
+    def cli_env(self):
+        env = os.environ.copy()
+        env.pop('GSP_SESSION_CONTEXT', None)
+        if self.context is not None:
+            env['GSP_SESSION_CONTEXT'] = str(self.context)
+        env.update({
+            'HOME': str(self.tmp.name),
+            'USERPROFILE': str(self.tmp.name),
+            'CODEX_HOME': str(Path(self.tmp.name) / '.codex'),
+        })
+        return env
+
+    def task(self, with_git=True):
+        if with_git and not (self.project / '.git').exists():
+            result = run(
+                ['git', '-C', str(self.project), 'init', '-q', '-b', 'main'],
+                capture_output=True, text=True, encoding='utf-8', env=self.cli_env(),
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            (self.project / '.gitignore').write_text('.gsp/\n', encoding='utf-8')
+            for argv in (
+                ['add', '.gitignore'],
+                ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                 'commit', '-qm', 'chore: fixture baseline'],
+            ):
+                result = run(
+                    ['git', '-C', str(self.project), *argv],
+                    capture_output=True, text=True, encoding='utf-8', env=self.cli_env(),
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.cli('init')
         self.cli('new', 'login', '--title', 'Login')
         state_file = self.project / '.gsp/runs/login/state.json'
         legacy = json.loads(state_file.read_text(encoding='utf-8'))
+        binding = session_binding(
+            self.project, legacy['work_uuid'], 'main', 'codex', 'legacy-main',
+        )
+        self.context = self.project / binding.handle_path
         legacy.pop('controller_required', None)
+        legacy.pop('convergence_schema', None)
         legacy.pop('git_topology', None)
+        # This fixture deliberately represents a task from before journaling.
+        # Do not retain a modern commit marker over different legacy bytes.
+        legacy.pop('_command_commit', None)
         state_file.write_text(json.dumps(legacy), encoding='utf-8')
         folder = docfolder(self.project,'login')
         document(self.project, 'login', 'design').write_text('# Design\nLogin returns a session.\n', encoding='utf-8')
@@ -118,9 +158,17 @@ class LegacyWorkflowTests(unittest.TestCase):
         self.cli('task-add', 'login', 'T1', '--title', 'Implement login', '--acceptance', 'Unit tests pass')
         document(self.project, 'login', 'plan').write_text('# Plan\nT1: implement and test login.\n', encoding='utf-8')
         self.cli('seal-plan', 'login')
-        self.cli('scope', 'login', '--off', '--quote', 'No freeze for this task')
         self.cli('task-start', 'login', 'T1')
         return folder
+
+    def reissue_context(self):
+        """Bind the existing work to the repository visible after Git init."""
+        state_file = self.project / '.gsp/runs/login/state.json'
+        work_uid = json.loads(state_file.read_text(encoding='utf-8'))['work_uuid']
+        binding = session_binding(
+            self.project, work_uid, 'main', 'codex', 'legacy-main-rebound',
+        )
+        self.context = self.project / binding.handle_path
 
     def passing(self, kind='tests'):
         return self.cli('run', 'login', '--task', 'T1', '--kind', kind, '--', sys.executable,
@@ -161,15 +209,128 @@ class LegacyWorkflowTests(unittest.TestCase):
         document(self.project, 'login', 'plan').write_text('new plan', encoding='utf-8')
         self.passing_failure = self.cli('task-start', 'login', 'T1', ok=False)
 
-    def test_scope_paths_and_shell_monitor(self):
+    def test_task_start_needs_no_legacy_scope_decision(self):
+        self.task()
+        state = json.loads((self.project / '.gsp/runs/login/state.json').read_text(encoding='utf-8'))
+        self.assertEqual(state['scope']['mode'], 'pending')
+        self.assertEqual(state['tasks'][0]['status'], 'running')
+
+    def test_scope_command_is_noop_and_legacy_scope_has_no_directory_authority(self):
+        self.task()
+        state_file = self.project / '.gsp/runs/login/state.json'
+        active_file = self.project / '.gsp/active.json'
+        original_state = state_file.read_bytes()
+        original_active = active_file.read_bytes()
+        result = json.loads(self.cli(
+            'scope', 'login', '--path', 'src', '--quote', 'legacy directory freeze',
+        ).stdout)
+        self.assertTrue(result['deprecated'])
+        self.assertTrue(result['no_op'])
+        self.assertFalse(result['write_grant'])
+        self.assertEqual(state_file.read_bytes(), original_state)
+        self.assertEqual(active_file.read_bytes(), original_active)
+
+        src = self.project / 'src'
+        src.mkdir()
+        state = json.loads(state_file.read_text(encoding='utf-8'))
+        for mode in ('pending', 'frozen', 'off'):
+            with self.subTest(mode=mode):
+                legacy = dict(state)
+                legacy['scope'] = {
+                    'mode': mode,
+                    'path': str(src) if mode == 'frozen' else None,
+                    'quote': 'legacy mode',
+                    'at': '2000-01-01T00:00:00+00:00',
+                }
+                state_file.write_text(json.dumps(legacy), encoding='utf-8')
+                preview = json.loads(
+                    self.cli('check-path', 'login', 'outside.py').stdout
+                )
+                self.assertTrue(preview['preview'])
+                self.assertFalse(preview['write_grant'])
+                self.assertEqual(preview['conflicts'], [])
+        state_file.write_bytes(original_state)
+
+    def test_scope_noop_bypasses_context_replay_and_all_ledger_writes(self):
+        from gsp.runtime import parser, request_action_uid
+
+        self.cli('init')
+        self.cli('new', 'login', '--title', 'Login')
+        folder = docfolder(self.project, 'login')
+        self.cli('new', 'other', '--title', '另一个活动工作项')
+        self.context = None
+        state_file = self.project / '.gsp/runs/login/state.json'
+        active_file = self.project / '.gsp/active.json'
+        events_file = state_file.parent / 'events.jsonl'
+        dashboard = self.project / 'docs/gsp/README.md'
+        record = folder / 'record.json'
+        args = parser().parse_args([
+            'scope', 'login', '--path', 'src',
+            '--quote', 'legacy directory freeze',
+        ])
+        for mode in ('pending', 'frozen', 'off'):
+            with self.subTest(mode=mode):
+                state = json.loads(state_file.read_text(encoding='utf-8'))
+                state['scope'] = {
+                    'mode': mode,
+                    'path': 'src' if mode == 'frozen' else None,
+                    'quote': 'legacy fixture',
+                    'at': '2000-01-01T00:00:00+00:00',
+                }
+                state['_command_commit'] = {
+                    'schema': 99,
+                    'command': 'scope',
+                    'request_digest': request_action_uid('scope', args),
+                    'action_uid': 'fixture-action',
+                    'detail': 'legacy fixture',
+                }
+                state_file.write_text(
+                    json.dumps(state, ensure_ascii=False, indent=2) + '\n',
+                    encoding='utf-8',
+                )
+                before = {
+                    'state': state_file.read_bytes(),
+                    'active': active_file.read_bytes(),
+                    'events': events_file.read_bytes() if events_file.exists() else None,
+                    'dashboard': dashboard.read_bytes() if dashboard.exists() else None,
+                    'record': record.read_bytes() if record.exists() else None,
+                }
+                result = json.loads(self.cli(
+                    'scope', 'login', '--path', 'src',
+                    '--quote', 'legacy directory freeze',
+                ).stdout)
+                self.assertTrue(result['deprecated'])
+                self.assertTrue(result['no_op'])
+                self.assertFalse(result['write_grant'])
+                self.assertEqual(state_file.read_bytes(), before['state'])
+                self.assertEqual(active_file.read_bytes(), before['active'])
+                self.assertEqual(
+                    events_file.read_bytes() if events_file.exists() else None,
+                    before['events'],
+                )
+                self.assertEqual(
+                    dashboard.read_bytes() if dashboard.exists() else None,
+                    before['dashboard'],
+                )
+                self.assertEqual(
+                    record.read_bytes() if record.exists() else None,
+                    before['record'],
+                )
+
+    def test_legacy_scope_paths_do_not_gate_shell_changes(self):
         self.task()
         (self.project / 'src').mkdir()
         self.cli('scope', 'login', '--path', 'src', '--quote', 'Only modify src')
-        self.cli('check-path', 'login', 'src/new.py')
-        self.cli('check-path', 'login', 'src-old/new.py', ok=False)
-        self.cli('check-path', 'login', '../outside.py', ok=False)
-        self.cli('run', 'login', '--task', 'T1', '--kind', 'tests', '--', sys.executable,
+        preview = json.loads(self.cli('check-path', 'login', 'outside.py').stdout)
+        self.assertFalse(preview['write_grant'])
+        result = self.cli('run', 'login', '--task', 'T1', '--kind', 'tests', '--', sys.executable,
                  '-c', "from pathlib import Path; Path('outside.py').write_text('x'); print('Ran 1 test')", ok=False)
+        # The child executes without a scope whitelist. A changed validation
+        # input still invalidates its test receipt, independently of scope.
+        self.assertEqual((self.project / 'outside.py').read_text(encoding='utf-8'), 'x')
+        receipt = json.loads(result.stdout)
+        self.assertEqual(receipt['status'], 'inputs-changed')
+        self.assertEqual(receipt['scope_violations'], [])
 
     def test_ready_needs_review_and_current_evidence(self):
         folder = self.task()
@@ -224,32 +385,41 @@ class LegacyWorkflowTests(unittest.TestCase):
         self.task()
         self.cli('task-add', 'login', 'all', '--title', 'invalid', '--acceptance', 'tests', ok=False)
 
-    def test_new_task_cannot_bypass_frozen_task(self):
+    def test_frozen_scope_record_does_not_block_new_task(self):
         self.task()
         (self.project / 'src').mkdir()
         self.cli('scope', 'login', '--path', 'src', '--quote', 'Only src')
-        self.cli('new', 'second', '--title', 'Second', ok=False)
+        self.cli('new', 'second', '--title', 'Second')
+        self.assertTrue((self.project / '.gsp/runs/second/state.json').is_file())
 
-    def test_hook_finds_root_from_child_cwd(self):
+    def test_hook_uses_ownership_not_legacy_scope_from_child_cwd(self):
         self.task()
         (self.project / 'src').mkdir()
         self.cli('scope', 'login', '--path', 'src', '--quote', 'Only src')
         payload = {'cwd': str(self.project / 'src'), 'tool_name': 'Edit',
                    'tool_input': {'file_path': str(self.project / 'outside.py')}}
         r = run([sys.executable, str(CLI), '--project', str(self.project), 'hook'],
-                           input=json.dumps(payload), text=True, encoding='utf-8', capture_output=True)
+                input=json.dumps(payload), text=True, encoding='utf-8', capture_output=True,
+                env=self.cli_env())
+        self.assertEqual(json.loads(r.stdout), {})
+        protected = {'cwd': str(self.project), 'tool_name': 'Edit',
+                     'tool_input': {'file_path': str(self.project / '.gsp/project.json')}}
+        r = run([sys.executable, str(CLI), '--project', str(self.project), 'hook'],
+                input=json.dumps(protected), text=True, encoding='utf-8', capture_output=True,
+                env=self.cli_env())
         self.assertEqual(json.loads(r.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertIn('CONTROL_PATH_PROTECTED', json.loads(r.stdout)['hookSpecificOutput']['permissionDecisionReason'])
 
-    def test_hook_accepts_utf8_chinese_scope(self):
+    def test_hook_accepts_new_path_in_owned_workspace_with_legacy_scope(self):
         self.task()
         scope = self.project / '源码'
         scope.mkdir()
         self.cli('scope', 'login', '--path', '源码', '--quote', 'Only this source directory')
         payload = {'cwd': str(self.project), 'tool_name': 'Edit',
-                   'tool_input': {'file_path': str(scope / '登录.py')}}
+                   'tool_input': {'file_path': str(self.project / '登录.py')}}
         r = run([sys.executable, str(CLI), '--project', str(self.project), 'hook'],
-                           input=json.dumps(payload, ensure_ascii=False), text=True,
-                           encoding='utf-8', capture_output=True)
+                input=json.dumps(payload, ensure_ascii=False), text=True,
+                encoding='utf-8', capture_output=True, env=self.cli_env())
         self.assertEqual(json.loads(r.stdout), {})
 
     def test_new_contract_rejects_old_receipt(self):
@@ -298,7 +468,9 @@ class LegacyWorkflowTests(unittest.TestCase):
         state_file = self.project / '.gsp/runs/login/state.json'
         state = json.loads(state_file.read_text(encoding='utf-8'))
         state['inflight'] = {'id': 'interrupted-fixture', 'argv': ['unknown'], 'task': 'T1'}
-        state_file.write_text(json.dumps(state), encoding='utf-8')
+        from gsp.runtime import Project
+        Project(self.project).write(state, 'fixture', 'unknown execution',
+                                   action_uid='fixture:unknown-execution')
         self.cli('resume', 'login', ok=False)
         self.cli('run', 'login', '--task', 'T1', '--kind', 'tests', '--', sys.executable, '-c',
                  "print('Ran 1 test')", ok=False)
@@ -332,21 +504,19 @@ class LegacyWorkflowTests(unittest.TestCase):
         file = self.project / '.gsp/runs/login/state.json'
         state = json.loads(file.read_text(encoding='utf-8'))
         state['inflight'] = {'id': 'new-unknown-all', 'task': 'all', 'argv': ['test']}
-        file.write_text(json.dumps(state), encoding='utf-8')
+        from gsp.runtime import Project
+        Project(self.project).write(state, 'fixture', 'unknown final execution',
+                                   action_uid='fixture:unknown-final-execution')
         (folder / 'recovery.md').write_text('Fixture process failed, no new passing result.', encoding='utf-8')
         self.cli('recover-run', 'login', '--evidence', str((folder/'recovery.md').relative_to(self.project)), '--outcome', 'failed')
         self.cli('ready', 'login', ok=False)
 
-    def test_ready_task_freeze_still_requires_release(self):
-        self.cli('init')
-        self.cli('new', 'other', '--title', 'Other')
-        folder = self.task()
-        self.passing()
-        self.cli('task-done', 'login', 'T1')
-        self.cli('run', 'login', '--task', 'all', '--kind', 'tests', '--', sys.executable, '-c', "print('Ran 1 test')")
-        (folder / 'review.md').write_text('# Review\nChecked all changes without blockers.\n', encoding='utf-8')
-        self.cli('review', 'login', '--reviewer', 'self', '--blocking', '0')
-        self.cli('ready', 'login')
+    def test_ready_task_does_not_block_new_task_without_scope_release(self):
+        self.completed()
+        (self.project / 'src').mkdir()
+        self.cli('scope', 'login', '--path', 'src', '--quote', 'legacy freeze')
+        self.cli('new', 'next', '--title', 'Next')
+        self.assertTrue((self.project / '.gsp/runs/next/state.json').is_file())
 
     def test_close_releases_ready_task_active_and_scope(self):
         folder = self.task()
@@ -365,15 +535,20 @@ class LegacyWorkflowTests(unittest.TestCase):
         state=json.loads((self.project / '.gsp/runs/login/state.json').read_text(encoding='utf-8'))
         self.assertEqual(state['scope']['mode'], 'off')
         self.assertIn('close_reason', state)
-        self.cli('scope', 'login', '--path', '.', '--quote', 'Freeze project')
-        self.cli('scope', 'other', '--off', '--quote', 'No freeze for other', ok=False)
+        state_path = self.project / '.gsp/runs/login/state.json'
+        closed_state = state_path.read_bytes()
+        noop = json.loads(self.cli('scope', 'login', '--path', '.', '--quote', 'legacy freeze').stdout)
+        self.assertTrue(noop['no_op'])
+        self.assertEqual(state_path.read_bytes(), closed_state)
+        self.assertFalse((self.project / '.gsp/active.json').exists())
 
     def test_real_interruption_preserves_unknown_execution(self):
         folder = self.task()
         program = "from pathlib import Path; import os,time; Path('.gsp/child.pid').write_text(str(os.getpid())); time.sleep(20)"
         runner = popen([sys.executable, str(CLI), '--project', str(self.project), 'run', 'login',
                                    '--task', 'T1', '--kind', 'tests', '--', sys.executable, '-c', program],
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  env=self.cli_env())
         pid_file = self.project / '.gsp/child.pid'
         try:
             deadline = time.monotonic() + 10
@@ -392,10 +567,10 @@ class LegacyWorkflowTests(unittest.TestCase):
         state = json.loads((self.project / '.gsp/runs/login/state.json').read_text(encoding='utf-8'))
         self.assertTrue(state['inflight'])
         lock = self.project / '.gsp/writer.lock'
-        self.assertTrue(lock.exists())
+        suspension = self.project / '.gsp/writer-suspended.json'
+        self.assertTrue(suspension.exists())
+        self.assertFalse(lock.exists())
         self.cli('resume', 'login', ok=False)
-        # The fixture runner is verified dead above; remove only its exact local lock.
-        lock.unlink()
         result = self.cli('resume', 'login', ok=False)
         self.assertIn('EXECUTION_UNKNOWN', result.stderr)
 
@@ -472,6 +647,8 @@ class LegacyWorkflowTests(unittest.TestCase):
         self.assertNotEqual(state['status'], 'ready')
         self.assertNotIn('\n\nREADY：', (folder / 'delivery.md').read_text(encoding='utf-8'))
         self.assertNotEqual(json.loads((folder/'record.json').read_text(encoding='utf-8'))['stage'],'ready')
+        from gsp.runtime import Project
+        Project(self.project).dashboard(state)
         self.assertIn('needs-verification',(self.project/'docs/gsp/README.md').read_text(encoding='utf-8'))
 
     def test_blocking_review_revokes_human_ready_report(self):
@@ -479,7 +656,7 @@ class LegacyWorkflowTests(unittest.TestCase):
         self.cli('review', 'login', '--reviewer', 'self', '--blocking', '1')
         self.assertNotIn('\n\nREADY：', (folder / 'delivery.md').read_text(encoding='utf-8'))
 
-    def test_new_branch_can_start_new_unfrozen_task(self):
+    def test_new_branch_can_start_new_task_without_scope_authority(self):
         def git(*args):
             r = run(['git', '-C', str(self.project), '-c', 'user.name=Fixture',
                                 '-c', 'user.email=fixture@example.invalid', *args], capture_output=True)
@@ -492,7 +669,7 @@ class LegacyWorkflowTests(unittest.TestCase):
         self.cli('resume', 'login', ok=False)  # the old task still cannot resume on another branch
 
     def test_installer_preflights_parent_file_conflict(self):
-        file = self.project / '.agents/skills/gsp-health'
+        file = self.project / '.agents/skills/gsp-execute'
         file.parent.mkdir(parents=True)
         file.write_text('user-owned file', encoding='utf-8')
         self.cli('install', '--host', 'codex', ok=False)
@@ -501,7 +678,7 @@ class LegacyWorkflowTests(unittest.TestCase):
         file.unlink()
         self.cli('install', '--host', 'codex')
 
-    def test_frozen_scope_can_be_released_after_branch_switch(self):
+    def test_legacy_frozen_scope_does_not_block_new_task_after_branch_switch(self):
         def git(*args):
             r = run(['git', '-C', str(self.project), '-c', 'user.name=Fixture',
                                 '-c', 'user.email=fixture@example.invalid', *args], capture_output=True)
@@ -513,8 +690,6 @@ class LegacyWorkflowTests(unittest.TestCase):
         folder.mkdir()
         self.cli('scope', 'login', '--path', 'src', '--quote', 'fixture freeze')
         git('checkout', '-b', 'next-feature')
-        self.cli('new', 'second', '--title', 'Next feature', ok=False)
-        self.cli('scope', 'login', '--off', '--quote', 'fixture release')
         self.cli('new', 'second', '--title', 'Next feature')
         self.cli('resume', 'login', ok=False)
 

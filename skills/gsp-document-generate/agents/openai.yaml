@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP document-generate"
-  short_description: "GstackSP 项目工作流：功能、模块或项目确有缺失的使用说明或接口文档需要补齐时"
-  default_prompt: "Use $gsp-document-generate for the relevant part of this project task."

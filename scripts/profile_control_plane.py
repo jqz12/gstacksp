@@ -68,9 +68,13 @@ def _prepare(fixture, runtime, task_count):
     fixture.check('all')
     fixture.cmd('advance', 'work', '--to', 'review')
     document = fixture.project.paths('work')[1]
-    (document / 'review.md').write_text(
-        '# Review\nSynthetic profile fixture reviewed without blocking findings.\n',
-        encoding='utf-8')
+    review_text = '# Review\nSynthetic profile fixture reviewed without blocking findings.\n'
+    state = fixture.state()
+    if state.get('convergence_schema') == 1:
+        proof = {'candidate_digest': runtime.fingerprint(fixture.project.verification_root(state)),
+                 'contract_digest': runtime.contract_hash(fixture.project, state, document), 'findings': []}
+        review_text += '<!-- gsp-review-evidence\n' + json.dumps(proof) + '\n-->\n'
+    (document / 'review.md').write_text(review_text, encoding='utf-8')
     fixture.cmd('review', 'work', '--reviewer', 'self', '--blocking', '0')
     fixture.cmd('advance', 'work', '--to', 'checking')
 
@@ -240,7 +244,7 @@ def main(argv=None):
                         ['ready', 'work'], args.repetitions)
         if _supports_brief(runtime):
             rows += _record('status-brief', fixture, runtime,
-                            ['status', 'work', '--brief'], 1)
+                            ['status', 'work', '--brief'], args.repetitions)
         rows += _record('close-missing-condition', fixture, runtime,
                         ['close', 'work', '--reason', 'SYNTHETIC diagnostic only'], 1)
     finally:

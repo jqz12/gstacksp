@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP git"
-  short_description: "GstackSP 项目工作流：Git health route 指向 Git 专业处理，或用户要求检查分支、归属、提交和分支收尾时"
-  default_prompt: "Use $gsp-git for the relevant part of this project task."

@@ -56,12 +56,14 @@ class NewNumberSyncTests(unittest.TestCase):
         self.assertGreaterEqual(int(auto_state["number"].split("-")[1]), 31)
 
     def test_new_explicit_id_does_not_rewind(self):
-        self.set_counter(31)
+        self.cmd("new", "GSP-000031", "--title", "高位编号")
         self.cmd("new", "GSP-000005", "--title", "回退编号")
 
         state = read(self.root / ".gsp/runs/GSP-000005/state.json")
         self.assertEqual(state["number"], "GSP-000005")
-        self.assertGreaterEqual(self.counter(), 32)
+        self.cmd("new", "auto-after-explicit", "--title", "自动编号")
+        auto_state = read(self.root / ".gsp/runs/auto-after-explicit/state.json")
+        self.assertGreaterEqual(int(auto_state["number"].split("-")[1]), 32)
 
 
 if __name__ == "__main__":

@@ -5,12 +5,14 @@ agents/openai.yaml files are generated here; edit this source then rebuild.
 """
 from pathlib import Path
 import json
+import os
 import re
+import shutil
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from gsp import __version__
+from gsp import __version__, skill_catalog
 
 # name, pack, upstream sources, trigger, actual task-specific instructions
 DEFINITIONS = [
@@ -49,7 +51,7 @@ DEFINITIONS = [
  '这不是普通软件计划审查。建立 `docs/gsp/evals/<名称>/plan.md`：研究问题、样本、指标、实验组和无技能对照、盲评/反例、停止条件、成本和用户费用授权范围。先零费用验证输入/计分/输出通路，再在真实已授权额度内做小样本试运行。记录模型/参数、样本哈希、实际命令、结果和已知费用；未知费用明确 unknown。不自动调用模型 API。付费扩大实验前核对授权和预算，不靠网页声明。输出 result.md，说明样本局限而不把一次得分推广成普遍结论。'),
 ('execute','core',['SP:executing-plans','SP:subagent-driven-development','SP:dispatching-parallel-agents','SP:using-git-worktrees'],
  '已确认设计与计划需要连续实施、测试和完成任务时',
- '先 resume/status 核对设计、计划、工作区、冻结和依赖。已有隔离先检测；用户选择原地冻结则尊重，不强建 worktree。默认当前代理逐任务执行；只有宿主能力、授权和任务独立性满足时才分派代理，不默认生成多代理舰队。每任务 task-start，读明确验收，按 test-driven-development 实现，run 真实检查并 task-done。子代理模式每任务一次规格与质量审查；单代理无需额外逐任务审查者。普通决定记录 decision 后继续，不问继续。修复连续失败达到配置 max_fix_rounds 时 block，记录证据与恢复下一步。run 回执出现 `hygiene.retained`、`hygiene.errors`、`truncated` 或 `over_budget` 时按残留即缺陷处理：在根 TODOS 登记缺陷并说明哪个门禁失效，不得用“下次清理”代替。managed worktree 只把构建输出放在 brief 指定的 CARGO_TARGET_DIR/BUILD_ROOT（`.gsp/build/<编号>/<slug>`），不在 worktree 内累积 target；完成后跑最终 all 回归、整体 review、verify、ship；收尾用 topology-clean / close --cleanup 收敛 worktree 与已合并分支，不留拓扑残骸。 Before the first write, follow the selected workspace_root. In multi-session or multi-agent work, each writable task gets one branch and one worktree while the control root keeps one .gsp ledger. Register frontend, backend, and integration roles; validate children first and let the integration task converge and regress before ready. Shared writable paths or a missing integration task block ready. Git topology contract: use topology and topology-select; inspect main/master and every worktree; keep GSP 编号, T task, branch, commit SHA, control_root, workspace_root, and Issue/PR separate.'),
+ '先 resume/status 核对设计、计划、工作区、依赖和有效证据。Codex 原生聊天、代理、历史、压缩/恢复、模型参数和 worktree 承接运行事实；GSP 保存业务关联、主体、租约、质量和交付证据。只有用户明确创建 Goal 时才使用 Goal。默认当前代理逐任务执行；只有宿主能力、授权和任务独立性满足时才分派代理，不默认生成多代理舰队。每任务 task-start，读明确验收，按 test-driven-development 实现，run 真实检查并 task-done。子代理模式每任务一次规格与质量审查；单代理无需额外逐任务审查者。普通决定记录 decision 后继续，不问继续。修复连续失败达到配置 max_fix_rounds 时 block，记录证据与恢复下一步。run 回执出现 `hygiene.retained`、`hygiene.errors`、`truncated` 或 `over_budget` 时按残留即缺陷处理：在根 TODOS 登记缺陷并说明哪个门禁失效，不得用“下次清理”代替。managed worktree 只把构建输出放在 brief 指定的 CARGO_TARGET_DIR/BUILD_ROOT（`.gsp/build/<编号>/<slug>`），不在 worktree 内累积 target；完成后跑最终 all 回归、整体 review、verify、ship；收尾用 topology-clean / close --cleanup 收敛 worktree 与已合并分支，不留拓扑残骸。 Before the first write, follow the selected workspace_root. In multi-session or multi-agent work, each writable task gets one branch and one worktree while the control root keeps one .gsp ledger. Register frontend, backend, and integration roles; validate children first and let the integration task converge and regress before ready. Shared writable paths or a missing integration task block ready. Git topology contract: use topology and topology-select; inspect main/master and every worktree; keep GSP 编号, T task, branch, commit SHA, control_root, workspace_root, and Issue/PR separate.'),
 ('test-driven-development','core',['SP:test-driven-development'],
  '实现或修复可自动验证的行为，需要可靠回归测试时',
  '从本任务 acceptance 选一个真实可观察行为。先写最小测试，运行并确认失败原因确为缺失行为；语法错误或命令未启动不算红灯。实现最小改动，使测试变绿，再做必要重构并重跑。测试验证行为，避免只验证 mock 被调用或为迎合实现降低断言。文档、生成物或无适用自动测试的变更，按用户指示和任务性质记录替代检查与理由，不为了流程制造无价值测试。用 run 留下真实测试数与日志。'),
@@ -73,7 +75,7 @@ DEFINITIONS = [
  '先核对最终 all 回归、整体审查和当前任务证据，再运行 `<gsp> ready <id>`。ready 保留 active.json 和冻结范围以保护并行任务；交付文档列出 git_clean 与 branch_merged，未提交/未合并必须展示，不得静默当作已交付。确认交付完成后用 `<gsp> close <id> --cleanup --reason "关闭依据"`：先检查绑定 worktree 是否脏（脏时默认拒绝，只有 --allow-dirty 并写明理由才继续），成功后回收已合并、干净、无租约的 worktree、分支与 `.gsp/build` 构建根；遗留状态用 `close --reconcile` 归一。其他任务残留用 `<gsp> topology-clean <id> [task] --apply`（默认 dry-run）；全部分支应汇入主仓，任务结束不再留 worktree。只按实际变更更新必要 README、接口或版本说明；不默认加 VERSION/CHANGELOG。给用户 status/resume 返回的任务档案内 delivery.md，补充实际变化、运行方式、未覆盖与自主取舍。默认到本地交付准备。对真实已有的推送、PR、合并、删除分支、发布授权，用 authorize/authority 记录并核对精确范围后执行宿主实际命令，不重复询问；未授权则保留可审查结果。每次实际外部动作验证结果后记到交付文档，失败如实记录。 Before delivery, recheck topology, control_root/workspace_root, the current branch, and HEAD; record a commit SHA only after a real commit. Full-stack children normally prepare one integration branch and one integration PR. Record Issue/PR only when an actual object exists; never invent external IDs. Git topology contract: use topology and topology-select; inspect main/master and every worktree; keep GSP 编号, T task, branch, commit SHA, control_root, workspace_root, and Issue/PR separate.'),
 ('learn','core',['GS:learn'],
  '需要保存、检索或修正本项目已验证的可复用经验时',
- '先判断是否可复用并有证据；一次性进度写任务记录，用户偏好写 plan-tune。先用 `<gsp> learn --query "关键词"` 查询有效项；保存用 `learn --text "结论及条件" --source "证据位置"`，相同规范化原文合并来源。纠错用 `--supersedes <旧ID> --text "新结论" --reason "原因" --source "新证据"`，失效用 `--invalidate <ID> --reason "原因" --source "证据"`；追溯用 `--history`。旧记录及事件保留，不直接改 JSONL、不自动复活无效项、不猜测语义相似就合并。详见 [经验事件规则](../gsp-workflow/references/learnings.md)。经验不授权动作，不自动跨项目合并或外发到 gbrain；不要保存凭据和完整敏感会话。'),
+ '先判断是否可复用并有证据；一次性进度写任务记录，用户偏好写 plan-tune。该旧入口已退役，不再进入默认路由或安装清单。既有经验历史、用户 gbrain 配置和相关数据保持原样，不因技能瘦身删除或擅自迁移；确有只读追溯需要时，使用用户现有工具和数据路径并明确来源。经验内容不授权动作，也不自动跨项目合并或外发。'),
 ('context-save','core',['GS:context-save'],
  '任务将中断、换宿主、压缩上下文或需要可恢复交接时',
  '先更新任务状态和 decisions.md，确认已运行命令有证据，未完成问题和下一步清晰。运行 `<gsp> save <id>` 创建项目/分支/HEAD/文件指纹绑定的检查点。给用户任务索引、当前阶段、下一步和阻塞。保存是本地文件记录，不包括完整会话、未写入的思考、浏览器登录态或自动外部同步；下次必须 resume 验证，不能只凭摘要继续。'),
@@ -141,7 +143,7 @@ LIFECYCLE_NOTES = {
     'brainstorming': '开始先读项目根 TODOS.md 和既有决定，避免重复提出已延期或已完成工作；非目标不自动变成待办。',
     'writing-plans': '计划还需保留全局约束、既有实现与复用、关键失败路径及对应测试（Review Focus）；验收→任务→验证应能逐项追溯。按需将测试矩阵内嵌 plan.md，不机械增设独立文件。计划提到 tests/test/build/target/temp/worktree/incremental 或 CARGO_TARGET_DIR 时，必须写“产物与临时文件生命周期”小节，含产物位置、回收责任、保留与上限、验收方式；缺失时 plan-check 报 HYGIENE_SECTION_MISSING，size=large 的 seal-plan --check-structure 失败。反模式：每任务自建 CARGO_TARGET_DIR 而不声明回收；测试 helper 用 pid+序号 建目录且无 RAII；为调试无限放大 debug/PDB；把临时目录留在源码树或 target/ 下且不登记生命周期。先读人看的项目待办原文和 todo-list；纳入事项引用 ID，并用 todo-link <待办ID> --run <需求ID> --task <任务ID> 记录关联，关联不代表完成。批准延期的真实问题按共同规则登记，不能只留在计划正文。',
     'autoplan': '逐项区分本次必做、已接受延期、明确不做；必做事项不能仅因写入待办而解除阻塞。延期需来源、理由和影响，使用共同待办规则落入根 TODOS.md。',
-    'execute': '会话内执行仍遵守修复纪律。用户明确需要脱离会话连续执行时，读取 [驱动器](../gsp-workflow/references/driver.md)，配置真实检查并使用 drive-init/drive-start；不要同时由会话和驱动器修改项目。Codex 驱动器持久消费 max_fix_rounds，按每个任务和最终审查修复链计数，初次实施不算修复；失败命令数不等于修复轮次。Claude 暂无 headless 适配器。run 回执出现 hygiene.retained、hygiene.errors、truncated 或 over_budget 时按残留即缺陷处理：在根 TODOS 登记缺陷并说明哪个门禁失效，不得用“下次清理”代替。managed worktree 只把构建输出放在 brief 指定的 CARGO_TARGET_DIR/BUILD_ROOT（.gsp/build/<编号>/<slug>），不在 worktree 内累积 target；收尾用 topology-clean / close --cleanup 收敛 worktree 与已合并分支。未解决问题按共同待办规则保存并带入最终审查。首次写入前先运行 `<gsp> topology <id>`，向用户展示当前分支、HEAD、全部 worktree、脏状态和已有任务绑定，再用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 记录选择；默认阻止 main/master 或 detached HEAD 直接实现。每个 GSP 编号、T 任务、branch、commit SHA、control_root、workspace_root 和 Issue/PR 独立记录，前后端并行任务各用独立 worktree，由 integration 任务汇合后再 ready。',
+    'execute': '执行默认使用 Codex 原生聊天、代理、历史、压缩/恢复、模型参数和 worktree；GSP 只登记业务身份、TaskContract、租约、证据与验收。Goal 仅在用户明确创建目标时使用。只有用户明确要求脱离会话连续执行时，才能把 [驱动器](../gsp-workflow/references/driver.md) 的 drive-* 入口作为 legacy 兼容路径；它不能与当前会话并发写同一项目。legacy 驱动按每个任务和最终审查修复链持久消费 max_fix_rounds，初次实施不算修复，失败命令数不等于修复轮次。run 回执出现 hygiene.retained、hygiene.errors、truncated 或 over_budget 时按残留即缺陷处理：在根 TODOS 登记缺陷并说明哪个门禁失效，不得用“下次清理”代替。managed worktree 只把构建输出放在 brief 指定的 CARGO_TARGET_DIR/BUILD_ROOT（.gsp/build/<编号>/<slug>），不在 worktree 内累积 target；收尾用 topology-clean / close --cleanup 收敛 worktree 与已合并分支。未解决问题按共同待办规则保存并带入最终审查。首次写入前先运行 `<gsp> topology <id>`，向用户展示当前分支、HEAD、全部 worktree、脏状态和已有任务绑定，再用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 记录选择；默认阻止 main/master 或 detached HEAD 直接实现。每个 GSP 编号、T 任务、branch、commit SHA、control_root、workspace_root 和 Issue/PR 独立记录，前后端并行任务各用独立 worktree，由 integration 任务汇合后再 ready。',
     'systematic-debugging': '区分本次回归与既有失败，记录复现、当前基线和影响；既有失败不自动忽略，真实必需修复仍为 blocker。不能因登记待办就宣布通过。',
     'qa': '先给基线发现再修复；每次在 .gsp/runs/<id>/qa/<唯一运行ID>/ 保存报告、基线及截图，目录存在则换新 ID，禁止覆盖旧材料。报告关联设计/计划中的测试矩阵。未解决项按待办规则登记，已回退修复与未验证修复不得标成 verified。',
     'review': '每个实际问题须明确立即修复、按依据延期或经核实不成立；延期项登记根 TODOS.md，最终审查必须读取，不得只说以后处理。本次必需项用 --blocking --origin <本需求ID>，ready 会检查它。',
@@ -172,90 +174,361 @@ LIFECYCLE_NOTES['verify'] += (' 证据按任务和命令入口选择有效集合
                               '不重写 review/ready/证据；真实变化仍进入 needs-verification。')
 LIFECYCLE_NOTES['health'] += (' 同时只读复核活动任务及子任务的 Git 拓扑；未选择时路由 git.topology.required，'
                              '目录缺失、分支/HEAD/基线漂移或重复占用时路由 git.topology.invalid，不修改任务状态。')
+LIFECYCLE_NOTES['ship'] += (' Git 交付复用现有验收与精确授权：先提交已审查的明确文件，再用 '
+                          '`delivery <id> prepare --request-uid <uid> --target refs/heads/<目标> '
+                          '--expected-target <SHA>` 构造候选。目标前进或合并候选改变时，先在该精确候选完成 '
+                          'all/独立审查，再 land；不能拿原分支证据接受不同的合并内容。`delivery <id> ship` '
+                          '复用相同请求完成落地，只有 --push 且目标授权存在才推送，--cleanup 复用原 close。'
+                          '失败按原 request 查询/恢复，结果未知不重复提交。closed 在本任务必清资源收敛后最后写入。')
 
 # Cross-session development is an opt-in extension. Keep this guidance in the
 # generator so a rebuild cannot silently remove the controller/worker contract.
-CROSS_SESSION_GUIDANCE = '''
+CROSS_SESSION_REFERENCE = '''<!-- cross-session-contract -->
+# 跨会话与资源恢复
 
-## 跨会话开发（仅 `intent=cross-session`）
+单会话仍是默认路径。`cross-session` 由主会话维护唯一总体计划，Codex 原生聊天、
+线程、代理、历史、压缩/恢复、模型参数、Goal 与 worktree 生命周期继续作为宿主事实；
+Goal 仅在用户明确创建目标时使用。GSP 只保存业务关联、主体代际、租约和必要证据。
+`drive-*` 仅作为用户明确要求的 legacy 兼容入口，不属于默认流程。
 
-单会话仍是默认路径。没有 `cross-session` 意图的任务不创建 session registry、brief/report 目录，也不增加额外门禁。启用跨会话后，一个 GSP 工作项仍只有一份 `spec.md`、`plan.md`、`decisions.md`、`review.md` 和 `delivery.md`，这就是唯一总体计划及其配套记录。总体详细执行计划由 controller 主会话维护，它负责目标、非目标、任务图、依赖、公共接口、基线、worktree、允许和禁止路径、测试矩阵以及最终集成验收。子会话读取总体计划和自己的 brief，自主安排局部阅读、实现和局部测试顺序，不能复制 `plan-v2.md`，也不能替代 controller 做跨任务裁决。
+调度以一份完整 TaskContract 为权威，包含本任务全文、全部适用全局约束、依赖接口、
+验收和验证入口。派发视图由该契约派生，不复制第二份正文，也不要求普通执行者反复
+读取整个总体计划。同一问题修复续原执行上下文；独立 SDD 任务创建独立上下文。
 
-使用 `<gsp> session-register` 分配稳定的 `S01`、`S02` 会话身份。`T01`、`T02` 仍是计划任务身份。controller 用 `<gsp> session-brief` 派发局部输入，worker 用 `<gsp> session-report` 回传 `DONE`、`BLOCKED` 或 `CHANGE_REQUEST`。换主会话只用 `<gsp> session-handoff` 接管同一 registry 和总体计划。报告替换前会把旧版本移入任务 `sessions/history/`，不会覆盖证据。
+主会话显式使用 Sol；正式 executor、reviewer 全部请求 `group/deepseek-2` / `max`。
+本版仅接入扁平正式会话；子 agent 派生、嵌套 helper 暂不接入。执行 CLI 显式关闭
+native multi_agent。项目三个执行槽由全部正式执行/审查会话共用，legacy Codex worker
+也占槽；未知进程终态不能自动释放。宿主模型请求、实际可观测模型与 unknown 分开报告。
+会话和派发使用项目原子唯一 UID，`Snn`/`Dnnn` 是有工作项作用域的兼容别名；
+`Tnn` 是工作项内的任务身份。正式报告替换前
+移入 `sessions/history/`。Codex 线程 ID、branch、worktree、Commit SHA、Issue/PR
+和 GSP 编号分别记录。
 
-主会话发布时使用 `<gsp> session-dispatch`。它按依赖图批量计算 ready 任务，检查并发上限、`claimed_paths` 和路径重叠，并生成 `Dnnn`、预分配的 `Snn`、`Tnn-brief.md` 和 `Tnn-prompt.md`。没有显式 worktree 时，正式 worker 默认使用 `--worktree-mode auto`，GSP 创建受控的 managed worktree 和对应分支，并把实际路径、分支和基线写入 dispatch。显式 `--worktree` 或 `--worktree-mode bind` 只绑定宿主已有目录，GSP 取得写租约但不取得删除权。Codex 目标返回 `adapter-ready`，controller 再调用宿主原生线程创建、worktree 绑定、消息发送和有界等待入口。没有连接器的平台进入 `manual-required`，用户转发同一份 prompt。CLI 不伪造线程创建或外部消息发送。
+共享资源以项目级持久登记和短事务租约保护。实际调用者必须匹配 work、role、
+capability、controller generation 和 lease。Writes 是并行规划声明，不是目录硬白名单；
+真实冲突返回 `SESSION_PATH_CONFLICT`，旧代际和
+未知进程结果 fail closed。Shell、外部编辑器和未接线的宿主入口标为
+`NOT_CHECKED`，不能把事后检查冒称编辑前保护。
 
-controller 在发布前和进入等待时使用 `<gsp> session-progress`。摘要必须展示总体进度、发布次数、独立任务数、DONE 报告数、accepted 数、已清理 worktree 数、managed worktree 数、bound worktree 数、cleanup-pending 数、运行中、阻塞、CHANGE_REQUEST、待人工转发和下一阶段任务表。总体进度只按 `accepted_tasks / planned_tasks` 计算，不能把报告、接受或 prompt 生成冒充清理完成。
+恢复先查询已持久 request 和真实文件/进程/worktree 结果，再继续未完成步骤。
+只有可独立验证的并行写入才增加工作区；有序任务复用已授权 group，每个独立 SDD
+任务仍有新的执行上下文和独立审查，同一问题修复精确续原上下文，不使用 `--last`。
+原生树由 Codex create/archive 配对，缺回执保持 pending；旧 managed 树沿用原 owner，
+bound 树只 release。
+任务接受与资源清理是两个状态：`session-accept` 登记接受；干净的 legacy managed worktree
+由 owner 清理，bound worktree 只释放绑定；失败或未知结果保持
+`cleanup-pending`，使用 `session-clean --retry` 只续做未完成步骤。缺失路径不等于
+已完成物理删除。认知压缩不强制重写全仓摘要或重新注册租约。
 
-ZCode 作为用户级宿主时使用 `--host zcode` 安装到 `~/.zcode/skills` 和 `~/.zcode/AGENTS.md`，所有 ZCode 工作区共用同一份 GSP。`session-dispatch --target Tnn=zcode` 当前进入 `manual-required`，主会话把生成的 prompt 复制到 ZCode 子会话；子会话仍必须在指定 worktree 中工作并运行固定的 `session-report`，主会话再用 `session-watch` 和 `session-accept` 收口。这个安装范围不要求每个项目创建 `.agents/skills`。
+导航默认 `status <id> --brief` 或 `resume <id> --brief`，只读且 validation=NOT_CHECKED。
+不带 brief 的旧 resume 保留严格校验语义。`schedule preview` 只显示扁平就绪批次；
+真正派发通过项目槽位与游标 CAS 再核对，不能把预览当成租约。`schedule usage --id <id>`
+汇总有唯一响应身份的原生 usage，cached/reasoning 是子集，未知用量不是零。
 
-`session-report` 会把结构化报告追加到 durable outbox。主会话或有界 watcher 使用 `<gsp> session-watch` 按事件 ID 消费，重复消费保持幂等。Codex 宿主用有界 `wait_threads` 等待，不要求 controller 进程全天轮询。主会话关闭时事件留在 outbox，下一次 resume 继续消费。controller 检查报告、测试和集成结果后，使用 `<gsp> session-accept <run> <task> --session <Snn>` 明确接受任务。`session-accept` 会记录接受事件、释放 worker lease，并按 worktree 所有权自动处理清理。干净的 managed worktree 会被移除并执行 prune，bound worktree 只释放租约并保留目录。
+原生树动作使用 `native-workspace <id> create|archive|restore|confirm|status
+--request-uid <uid> --payload <JSON>`：先保存意图，再请求实际 Codex 工具，最后确认
+精确宿主回执。归档不等于合并，恢复后仍须复核 attachment、common-dir 与 HEAD。
+`evidence-collect`/`evidence-verify` 只处理原件、manifest 和 Git 可达性，结果
+quality_status=NOT_EVALUATED，不能替代最终 all、独立规格/质量审查或验收。
 
-接受和清理是两个独立状态。managed worktree 遇到脏文件、锁定、Git 非零退出或未知结果时保留目录和分支，状态为 `cleanup-pending`，不计入 `cleaned_worktrees`。主会话随后使用 `<gsp> session-clean --retry` 重试 cleanup-pending。重复接受、释放或重试必须幂等。正常路径不要求用户手动删除 GSP 创建的 worktree，也不删除分支、commit、报告或显式绑定目录。
-
-跨会话写入需要三层门禁。controller lease 保证同一任务只有一个主会话，worktree write lease 保证同一源码目录同一时刻只有一个可写会话，`--path` 声明和已接线的 direct-edit hook 在 Edit、Write、apply_patch 前复核会话身份、写租约和路径归属。未注册会话、未声明路径、租约冲突和重叠声明直接拒绝，分别返回 `SESSION_WRITE_LEASE_REQUIRED`、`SESSION_PATH_NOT_CLAIMED` 或 `SESSION_PATH_CONFLICT`。该机制不是文件系统沙箱。Shell、外部编辑器、MCP 或未接线宿主只能记录为 `NOT_CHECKED`，不能把事后 Git 指纹检查说成编辑前保护。
-
-子 agent 与正式子会话必须区分。子 agent 是当前主会话内的临时辅助，不拥有独立 `Snn`、worktree、report 或恢复边界。正式子会话才计入 dispatch 统计，并拥有 `Snn`、`Tnn`、brief、report、outbox 和 worktree 清理生命周期。普通单会话任务不创建这些资料，原有 `new`、`approve`、`seal-plan`、`task-start`、`run`、`review`、`ready` 和恢复语义保持兼容。
+需要架构检查的改动先用 `python -m gsp.architecture` 形成项目/局部事实和待评审基线，
+通过 `architecture-policy <id> --baseline <相对路径> --scope <范围> --reason <理由>
+--quote <实际授权>` 绑定，再正常封存计划。历史债务、未知覆盖和输入版本保留；
+新违规在验收前阻断，执行期仍可运行 Red/诊断。范围不是编辑白名单；范围外实际
+改动也纳入依赖影响分析。未知语言需要输入绑定的独立评审，不能冒称静态覆盖。
 '''
 
+STAGE_TRANSITION_REFERENCE = '''<!-- stage-transition-contract -->
+# 阶段推进
 
-for _name in ('writing-plans', 'execute', 'review', 'verify', 'ship', 'context-restore'):
-    # Primary SP-derived skills are rebuilt by sp_preservation from lifecycle notes.
-    LIFECYCLE_NOTES[_name] += '\n\n' + CROSS_SESSION_GUIDANCE.strip()
+常规推进只调用一次 `advance`：同一业务操作完成当前可判定预检、必要版本复核和
+门禁判定。`handoff` 仅用于需要主动预览下一阶段、阻塞项或责任转移的场合，不是
+每次推进的固定前置命令。
 
-CONTROLLER_HANDOFF = ('阶段转换统一先运行 `<gsp> handoff <id> --to <阶段>` 预览，再运行 '
-                     '`<gsp> advance <id> --to <阶段>` 推进；控制器会检查批准、计划封存、scope、任务证据、审查和最终回归。'
-                     '推进失败不得手工改状态或把聊天说明当作交接证据；读取返回的 next_skill 和 pending gates 后再继续。')
+真实副作用入口仍复核 actor、work、capability、current generation、lease、契约、
+写集和资源版本。预检通过不会替代执行入口复核。失败时读取结构化 blockers、
+`next_skill` 和恢复入口；不得手工改状态或把聊天说明当成交接证据。
+
+未来阶段才产生的证据标为待产出；适用 Red/Green、最终 all、独立审查、verify 和
+资源处置仍在其实际完成点强制执行。同一输入与阶段只能复用严格等价的真实结果。
+'''
+
+CONVERGENCE_REFERENCE = '''<!-- convergence-contract -->
+# 收敛、切片与检查点
+
+本契约只在计划切片、执行 checkpoint 或候选审查阶段按需读取；普通小任务和
+当前阶段不适用时不读取。它不新增模型调用、技能、审批或报表。
+
+## 三道门
+
+1. outcome：每个任务只有一个可验收结果。跨模块、接口、数据所有权或并行写入边界时，
+   拆成有序且各自可验的切片，并保留前一 accepted slice 的恢复状态。
+2. review：固定当前 candidate digest 和 contract digest。当前契约违约、引入回归或
+   安全问题阻断；独立真实缺陷登记后续归属；可选改善退出本收敛循环。
+3. time：每 45 分钟 checkpoint 已接受切片、证据、阻塞和下一步；90 分钟没有 accepted
+   slice 时停止扩大 scope，由 Sol 裁决继续、缩小、交接或阻塞。重试或换 agent 不重置
+   时间、问题或证据；未知进程/outcome 不自动接受或终止。
+
+## 最短 Convergence JSON
+
+单一 outcome，写在对应 `## Tnn` 小节的一行：
+
+```text
+Convergence: {"requires_slices":false,"single_outcome":"可检查的单一结果"}
+```
+
+跨边界并有依赖的切片：
+
+```text
+Convergence: {"requires_slices":true,"slices":[{"id":"G1","outcome":"第一片结果","checks":["定向检查"]},{"id":"G2","outcome":"第二片结果","checks":["集成检查"],"deps":["G1"]}]}
+```
+
+计划只声明切片；accepted 状态、candidate 和证据只能在执行时记录，不能写回计划冒充完成。
+
+## review.md 候选证据
+
+最终审查报告包含一个块的 `gsp-review-evidence`：
+
+```text
+<!-- gsp-review-evidence
+{"candidate_digest":"<sha256>","contract_digest":"<sha256>","findings":[],"reviewer_context":".gsp/runs/session-context/<session-uid>/<binding-uid>.json"}
+-->
+```
+
+`candidate_digest`、`contract_digest`、`findings` 和 `reviewer_context` 必须存在。
+`reviewer_context` 是现有 reviewer binding 的句柄路径，不是自报角色或布尔值。
+`verified-context` 由程序校验 authority、角色、代际和独立 thread 后产生；除非当前入口有真实宿主观察，
+`host_observation` 如实写 `unknown`，不得据此声称宿主、具体模型或模型行为已验证。
+
+同一问题首次可由 `worker_repair` 修正；第二次 `worker_repair` 必须拒绝，由当前 controller
+执行 `sol_takeover` 接管，且 `repair_count` 不重置。候选 digest 标识复核内容，不是目录冻结。
+'''
+
+METHOD_INDEX_REFERENCE = (
+    '条件方法见 [方法索引](../gsp-workflow/references/methods.md)。只在实际触发条件成立时读取'
+    '对应完整方法；当前上下文未变化时不重复读取，也不把方法入口变成新的默认技能。'
+)
+
+STAGE_REFERENCE = (
+    '阶段推进遵循 [阶段转换契约](../gsp-workflow/references/stage-transitions.md)。'
+)
+
+CROSS_SESSION_REFERENCE_LINK = (
+    '跨会话与恢复遵循 [跨会话契约](../gsp-workflow/references/cross-session.md)。'
+)
+
+def _safe_remove_tree(path, parent):
+    path = path.resolve()
+    parent = parent.resolve()
+    if path.parent != parent:
+        raise AssertionError(f"refusing to remove outside managed directory: {path}")
+    if path.is_symlink():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
 
 
-def build():
-    entries = [{'name': 'gsp-workflow', 'pack': 'core', 'sources': ['SP:using-superpowers','GS:careful','GS:guard'], 'generated': False}]
-    for name, pack, sources, trigger, body in DEFINITIONS:
-        if name == 'codex':
-            sources = sources + ['GS:claude-code']
+def _shared_references_for_method():
+    return (
+        '共享规则：'
+        '[方法索引](../../references/methods.md)、'
+        '[阶段转换](../../references/stage-transitions.md)、'
+        '[跨会话](../../references/cross-session.md)、'
+        '[共同契约](../../references/contract.md)。'
+    )
+
+
+def _rewrite_method_links(text):
+    def replace_link(match):
+        destination = match.group(1)
+        if destination.startswith('../gsp-workflow/'):
+            return '](../../' + destination.removeprefix('../gsp-workflow/') + ')'
+        if destination.startswith('../gsp-'):
+            return '](../../../' + destination.removeprefix('../') + ')'
+        return match.group(0)
+
+    return re.sub(r'\]\(([^)#]+)(#[^)]*)?\)', replace_link, text)
+
+
+def _write_shared_references(root):
+    references = root / 'skills/gsp-workflow/references'
+    references.mkdir(parents=True, exist_ok=True)
+    (references / 'cross-session.md').write_text(CROSS_SESSION_REFERENCE, encoding='utf-8', newline='\n')
+    (references / 'stage-transitions.md').write_text(STAGE_TRANSITION_REFERENCE, encoding='utf-8', newline='\n')
+    (references / 'convergence.md').write_text(CONVERGENCE_REFERENCE, encoding='utf-8', newline='\n')
+    entrypoints = (
+        (references / 'contract.md', '(convergence.md)'),
+        (root / 'skills/gsp-workflow/SKILL.md', '(references/convergence.md)'),
+    )
+    for path, link in entrypoints:
+        if not path.is_file() or link not in path.read_text(encoding='utf-8'):
+            raise AssertionError(f'convergence reference is orphaned from {path}')
+
+
+def _remove_retired(root, manifest):
+    skills_root = root / 'skills'
+    if not skills_root.exists():
+        return
+    for name in skill_catalog.names_for_class(manifest, 'internal', 'retired'):
+        _safe_remove_tree(skills_root / name, skills_root)
+    retired_reference = skills_root / 'gsp-workflow' / 'references' / 'learnings.md'
+    if retired_reference.is_file() or retired_reference.is_symlink():
+        retired_reference.unlink()
+    methods = skills_root / 'gsp-workflow/methods'
+    if methods.exists():
+        methods_parent = skills_root / 'gsp-workflow'
+        _safe_remove_tree(methods, methods_parent)
+
+
+def _method_document(name, owner, trigger, body, lifecycle):
+    full = skill_catalog.full_name(name)
+    text = f'<!-- internal-method: {full} -->\n# {full}\n\n'
+    text += f'Owner: `{skill_catalog.full_name(owner)}`\n\n'
+    text += f'Trigger: {trigger}\n\n'
+    text += ('This is a conditional internal method resource, not a discoverable skill. '
+             'Load the complete method only when the trigger applies.\n\n')
+    if lifecycle:
+        text += '## GSP stage integration\n\n' + _rewrite_method_links(lifecycle) + '\n\n'
+    text += _rewrite_method_links(body) + '\n\n' + _shared_references_for_method() + '\n'
+    return text
+
+
+def _method_index(method_rows, methods):
+    text = '# Conditional internal methods\n\n'
+    text += ('The canonical manifest defines 28 internal source duties: 26 complete METHOD.md '
+             'resources plus one shared workflow recovery reference used by both context duties. '
+             'Read a method only when its trigger applies. A method entry is not a skill and grants '
+             'no extra authorization.\n\n')
+    text += '| Method | Owner | Trigger | Resource |\n|---|---|---|---|\n'
+    reference_root = Path('skills/gsp-workflow/references')
+    for method in methods:
+        row = method_rows[method.name]
+        target = Path(method.internal_method_path)
+        link = os.path.relpath(target, reference_root).replace('\\', '/')
+        text += (
+            f'| `{method.name}` | `{skill_catalog.full_name(method.stage_membership[0])}` | '
+            f'{row["trigger"]} | [resource]({link}) |\n'
+        )
+    return text
+
+
+def build(root=ROOT):
+    root = Path(root).resolve()
+    manifest = skill_catalog.load_manifest(root)
+    errors = skill_catalog.validate_manifest(manifest)
+    if errors:
+        raise AssertionError('; '.join(errors))
+
+    definitions = {row[0]: row for row in DEFINITIONS}
+    public_entries = skill_catalog.public_entries(manifest)
+    methods = skill_catalog.stage_methods(manifest)
+    required = {
+        skill_catalog.short_name(entry.name)
+        for entry in (*public_entries, *methods)
+    }
+    missing = sorted(required - set(definitions) - {'workflow'})
+    if missing:
+        raise AssertionError('missing definitions: ' + ', '.join(missing))
+
+    _remove_retired(root, manifest)
+    _write_shared_references(root)
+
+    method_triggers = {
+        method.name: {'trigger': method.trigger}
+        for method in methods
+    }
+    for method in methods:
+        if method.shared_artifact:
+            continue
+        name = skill_catalog.short_name(method.name)
+        _, _, _, trigger, body = definitions[name]
+        target = root / method.internal_method_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            _method_document(
+                name,
+                method.stage_membership[0],
+                trigger,
+                body,
+                LIFECYCLE_NOTES.get(name),
+            ),
+            encoding='utf-8',
+            newline='\n',
+        )
+
+    references = root / 'skills/gsp-workflow/references'
+    (references / 'methods.md').write_text(
+        _method_index(method_triggers, methods), encoding='utf-8', newline='\n'
+    )
+
+    for entry in public_entries:
+        name = skill_catalog.short_name(entry.name)
+        if name == 'workflow':
+            continue
+        _, _, sources, trigger, body = definitions[name]
         if name in LIFECYCLE_NOTES:
-            body += '\n\n' + LIFECYCLE_NOTES[name] + ' 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。'
-        if name == 'captain':
-            body += CROSS_SESSION_GUIDANCE.rstrip()
-        if name in ('brainstorming', 'freeze', 'writing-plans', 'execute', 'review', 'verify', 'ship', 'workflow'):
-            body += '\n\n' + CONTROLLER_HANDOFF
+            body += '\n\n' + LIFECYCLE_NOTES[name]
+            body += ' 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。'
         if name == 'health':
-            body += '\n\n文档问题只读报告后，按 [治理执行规则](../gsp-workflow/references/document-governance-execution.md) 交接给 gsp-document-governance。已有完整整改授权则继续执行；仅检查授权则停在报告并给出整改范围。报告结论必须区分检查完成与治理完成，迁移预览不能代替实际迁移验收。不因检查自动改文件，也不因只读职责丢弃已授权的后续整改。'
-            body += '\n\nCodex 全局 hooks 用 `<gsp> hooks-status` 检查归属完整性，用 `<gsp> hooks-report` 汇总当前项目的元数据事件；安装/升级/卸载/恢复分别是 hooks-install/hooks-upgrade/hooks-uninstall/hooks-recover，支持 --dry-run 和 --profile。安装需用户授权，原生信任由用户在 /hooks 审查。静态通过不代表真实触发，Shell 冻结与特殊工具路径仍有覆盖缺口。'
-        full = 'gsp-' + name
-        folder = ROOT / 'skills' / full
+            body = body.replace('gsp-git', 'gsp-ship 的 git 方法')
+            body += '\n\n文档问题只读报告后，按 [治理执行规则](../gsp-workflow/references/document-governance-execution.md) 交接给 gsp-document-governance。'
+            body += '\n\nCodex 全局 hooks 用 `<gsp> hooks-status` 检查归属完整性，用 `<gsp> hooks-report` 汇总当前项目的元数据事件；安装/升级/卸载/恢复分别是 hooks-install/hooks-upgrade/hooks-uninstall/hooks-recover。'
+
+        folder = root / entry.payload_root
         folder.mkdir(parents=True, exist_ok=True)
         description = 'Use when ' + trigger + '.'
-        text = f'---\nname: {full}\ndescription: {json.dumps(description, ensure_ascii=False)}\n---\n\n# {name}\n\n'
+        text = f'---\nname: {entry.name}\ndescription: {json.dumps(description, ensure_ascii=False)}\n---\n\n# {name}\n\n'
         text += '<!-- Generated by scripts/build_skills.py; edit that source. -->\n\n'
         text += '共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。\n\n'
-        text += '阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。\n\n'
-        text += '路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。\n\n'
+        text += METHOD_INDEX_REFERENCE + '\n\n'
+        text += STAGE_REFERENCE + '\n\n'
+        text += CROSS_SESSION_REFERENCE_LINK + '\n\n'
+        text += '阶段结果遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套方法完成后返回原任务。\n\n'
         text += body + '\n'
         (folder / 'SKILL.md').write_text(text, encoding='utf-8', newline='\n')
         agents = folder / 'agents'
         agents.mkdir(exist_ok=True)
         metadata = (f'interface:\n  display_name: "GstackSP {name}"\n'
                     f'  short_description: {json.dumps("GstackSP 项目工作流：" + trigger, ensure_ascii=False)}\n'
-                    f'  default_prompt: "Use ${full} for the relevant part of this project task."\n')
-        (agents / 'openai.yaml').write_text(metadata, encoding='utf-8')
-        entries.append({'name': full, 'pack': pack, 'sources': sources, 'generated': True})
-    catalog = {'schema': 1, 'version': __version__, 'skills': entries,
-               'excluded': ['office-hours','spec','design-html','design-motion','pair-agent','runaway-stopper','gstack-upgrade','ubicloud','ios-clean','ios-design-review','ios-fix','ios-qa','ios-sync','deslop-shared-libs','retro']}
-    (ROOT / 'catalog.json').write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + '\n', encoding='utf-8', newline='\n')
-    from sp_preservation import build as preserve_sp
-    preservation = preserve_sp(ROOT, LIFECYCLE_NOTES)
-    for entry in entries:
-        file = ROOT / 'skills' / entry['name'] / 'SKILL.md'
+                    f'  default_prompt: "Use ${entry.name} for the relevant part of this project task."\n')
+        (agents / 'openai.yaml').write_text(metadata, encoding='utf-8', newline='\n')
+
+    excluded = manifest.get('excluded', [])
+    catalog = skill_catalog.catalog_payload(__version__, manifest, excluded)
+    (root / 'catalog.json').write_text(
+        json.dumps(catalog, ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8',
+        newline='\n',
+    )
+
+    from scripts import sp_preservation
+    sp_preservation.build(root, LIFECYCLE_NOTES)
+    catalog_errors = skill_catalog.validate_catalog(catalog, manifest)
+    if catalog_errors:
+        raise AssertionError('; '.join(catalog_errors))
+    physical_errors = skill_catalog.validate_manifest(
+        manifest, root, check_digests=True
+    )
+    if physical_errors:
+        raise AssertionError('; '.join(physical_errors))
+    for entry in public_entries:
+        file = root / entry.public_paths[0]
         text = file.read_text(encoding='utf-8')
-        assert text.startswith('---\nname: ' + entry['name'] + '\n')
+        assert text.startswith('---\nname: ' + entry.name + '\n')
         assert 'description:' in text
         if '<!-- sp-preserved-body:begin -->' not in text:
             assert not re.search(r'\b(?:TODO|TBD)\b', text)
         for ref in re.findall(r'\]\(([^)]+)\)', text):
             if not ref.startswith(('https://', 'http://', '#')):
                 assert (file.parent / ref).is_file(), (file, ref)
-    print(json.dumps({'core': sum(s['pack']=='core' for s in entries), 'optional': sum(s['pack']=='optional' for s in entries), 'format_and_links': 'pass'}))
+    print(json.dumps({
+        'core': sum(entry.class_name == 'default' for entry in public_entries),
+        'optional': sum(entry.class_name == 'on_demand' for entry in public_entries),
+        'internal_sources': len(methods),
+        'physical_methods': len(skill_catalog.physical_resource_paths(manifest, methods_only=True)),
+        'retired': len(skill_catalog.names_for_class(manifest, 'retired', 'internal')),
+        'format_and_links': 'pass',
+    }, ensure_ascii=False))
 
 
 if __name__ == '__main__':

@@ -15,13 +15,14 @@ import subprocess
 import threading
 import time
 
-from .runtime import WorkflowError, atomic, digest, read, redact
+from .core import WorkflowError, atomic, digest, read, redact
 
 
 MAX_STREAM_BYTES = 10 * 1024 * 1024
 MAX_LINE_BUFFER = 64 * 1024
 CARRY_CHARS = 8 * 1024
 READ_CHUNK = 64 * 1024
+MAX_INPUT_BYTES = 1024 * 1024
 HEARTBEAT_SECONDS = 2.0
 WAIT_LIMIT_SECONDS = 30.0
 
@@ -102,6 +103,48 @@ def _drain(pipe, stream):
             pass
 
 
+def _input_payload(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = value.encode('utf-8')
+        except UnicodeError as exc:
+            raise WorkflowError('COMMAND_INPUT_INVALID expected UTF-8 text or bytes') from exc
+    elif isinstance(value, (bytearray, memoryview)):
+        value = bytes(value)
+    elif not isinstance(value, bytes):
+        raise WorkflowError('COMMAND_INPUT_INVALID expected text or bytes')
+    if len(value) > MAX_INPUT_BYTES:
+        raise WorkflowError(
+            f'COMMAND_INPUT_TOO_LARGE limit is {MAX_INPUT_BYTES} bytes')
+    return value
+
+
+def _write_input(pipe, payload, state):
+    offset = 0
+    try:
+        fd = pipe.fileno()
+        while offset < len(payload):
+            chunk = payload[offset:offset + READ_CHUNK]
+            written = os.write(fd, chunk)
+            if written < 1:
+                raise OSError('stdin write made no progress')
+            offset += written
+            state['written'] = offset
+        state['complete'] = True
+    except (BrokenPipeError, OSError) as exc:
+        state['error'] = type(exc).__name__
+    except Exception as exc:
+        state['error'] = type(exc).__name__
+    finally:
+        try:
+            pipe.close()
+        except OSError:
+            pass
+        state['closed'] = True
+
+
 def _heartbeat_document(evidence_id, folder, metadata, process_identity, parent,
                         started, status, stdout, stderr):
     return {
@@ -125,8 +168,14 @@ def _write_progress(folder, document):
     atomic(Path(folder) / 'command-progress.json', document)
 
 
-def execute_command(argv, cwd, env, timeout, folder, metadata, on_started=None):
+def execute_command(argv, cwd, env, timeout, folder, metadata, on_started=None,
+                    input_data=None, cancel_check=None):
     """Run one native child process and stream bounded, redacted logs."""
+    input_payload = _input_payload(input_data)
+    input_state = (None if input_payload is None else {
+        'bytes': len(input_payload), 'written': 0,
+        'complete': False, 'closed': False, 'error': None,
+    })
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     evidence_id = folder.name
@@ -144,14 +193,19 @@ def execute_command(argv, cwd, env, timeout, folder, metadata, on_started=None):
     stop = threading.Event()
     readers = []
     heartbeat = None
+    input_writer = None
     code = None
     launch_error = None
     interruption = None
+    cancel_reason = None
+    cancel_error = None
     try:
         from .hosts import child_options
         try:
             process = subprocess.Popen(
-                argv, cwd=cwd, stdin=subprocess.DEVNULL,
+                argv, cwd=cwd,
+                stdin=(subprocess.DEVNULL if input_payload is None
+                       else subprocess.PIPE),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
                 env=env, **child_options())
         except OSError as exc:
@@ -165,6 +219,13 @@ def execute_command(argv, cwd, env, timeout, folder, metadata, on_started=None):
         ]
         for reader in readers:
             reader.start()
+        if input_state is not None:
+            input_writer = threading.Thread(
+                target=_write_input,
+                args=(process.stdin, input_payload, input_state),
+                daemon=True,
+            )
+            input_writer.start()
         try:
             if on_started is not None:
                 on_started(process)
@@ -189,14 +250,46 @@ def execute_command(argv, cwd, env, timeout, folder, metadata, on_started=None):
 
             heartbeat = threading.Thread(target=beat, daemon=True)
             heartbeat.start()
-            try:
-                code = process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                interruption = 'timeout'
-                launch_error = 'TimeoutExpired'
-                from .hosts import terminate_owned
-                terminate_owned(process)
-                code = process.returncode
+            wait_deadline = time.monotonic() + timeout
+            while True:
+                code = process.poll()
+                if code is not None:
+                    break
+                if cancel_check is not None:
+                    try:
+                        requested = cancel_check()
+                    except Exception as exc:
+                        interruption = 'cancel-check-failed'
+                        launch_error = type(exc).__name__
+                        cancel_error = str(exc)
+                        from .hosts import terminate_owned
+                        terminate_owned(process)
+                        code = process.returncode
+                        break
+                    if requested:
+                        interruption = 'cancelled'
+                        launch_error = 'Cancelled'
+                        cancel_reason = (
+                            requested if isinstance(requested, str)
+                            else 'CANCELLED'
+                        )
+                        from .hosts import terminate_owned
+                        terminate_owned(process)
+                        code = process.returncode
+                        break
+                remaining = wait_deadline - time.monotonic()
+                if remaining <= 0:
+                    interruption = 'timeout'
+                    launch_error = 'TimeoutExpired'
+                    from .hosts import terminate_owned
+                    terminate_owned(process)
+                    code = process.returncode
+                    break
+                try:
+                    code = process.wait(timeout=min(.1, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
     except KeyboardInterrupt:
         interruption = 'keyboard-interrupt'
         launch_error = 'KeyboardInterrupt'
@@ -218,6 +311,14 @@ def execute_command(argv, cwd, env, timeout, folder, metadata, on_started=None):
         if heartbeat is not None:
             heartbeat.join(timeout=5)
         if process is not None:
+            if input_writer is not None:
+                input_writer.join(timeout=10)
+            for pipe in (process.stdin,):
+                try:
+                    if pipe is not None:
+                        pipe.close()
+                except OSError:
+                    pass
             for reader in readers:
                 reader.join(timeout=10)
             for pipe in (process.stdout, process.stderr):
@@ -228,20 +329,24 @@ def execute_command(argv, cwd, env, timeout, folder, metadata, on_started=None):
                     pass
         integrity = {'stdout': stdout.close(), 'stderr': stderr.close()}
 
+    input_incomplete = input_state is not None and not input_state['complete']
     terminal = ('timeout' if interruption == 'timeout' else
+                'cancelled' if interruption == 'cancelled' else
                 'interrupted' if interruption else
                 'launch-failed' if launch_error and process is None else
-                'failed' if launch_error or code not in (None, 0) else 'completed')
+                'failed' if (launch_error or code not in (None, 0)
+                             or input_incomplete) else 'completed')
     from .hosts import is_alive
     result = {
         'schema': 1, 'evidence_id': evidence_id, 'task': metadata.get('task'),
         'status': terminal, 'returncode': code, 'launch_error': launch_error,
-        'interruption': interruption, 'started_at': started_at,
+        'interruption': interruption, 'cancel_reason': cancel_reason,
+        'cancel_error': cancel_error, 'started_at': started_at,
         'finished_at': _stamp(), 'duration_s': round(time.monotonic() - started, 3),
         'stdout_path': str(stdout.path), 'stderr_path': str(stderr.path),
         'log_integrity': integrity, 'process_identity': process_identity,
         'process_alive': bool(process_identity and is_alive(process_identity)),
-        'parent': parent, 'folder': str(folder),
+        'parent': parent, 'folder': str(folder), 'input': input_state,
     }
     atomic(folder / 'command-result.json', result)
     _write_progress(folder, _heartbeat_document(

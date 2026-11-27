@@ -7,15 +7,15 @@ STAGES = ('design', 'plan', 'execute', 'review', 'checking', 'ready', 'ship')
 NEXT_SKILL = {
     'design': 'gsp-brainstorming', 'plan': 'gsp-writing-plans',
     'execute': 'gsp-execute', 'review': 'gsp-review',
-    'checking': 'gsp-verify', 'ready': 'gsp-ship', 'ship': 'gsp-workflow',
+    'checking': 'gsp-review', 'ready': 'gsp-ship', 'ship': 'gsp-workflow',
 }
 TRANSITIONS = {'design': 'plan', 'plan': 'execute', 'execute': 'review',
                'review': 'checking', 'checking': 'ready', 'ready': 'ship'}
 
 
 def _gate(code, detail, action, stage, documents=None, evidence=None):
-    return {'code': code, 'detail': detail, 'required_action': action,
-            'stage': stage, 'documents': documents or [], 'evidence': evidence or []}
+    from .gate_rules import _gate as render
+    return render(code,detail,action,stage,documents,evidence)
 
 
 def _docs(project, state):
@@ -24,102 +24,9 @@ def _docs(project, state):
             str(doc / 'review.md'), str(doc / 'delivery.md')]
 
 
-def _checks(project, state, target):
-    current = state.get('status')
-    if target == current and current in ('execute', 'review', 'checking', 'ready', 'ship'):
-        return []
-    expected = TRANSITIONS.get(current)
-    if current == 'needs-verification' and target == 'execute':
-        expected = 'execute'
-    if current in ('checking', 'ready') and target == 'review':
-        expected = 'review'
-    if target != expected:
-        return [_gate('STAGE_ORDER_INVALID', f'{current} cannot advance directly to {target}',
-                      f'advance to {expected}' if expected else 'resume the current task', current)]
-    if current == 'design':
-        try:
-            project.valid_design(state, project.paths(state['id'])[1])
-        except Exception as exc:
-            return [_gate('DESIGN_NOT_APPROVED', str(exc), 'approve the current design', current)]
-    elif target == 'execute':
-        if not state.get('tasks'):
-            return [_gate('TASKS_MISSING', 'no implementation tasks are registered', 'task-add the complete plan', current)]
-        try:
-            project.valid_design(state, project.paths(state['id'])[1])
-            project.valid_plan(state, project.paths(state['id'])[1])
-        except Exception as exc:
-            return [_gate('PLAN_NOT_SEALED', str(exc), 'plan-check then seal-plan', current)]
-        if state.get('scope', {}).get('mode') not in ('frozen', 'off'):
-            return [_gate('SCOPE_UNDECIDED', 'scope must be frozen or explicitly off', 'choose scope once', current)]
-        from .runtime import parallel_required, topology_required, topology_selected, validate_parallel_bindings
-        if topology_required(state) and not topology_selected(state):
-            return [_gate('GIT_TOPOLOGY_REQUIRED', 'the task has no effective Git topology selection',
-                          'run topology and topology-select once before implementation', current)]
-        if parallel_required(state):
-            parallel = validate_parallel_bindings(state)
-            ownership_codes = {'GIT_INTEGRATION_REQUIRED', 'GIT_INTEGRATION_OWNER_CONFLICT',
-                               'GIT_INTEGRATION_DEPENDENCY_MISSING'}
-            ownership = [item for item in parallel['blocking'] if item['code'] in ownership_codes]
-            if ownership:
-                first = ownership[0]
-                detail = '; '.join(item.get('detail', item['code']) for item in ownership)
-                return [_gate(first['code'], detail,
-                              '补齐唯一 integration 任务并声明全部子任务依赖后再进入 execute', current)]
-    elif target == 'review':
-        pending = [t['id'] for t in state.get('tasks', []) if t.get('status') != 'done']
-        if pending:
-            return [_gate('TASKS_INCOMPLETE', ', '.join(pending), 'finish all registered tasks', current)]
-        from .runtime import validate_parallel_bindings
-        parallel = validate_parallel_bindings(state)
-        if not parallel['valid']:
-            first = parallel['blocking'][0]
-            return [_gate(first['code'], '; '.join(item.get('detail', item['code']) for item in parallel['blocking']),
-                          'bind unique child workspaces and complete the integration task', current)]
-        if state.get('inflight'):
-            return [_gate('EXECUTION_UNKNOWN', 'an inflight command has not been recovered', 'recover-run and revalidate', current)]
-        from .runtime import evidence_for
-        try:
-            evidence_for(project, state, 'all')
-            for task in state['tasks']:
-                evidence_for(project, state, task['id'], allow_historical=True)
-        except Exception as exc:
-            return [_gate('FINAL_REGRESSION_REQUIRED', str(exc), 'run current task and final regression evidence', current)]
-    elif current == 'review':
-        review = state.get('review') or {}
-        if not review or review.get('blocking'):
-            return [_gate('REVIEW_BLOCKED', 'review is missing or blocking', 'write review.md and register a non-blocking review', current)]
-        from .runtime import digest, fingerprint, contract_hash
-        if (review.get('sha256') != digest(project.paths(state['id'])[1] / 'review.md') or
-                review.get('fingerprint') != fingerprint(project.verification_root(state)) or
-                review.get('contract') != contract_hash(project, state, project.paths(state['id'])[1])):
-            return [_gate('REVIEW_BLOCKED', 'review is stale', 'revalidate and review current inputs', current)]
-    elif current == 'checking':
-        if state.get('inflight'):
-            return [_gate('EXECUTION_UNKNOWN', 'verification has an inflight command', 'recover-run and revalidate', current)]
-        from .runtime import validate_parallel_bindings
-        parallel = validate_parallel_bindings(state)
-        if not parallel['valid']:
-            first = parallel['blocking'][0]
-            return [_gate(first['code'], '; '.join(item.get('detail', item['code']) for item in parallel['blocking']),
-                          'complete the child and integration topology checks', current)]
-        document = project.paths(state['id'])[1]
-        review = state.get('review') or {}
-        if not review or not (document / 'review.md').is_file():
-            return [_gate('REVIEW_MISSING', 'the review report is missing',
-                          'write review.md and register a non-blocking review', current)]
-        if review.get('blocking'):
-            return [_gate('REVIEW_BLOCKED', f"{review.get('blocking')} blocking review findings",
-                          'resolve the findings and register a clean review', current)]
-        from .runtime import digest
-        if review.get('sha256') != digest(document / 'review.md'):
-            return [_gate('REVIEW_STALE', 'review.md changed after review registration',
-                          'rerun review on the current report', current)]
-        from .runtime import validate_delivery
-        try:
-            validate_delivery(project, state, project.paths(state['id'])[1])
-        except Exception as exc:
-            return [_gate('DELIVERY_BLOCKED', str(exc), 'resolve verification gates before ready', current)]
-    return []
+def _checks(project,state,target):
+    from .gate_rules import stage_rules
+    return stage_rules(project,state,target)
 
 
 def blocked_preview(project, state, target, blockers):
@@ -153,7 +60,7 @@ def advance(project, state, run, target):
     before = state['status']
     state['status'] = target
     if target == 'ready':
-        from .runtime import fingerprint
+        from .workflow_support import (fingerprint)
         state['delivery_fingerprint'] = fingerprint(project.verification_root(state))
     payload = {'at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(timespec='seconds'),
                'from_stage': before, 'to_stage': target, 'completed_gates': [],

@@ -121,9 +121,10 @@ class CommandPreflightTests(unittest.TestCase):
         build_ready(self.fixture)
         set_closure_condition(self.fixture, 'Fixture delivery was explicitly accepted')
         state_file = self.fixture.root / '.gsp/runs/work/state.json'
-        state = read(state_file)
+        state = self.fixture.project.ledger_state('work')
         state['tasks'][0]['status'] = 'running'
-        state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        self.fixture.project.write(state, 'fixture', 'incomplete task after prior ready',
+                                   action_uid='fixture:incomplete-after-ready')
         with self.assertRaisesRegex(WorkflowError, 'TASKS_INCOMPLETE|CLOSE_REQUIRES_READY'):
             dispatch_result(self.fixture, 'close', 'work', '--reason', 'complete delivery')
         self.assertNotEqual(self.fixture.state()['status'], 'closed')
@@ -186,7 +187,6 @@ class DraftTaskRegistrationTests(unittest.TestCase):
         self.fixture.project.document(self.fixture.state(), 'plan').write_text(
             '# Plan\nT01 and T02 implementation and checks.\n', encoding='utf-8')
         self.fixture.cmd('seal-plan', 'work')
-        self.fixture.cmd('scope', 'work', '--off', '--quote', 'SYNTHETIC no freeze')
         self.fixture.cmd('advance', 'work', '--to', 'execute')
         self.assertEqual(self.fixture.state()['status'], 'execute')
 

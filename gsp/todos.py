@@ -4,18 +4,30 @@ import json
 import re
 import uuid
 
-from .runtime import WorkflowError, atomic, inside, now, read, redact, sha
+from .core import (WorkflowError, atomic, inside, now, read, redact, sha)
+from .identity_store import IdentityStore, IdentityStoreError
+from .orchestration_types import DocumentEdit, RequestRef, digest_value
 
 FIELDS = ('what', 'why', 'context', 'priority', 'effort', 'source', 'origin', 'blocking',
           'status', 'evidence', 'resolution', 'history')
 HUMAN = ('what', 'why', 'context', 'effort', 'priority', 'depends_on', 'blocked_by', 'completed')
 LABELS = {key: key.capitalize() for key in HUMAN}
 LABELS.update(depends_on='Depends on', blocked_by='Blocked by')
+MUTABLE_FIELDS = ('title', 'what', 'why', 'context', 'priority', 'effort', 'depends_on', 'blocked_by')
+LIFECYCLE_FIELDS = {'status', 'evidence', 'resolution', 'history', 'completed', 'completion_unverified', 'source', 'origin', 'blocking', 'links', 'object_uid', 'component'}
 RECORD = ('source', 'origin', 'blocking', 'evidence', 'resolution', 'history', 'links')
-PATTERN = re.compile(r'<!-- gsp-todo:(GSP-\d{4,}) -->\n(.*?)<!-- /gsp-todo:\1 -->', re.S)
+IDENTITY = r'(?:GSP-\d{4,}|TODO-\d{6,})'
+PATTERN = re.compile(
+    r'<!-- gsp-todo:(' + IDENTITY + r') -->\n(.*?)<!-- /gsp-todo:\1 -->',
+    re.S,
+)
 MARKER = '<!-- gsp-backlog:v2 -->'
 INTRO = '项目长期待办；当前实施任务在 docs/gsp/tasks/。未解决事项不能仅因交付而标为完成。'
 SKELETON = '# TODOS\n\n' + MARKER + '\n\n' + INTRO + '\n\n## 项目\n\n## Completed\n'
+
+
+def field_digest(value):
+    return sha(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode())
 
 
 def clean(value):
@@ -64,11 +76,12 @@ class Backlog:
             if data.get('schema') != 2 or not isinstance(data.get('items'), dict) or not isinstance(data.get('document'), dict):
                 raise WorkflowError('BACKLOG_INVALID execution records schema')
             for ident, record in data['items'].items():
-                if (not re.fullmatch(r'GSP-\d{4,}', ident) or not isinstance(record, dict)
+                if (not re.fullmatch(IDENTITY, ident) or not isinstance(record, dict)
                         or any(not isinstance(record.get(k), str) for k in RECORD if k != 'links')
                         or record.get('blocking') not in ('yes','no') or not isinstance(record.get('links'), list)
                         or (record['blocking']=='yes' and not record['origin']) or not isinstance(record.get('component'), str)
                         or (record.get('completed_hash') is not None and not re.fullmatch(r'[a-f0-9]{64}', str(record['completed_hash'])))
+                        or (record.get('object_uid') not in (None, '') and not re.fullmatch(r'[a-f0-9]{32}', str(record['object_uid'])))
                         or any(not isinstance(l, dict) or not all(isinstance(l.get(k), str) for k in ('run','task','at')) for l in record['links'])):
                     raise WorkflowError('BACKLOG_INVALID incomplete execution record ' + ident)
             return data
@@ -115,6 +128,7 @@ class Backlog:
                     **{k: values.get(k, '') for k in HUMAN},
                     **{k: record.get(k, [] if k == 'links' else '') for k in RECORD},
                     'component': record.get('component', '项目') if section == 'Completed' else section,
+                    'object_uid': record.get('object_uid', ''),
                     '_extra': '\n\n'.join(extras), '_legacy': legacy}
             if legacy:
                 item.update({k: values[k] for k in FIELDS})
@@ -164,6 +178,7 @@ class Backlog:
     def execution(item):
         record = {k: item.get(k, [] if k == 'links' else '') for k in RECORD}
         record.update(component=item.get('component', '项目'),
+                      object_uid=item.get('object_uid', ''),
                       completed_hash=signature(item) if item['status'] == 'done' else None)
         return record
 
@@ -191,7 +206,29 @@ class Backlog:
             base = base[:end].rstrip() + '\n\n' + blocks + '\n\n' + base[end:].lstrip('\n')
         return base.rstrip() + '\n'
 
-    def commit(self, text, records, event):
+    def _target_path(self):
+        return self.file.resolve().relative_to(self.root).as_posix()
+
+    def _check_transaction_owner(self, payload, operation_uid, target_path):
+        owned = isinstance(payload.get('operation_uid'), str) and bool(payload.get('operation_uid').strip())
+        if operation_uid is None:
+            if owned:
+                raise WorkflowError('BACKLOG_RECOVERY_OWNERSHIP_MISMATCH')
+            return
+        if not isinstance(operation_uid, str) or not operation_uid.strip() or target_path is None:
+            raise WorkflowError('BACKLOG_RECOVERY_OWNERSHIP_MISMATCH')
+        try:
+            candidate = Path(target_path)
+            if not candidate.is_absolute():
+                candidate = self.root / candidate
+            expected_target = candidate.resolve().relative_to(self.root).as_posix()
+        except (OSError, ValueError) as exc:
+            raise WorkflowError('BACKLOG_RECOVERY_OWNERSHIP_MISMATCH') from exc
+        if (payload.get('operation_uid') != operation_uid
+                or payload.get('target_path') != expected_target):
+            raise WorkflowError('BACKLOG_RECOVERY_OWNERSHIP_MISMATCH')
+
+    def commit(self, text, records, event, operation_uid=None):
         if self.transaction.exists():
             raise WorkflowError('BACKLOG_RECOVERY_REQUIRED')
         before = self.file.read_text(encoding='utf-8-sig') if self.file.exists() else ''
@@ -200,8 +237,9 @@ class Backlog:
         old_records = self.records_file.read_text(encoding='utf-8') if self.records_file.exists() else None
         records['document'] = {'path': self.file.name, 'sha256': sha(text.encode())}
         records['updated'] = now()
-        payload = {'document': self.file.name, 'before': before, 'after': text, 'old_records': old_records,
-                   'records': records, 'event': event, 'at': now()}
+        payload = {'document': self.file.name, 'target_path': self._target_path(),
+                   'operation_uid': operation_uid, 'before': before, 'after': text,
+                   'old_records': old_records, 'records': records, 'event': event, 'at': now()}
         atomic(self.transaction, payload)
         atomic(self.file, text)
         atomic(self.records_file, records)
@@ -211,10 +249,11 @@ class Backlog:
         atomic(self.meta / 'history' / (uuid.uuid4().hex + '.json'), {**payload, 'finished': now(), 'reason': clean(reason)})
         self.transaction.unlink()
 
-    def recover(self, reason):
+    def recover(self, reason, operation_uid=None, target_path=None):
         if not self.transaction.exists() or not clean(reason):
             raise WorkflowError('BACKLOG_RECOVERY_REQUIRED pending transaction and investigation reason required')
         payload = read(self.transaction)
+        self._check_transaction_owner(payload, operation_uid, target_path)
         if payload.get('document') != self.file.name:
             raise WorkflowError('BACKLOG_RECOVERY_DIVERGED canonical document differs')
         text = self.file.read_text(encoding='utf-8-sig') if self.file.exists() else ''
@@ -269,6 +308,62 @@ class Backlog:
         self.commit(self.compose(text, rows), self._records, 'format human document')
         return {'formatted': True, 'file': str(self.file), 'items': len(rows)}
 
+    def plan_field_merge(self, expected_version, operations):
+        """Validate and compose a field-level merge against the latest document."""
+        if not operations or any(not isinstance(item, DocumentEdit) for item in operations):
+            raise WorkflowError('DOCUMENT_EDIT_REQUIRED')
+        if (
+            not isinstance(expected_version, str)
+            or re.fullmatch(r"[a-f0-9]{64}", expected_version) is None
+        ):
+            raise WorkflowError('DOCUMENT_VERSION_REQUIRED')
+        text, loaded = self.load()
+        rows = [dict(row) for row in loaded]
+        records = json.loads(json.dumps(self._records, ensure_ascii=False))
+        seen = set()
+        for edit in operations:
+            if not isinstance(edit.target_uid, str) or not edit.target_uid.strip():
+                raise WorkflowError('DOCUMENT_TARGET_REQUIRED')
+            if not isinstance(edit.field, str) or not edit.field.strip():
+                raise WorkflowError('DOCUMENT_FIELD_REQUIRED')
+            if edit.operation != 'update':
+                raise WorkflowError('DOCUMENT_OPERATION_UNSUPPORTED')
+            if edit.field in LIFECYCLE_FIELDS:
+                raise WorkflowError('DOCUMENT_LIFECYCLE_FORBIDDEN')
+            if edit.field not in MUTABLE_FIELDS:
+                raise WorkflowError('DOCUMENT_FIELD_UNSUPPORTED')
+            row = next((item for item in rows
+                        if edit.target_uid in (item['id'], item.get('object_uid'))), None)
+            if row is None:
+                raise WorkflowError('DOCUMENT_TARGET_NOT_FOUND')
+            if row['status'] != 'open' or row.get('completion_unverified'):
+                raise WorkflowError('DOCUMENT_ITEM_NOT_EDITABLE')
+            token = (row['id'], edit.field)
+            if token in seen:
+                raise WorkflowError('DOCUMENT_EDIT_CONFLICT')
+            seen.add(token)
+            if not edit.before_digest or edit.before_digest != field_digest(row.get(edit.field, '')):
+                raise WorkflowError('DOCUMENT_EDIT_CONFLICT')
+            value = prose(edit.new_value or '')
+            if edit.field == 'title' and not value:
+                raise WorkflowError('DOCUMENT_FIELD_VALUE_REQUIRED')
+            if edit.field == 'priority' and value not in ('P0', 'P1', 'P2', 'P3', 'P4'):
+                raise WorkflowError('DOCUMENT_FIELD_VALUE_INVALID')
+            if edit.field == 'effort' and value not in ('S', 'M', 'L', 'XL'):
+                raise WorkflowError('DOCUMENT_FIELD_VALUE_INVALID')
+            if edit.field in ('what', 'why', 'context') and not value:
+                raise WorkflowError('DOCUMENT_FIELD_VALUE_REQUIRED')
+            row[edit.field] = value
+        for row in rows:
+            records['items'][row['id']] = self.execution(row)
+        merged = self.compose(text, rows)
+        return {
+            'text': merged,
+            'records': records,
+            'new_digest': sha(merged.encode()),
+            'expected_version': expected_version,
+        }
+
     def add(self, args):
         _, rows = self.load()
         item = {key: prose(getattr(args, key, '')) for key in ('title','what','why','context','priority','effort','source','origin','depends_on','blocked_by')}
@@ -284,14 +379,53 @@ class Backlog:
             if match['origin'] != item['origin'] or match['blocking'] != ('yes' if args.blocking else 'no'):
                 raise WorkflowError('BACKLOG_CONFLICT duplicate has different origin or blocking classification; reconcile explicitly')
             return {'item': self.public(match), 'reused': True}
-        known = {r['id'] for r in rows} | set(self._records['items'])
-        item.update(id=f'GSP-{max([int(ident[4:]) for ident in known] or [0])+1:04d}',
-                    blocking='yes' if args.blocking else 'no', status='open', evidence='', resolution='', history='', links=[], completed='')
+        store = IdentityStore(self.root)
+        try:
+            store.ensure_authority()
+        except IdentityStoreError as exc:
+            raise WorkflowError(str(exc)) from exc
+        request_input = {key: item[key] for key in (
+            'title', 'what', 'why', 'context', 'priority', 'effort', 'source',
+            'origin', 'depends_on', 'blocked_by', 'component',
+        )}
+        input_digest = digest_value(request_input)
+        logical_key = 'todo-create:' + input_digest
+        request = RequestRef(
+            request_uid=digest_value({
+                'project_uid': store.project_uid(),
+                'logical_key': logical_key,
+                'operation_kind': 'todo-create',
+            }),
+            logical_key=logical_key,
+            input_digest=input_digest,
+            project_uid=store.project_uid(),
+            work_uid=None,
+            attempt_uid=None,
+            operation_kind='todo-create',
+        )
+        try:
+            allocated = store.allocate('todo', None, request)
+        except IdentityStoreError as exc:
+            raise WorkflowError(str(exc)) from exc
+        item.update(id=allocated.canonical_id,
+                    object_uid=allocated.uid,
+                    blocking='yes' if args.blocking else 'no', status='open',
+                    evidence='', resolution='', history='', links=[], completed='')
         self.store(item)
         return {'item': self.public(item), 'reused': False}
 
     def item(self, ident):
-        match = next((r for r in self.load()[1] if r['id']==ident), None)
+        rows = self.load()[1]
+        match = next((r for r in rows if r['id']==ident), None)
+        store = IdentityStore(self.root)
+        if store.exists() and match is None:
+            try:
+                resolved = store.resolve('todo', ident, None, write=False)
+            except IdentityStoreError as exc:
+                raise WorkflowError(str(exc)) from exc
+            match = next((r for r in rows
+                          if r.get('object_uid') == resolved.uid or
+                          r['id'] == resolved.canonical_id), None)
         if match is None:
             raise WorkflowError('BACKLOG_NOT_FOUND ' + ident)
         return match
@@ -324,6 +458,6 @@ class Backlog:
         item = self.item(ident)
         if not any(l['run']==run and l['task']==task for l in item['links']):
             item['links'].append({'run':run,'task':task,'at':now()})
-        self._records['items'][ident] = self.execution(item)
-        self.commit(self._text, self._records, 'link ' + ident)
+        self._records['items'][item['id']] = self.execution(item)
+        self.commit(self._text, self._records, 'link ' + item['id'])
         return {'item':self.public(item)}

@@ -20,6 +20,11 @@ class NoTestsReasonTests(unittest.TestCase):
         self.project.initialize()
         self.cmd('new', 'work', '--title', 'No tests reason fixture')
         state = read(self.root / '.gsp/runs/work/state.json')
+        # Preserve the legacy no-tests-reason contract independently of the
+        # new task-classification gate covered by test_convergence_wiring.
+        state.pop('convergence_schema', None)
+        self.project.write(state, 'fixture', 'legacy no-tests reason',
+                           action_uid='fixture:legacy-no-tests-reason')
         self.doc = self.root / state['doc_dir']
         self.project.document(state, 'design').write_text(
             '# Docs-only change with explicit verification.', encoding='utf-8')

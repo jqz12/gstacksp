@@ -1,13 +1,14 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 try:
-    from process_helpers import run
+    from process_helpers import run, session_binding
 except ModuleNotFoundError:
-    from tests.process_helpers import run
+    from tests.process_helpers import run, session_binding
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,9 @@ class IntegrationOwnershipCliTests(unittest.TestCase):
     def make_project(self, initial=()):
         tmp = tempfile.TemporaryDirectory(prefix='gsp-integration-owner-')
         self.addCleanup(tmp.cleanup)
+        self.env=os.environ.copy()
+        self.env.pop('GSP_SESSION_CONTEXT',None)
+        self.env.update(HOME=tmp.name,USERPROFILE=tmp.name,CODEX_HOME=str(Path(tmp.name)/'.codex'))
         self.project = Path(tmp.name) / 'project'
         self.project.mkdir()
         self.git('init', '-q', '-b', 'main')
@@ -29,6 +33,8 @@ class IntegrationOwnershipCliTests(unittest.TestCase):
         self.cli('init')
         self.cli('new', 'parent', '--title', '集成归属', '--intent', 'full-stack', '--size', 'large')
         state = self.read_state()
+        binding=session_binding(self.project,state['work_uuid'],'main','codex','integration-owner')
+        self.env['GSP_SESSION_CONTEXT']=str(self.project/binding.handle_path)
         (self.project / state['documents']['design']).write_text(
             '# 集成归属\n\n每个前后端任务必须有唯一 integration owner。\n', encoding='utf-8')
         self.cli('approve', 'parent', '--quote', '批准集成归属设计')
@@ -55,7 +61,7 @@ class IntegrationOwnershipCliTests(unittest.TestCase):
 
     def cli(self, *args, ok=True):
         result = run([sys.executable, str(CLI), '--project', str(self.project), *args],
-                     capture_output=True, text=True, encoding='utf-8')
+                     capture_output=True, text=True, encoding='utf-8', env=self.env)
         if ok:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         else:
@@ -91,7 +97,9 @@ class IntegrationOwnershipCliTests(unittest.TestCase):
         state = self.read_state()
         integration = next(item for item in state['tasks'] if item['id'] == 'T03')
         integration['status'] = 'done'
-        path.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
+        from gsp.runtime import Project
+        Project(self.project).write(state,'fixture','completed integration',
+                                    action_uid='fixture:completed-integration')
         result = self.cli('task-add', 'parent', 'T04', '--title', '迟加前端',
                           '--acceptance', '前端测试', '--role', 'frontend',
                           '--owned-by', 'T03', ok=False)

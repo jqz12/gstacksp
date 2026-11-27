@@ -5,7 +5,7 @@ import uuid
 from typing import Any
 
 from .acceptance import validate_acceptance_card
-from .runtime import atomic, now, redact
+from .core import (atomic, now, redact)
 
 
 def record_acceptance_card(root: Path, run_id: str, task_id: str, card: dict[str, Any]) -> str:

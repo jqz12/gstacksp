@@ -1,4 +1,0 @@
-interface:
-  display_name: "GstackSP skillify"
-  short_description: "GstackSP 项目工作流：已成功重复的网页提取流程值得形成可复用技能时"
-  default_prompt: "Use $gsp-skillify for the relevant part of this project task."

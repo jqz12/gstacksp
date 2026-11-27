@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from gsp.runtime import Project, WorkflowError, dispatch, parser, read
-from tests.process_helpers import run
+from tests.process_helpers import run, session_binding
 
 
 class TopologyLifecycleTests(unittest.TestCase):
@@ -39,15 +39,28 @@ class TopologyLifecycleTests(unittest.TestCase):
         self.git('add', 'source.txt', '.gitignore')
         self.git('commit', '-qm', 'baseline')
 
+    def uninitialized_git_repository(self, prefix):
+        temporary = tempfile.TemporaryDirectory(prefix=prefix)
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.git('init', '-q', '-b', 'main', cwd=root)
+        (root / 'source.txt').write_text('baseline', encoding='utf-8')
+        self.git('add', 'source.txt', cwd=root)
+        self.git('commit', '-qm', 'baseline', cwd=root)
+        return root
+
     def prepare(self, intent='single-task'):
         self.cmd('new', 'work', '--title', '拓扑恢复', '--intent', intent)
         state = self.state()
+        # This fixture preserves the published topology lifecycle contract.
+        # New slicing/reviewer rules have their own real-CLI coverage.
+        state.pop('convergence_schema', None)
+        self.project.write(state, 'fixture', 'legacy topology compatibility')
         self.project.document(state, 'design').write_text('# Design\nFixture topology lifecycle.', encoding='utf-8')
         self.cmd('approve', 'work', '--quote', 'SYNTHETIC fixture approved')
         self.cmd('task-add', 'work', 'T01', '--title', 'Implementation', '--acceptance', 'Checks pass')
         self.project.document(state, 'plan').write_text('# Plan\nT01 implementation and checks.', encoding='utf-8')
         self.cmd('seal-plan', 'work')
-        self.cmd('scope', 'work', '--off', '--quote', 'SYNTHETIC no freeze')
         return state
 
     def state(self):
@@ -150,6 +163,39 @@ class TopologyLifecycleTests(unittest.TestCase):
         binding = self.state()['git_topology']
         self.assertEqual(binding['base_head'], base)
         self.assertIsNone(binding['base_branch'])
+
+    def test_linked_worktree_first_initialization_refuses_second_control_root(self):
+        primary = self.uninitialized_git_repository('gsp-linked-first-')
+        linked = primary / ".gsp" / "worktrees" / "linked-first"
+        linked.parent.mkdir(parents=True, exist_ok=True)
+        self.git("worktree", "add", "-b", "feature/linked-first", str(linked), cwd=primary)
+        primary_meta = primary / ".gsp"
+        self.assertFalse((primary_meta / "project.json").exists())
+
+        linked_project = Project(linked)
+        self.assertEqual(linked_project.root, primary)
+        with self.assertRaisesRegex(WorkflowError, "CONTROL_ROOT_UNINITIALIZED"):
+            linked_project.initialize()
+        self.assertFalse((primary_meta / "project.json").exists())
+        self.assertFalse((linked / ".gsp" / "project.json").exists())
+        self.assertFalse((primary_meta / "orchestration" / "registry.sqlite").exists())
+        self.assertFalse((linked / ".gsp" / "orchestration" / "registry.sqlite").exists())
+
+    def test_main_initializes_before_linked_worktree_uses_same_authority(self):
+        from gsp.identity_store import IdentityStore
+        self.setup_git()
+        primary_identity = self.project.identity()
+        linked = self.root / ".gsp" / "worktrees" / "linked-after-main"
+        linked.parent.mkdir(parents=True, exist_ok=True)
+        self.git("worktree", "add", "-b", "feature/linked-after-main", str(linked))
+
+        linked_project = Project(linked)
+        linked_project.initialize()
+        self.assertEqual(linked_project.root, self.root)
+        self.assertEqual(linked_project.identity()["id"], primary_identity["id"])
+        self.assertFalse((linked / ".gsp" / "project.json").exists())
+        self.assertEqual(IdentityStore(linked_project.root).path,
+                         self.root / ".gsp" / "orchestration" / "registry.sqlite")
 
     def test_worktree_child_resolves_same_control_root(self):
         self.setup_git()
@@ -256,44 +302,59 @@ class TopologyLifecycleTests(unittest.TestCase):
         path = state['git_topology']['workspace_root']
         # Fault fixture: a historical READY binding whose directory disappears.
         # This intentionally tests recovery loading, not proof of delivery.
-        from gsp.runtime import atomic
         state['status'] = 'ready'
-        atomic(self.root / '.gsp/runs/work/state.json', state)
+        self.project.write(state, 'fixture', 'historical ready binding',
+                           action_uid='fixture:historical-ready-binding')
         self.git('worktree', 'remove', '--force', path)
         self.cmd('topology-select', 'work', '--mode', 'worktree', '--rebind',
                  '--quote', 'SYNTHETIC inspected deleted workspace and existing branch')
         self.assertEqual(self.state()['status'], 'execute')
         self.assertEqual(self.state().get('verification_epoch', 0), 0)
 
-    def test_two_sessions_keep_separate_frozen_tasks_and_hook_context(self):
+    def test_two_sessions_keep_separate_task_ownership_and_hook_context(self):
         from gsp.codex_hooks import handle
         from gsp.document_health import git_route
+        from gsp.runtime import atomic
         self.setup_git()
-        self.prepare()
+        self.prepare(intent='cross-session')
         self.cmd('topology-select', 'work', '--mode', 'in-place', '--quote', 'SYNTHETIC main writer')
-        self.cmd('scope', 'work', '--path', '.', '--quote', 'SYNTHETIC main freeze')
+        self.cmd('scope', 'work', '--path', '.', '--quote', 'SYNTHETIC legacy record')
         original = self.state()['scope']
+        work_binding = session_binding(
+            self.root, self.state()['work_uuid'], 'main', 'codex', 'work-main',
+        )
+        self.cmd('session-register', 'work', '--role', 'controller', '--host', 'codex',
+                 '--thread', 'work-main', '--write-mode', 'write', '--path', '.',
+                 '--context', str(self.root / work_binding.handle_path))
         self.cmd('new', 'other', '--title', '第二会话任务', '--intent', 'cross-session', '--size', 'large')
         self.cmd('topology-select', 'other', '--mode', 'worktree', '--quote', 'SYNTHETIC second isolated writer')
         other = read(self.root / '.gsp/runs/other/state.json')
         workspace = Path(other['git_topology']['workspace_root'])
-        self.cmd('scope', 'other', '--path', '.', '--quote', 'SYNTHETIC second freeze')
+        self.cmd('scope', 'other', '--path', '.', '--quote', 'SYNTHETIC second legacy record')
+        other_binding = session_binding(self.root, other['work_uuid'], 'main', 'codex', 'other-main')
         self.cmd('session-register', 'other', '--role', 'controller', '--host', 'codex',
                  '--thread', 'other-main', '--worktree', str(workspace),
-                 '--write-mode', 'write', '--path', '.')
+                 '--write-mode', 'write', '--path', '.',
+                 '--context', str(self.root / other_binding.handle_path))
         self.assertEqual(self.state()['scope'], original)
-        for cwd, expected in ((self.root, 'work'), (workspace, 'other')):
-            result = handle({'cwd': str(cwd), 'hook_event_name': 'SessionStart', 'session_id': expected})
+        for cwd, expected, session in (
+            (self.root, 'work', 'work-main'),
+            (workspace, 'other', 'other-main'),
+        ):
+            # A separate main chat may own the navigation pointer. Actual cwd
+            # and edit ownership must select this session's work independently.
+            atomic(self.root / '.gsp/active.json', {'task': 'other' if expected == 'work' else 'work'})
+            result = handle({'cwd': str(cwd), 'hook_event_name': 'SessionStart', 'session_id': session})
             self.assertIn('Active task ' + expected + ',', result['hookSpecificOutput']['additionalContext'])
-            result = handle({'cwd': str(cwd), 'hook_event_name': 'PreToolUse', 'session_id': expected,
+            result = handle({'cwd': str(cwd), 'hook_event_name': 'PreToolUse', 'session_id': session,
                              'gsp_session_id': 'S01' if expected == 'other' else None,
                              'tool_name': 'Edit', 'tool_input': {'file_path': str(cwd / 'source.txt')}})
             self.assertNotEqual(result.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
             self.assertEqual(git_route(cwd)['active_task'], expected)
-        denied = handle({'cwd': str(self.root), 'hook_event_name': 'PreToolUse', 'session_id': 'work',
+        denied = handle({'cwd': str(self.root), 'hook_event_name': 'PreToolUse', 'session_id': 'work-main',
                          'tool_name': 'Edit', 'tool_input': {'file_path': str(workspace / 'source.txt')}})
         self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
-        with self.assertRaisesRegex(WorkflowError, 'GIT_WORKSPACE'):
+        with self.assertRaisesRegex(WorkflowError, 'CONTROL_PATH_PROTECTED'):
             self.cmd('check-path', 'work', str(workspace / 'source.txt'))
 
     def test_fullstack_uses_integration_tree_and_checks_child_commits(self):
@@ -351,8 +412,22 @@ class TopologyLifecycleTests(unittest.TestCase):
         self.setup_git()
         self.prepare()
         self.cmd('topology-select', 'work', '--mode', 'worktree', '--quote', 'SYNTHETIC isolate')
-        with self.assertRaisesRegex(WorkflowError, 'GIT_WORKSPACE_PATH'):
+        with self.assertRaisesRegex(WorkflowError, 'CONTROL_PATH_PROTECTED'):
             self.cmd('check-path', 'work', str(self.root / 'source.txt'))
+
+    def test_check_path_protects_selected_workspace_metadata(self):
+        self.setup_git()
+        self.prepare()
+        self.cmd('topology-select', 'work', '--mode', 'worktree', '--quote', 'SYNTHETIC isolate')
+        workspace = Path(self.state()['git_topology']['workspace_root'])
+        for path in (workspace / '.git/HEAD', workspace / '.gsp/orchestration/registry.sqlite'):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(WorkflowError, 'CONTROL_PATH_PROTECTED'):
+                    self.cmd('check-path', 'work', str(path))
+        preview = self.cmd('check-path', 'work', str(workspace / 'src/new.py'))
+        self.assertTrue(preview['preview'])
+        self.assertFalse(preview['write_grant'])
+        self.assertEqual(Path(preview['resolved_path']), workspace / 'src/new.py')
 
 
 if __name__ == '__main__':

@@ -12,7 +12,10 @@ import re
 import sqlite3
 import uuid
 
-from .runtime import WorkflowError, atomic, digest, git_identity, inside, now, read, redact, sha
+from .core import (WorkflowError, atomic, digest, inside, now, read, redact, sha)
+from .git_operations import (git_identity)
+from .identity_store import IdentityStore, IdentityStoreError
+from .orchestration_types import DocumentEdit, RequestRef, digest_value
 
 
 WORK_STAGE_ALLOWED = {
@@ -27,6 +30,28 @@ WORK_STAGE_ALLOWED = {
     'closed': set(),
 }
 
+
+def read_document_index_readonly(root):
+    """Read the discovery index without creating, repairing or mutating it."""
+    root = Path(root).resolve()
+    index = root / '.gsp/documents.sqlite'
+    if not index.is_file():
+        return None
+    uri = index.as_uri() + '?mode=ro'
+    try:
+        with closing(sqlite3.connect(uri, timeout=2, uri=True)) as db:
+            db.row_factory = sqlite3.Row
+            db.execute('PRAGMA query_only=ON')
+            entries = [dict(row) for row in db.execute(
+                'SELECT uuid,kind,number,title,stage,path,hash,data '
+                'FROM entries ORDER BY path').fetchall()]
+            texts = [dict(row) for row in db.execute(
+                'SELECT path,hash FROM texts ORDER BY path').fetchall()]
+            text_count = len(texts)
+    except sqlite3.Error as exc:
+        raise WorkflowError('DOCUMENT_INDEX_READ_FAILED ' + str(exc)) from exc
+    return {'path': index.relative_to(root).as_posix(), 'entries': entries,
+            'texts': texts, 'text_count': text_count}
 
 def work_record_snapshot(root, identity):
     """Read one work record without Git probes or the document full scan.
@@ -83,6 +108,14 @@ class Governance:
         self.index = self.root/'.gsp/documents.sqlite'
         self.pending = self.root/'.gsp/document-transaction.json'
         self.context={'root':str(self.root),'git':git_identity(self.root)}
+
+    def _identity_store(self):
+        store = IdentityStore(self.root)
+        try:
+            store.ensure_authority()
+        except IdentityStoreError as exc:
+            raise WorkflowError(str(exc)) from exc
+        return store
 
     def path(self, rel):
         if Path(rel).is_absolute() or '..' in Path(rel).parts:
@@ -176,17 +209,42 @@ class Governance:
             self.path(folder)
         return record
 
-    def _commit(self, changes):
+    def _check_transaction_owner(self, transaction, operation_uid, target_path):
+        owned = isinstance(transaction.get('operation_uid'), str) and bool(transaction.get('operation_uid').strip())
+        if operation_uid is None:
+            if owned:
+                raise WorkflowError('DOCUMENT_RECOVERY_OWNERSHIP_MISMATCH')
+            return
+        if not isinstance(operation_uid, str) or not operation_uid.strip() or target_path is None:
+            raise WorkflowError('DOCUMENT_RECOVERY_OWNERSHIP_MISMATCH')
+        try:
+            candidate = Path(target_path)
+            if not candidate.is_absolute():
+                candidate = self.root / candidate
+            expected_target = candidate.resolve().relative_to(self.root).as_posix()
+        except (OSError, ValueError) as exc:
+            raise WorkflowError('DOCUMENT_RECOVERY_OWNERSHIP_MISMATCH') from exc
+        if (transaction.get('operation_uid') != operation_uid
+                or transaction.get('target_path') != expected_target):
+            raise WorkflowError('DOCUMENT_RECOVERY_OWNERSHIP_MISMATCH')
+
+    def _commit(self, changes, operation_uid=None):
         if self.pending.exists(): raise WorkflowError('DOCUMENT_TRANSACTION_PENDING run docs-recover')
         ops=[]
+        target_paths=[]
         for rel,value in changes.items():
             p=self.path(rel)
             text=value if isinstance(value,str) else json.dumps(value,ensure_ascii=False,indent=2)+'\n'
             ops.append({'path':rel,'before':digest(p) if p.exists() else None,'after':sha(text.encode()),'text':text})
-        atomic(self.pending, {'id':uuid.uuid4().hex,'created':now(),'operations':ops})
-        self._finish(read(self.pending))
+            target_paths.append(p.resolve().relative_to(self.root).as_posix())
+        target_path = target_paths[0] if len(target_paths) == 1 else None
+        atomic(self.pending, {'id':uuid.uuid4().hex,'created':now(),'operation_uid':operation_uid,
+                              'target_path':target_path,'operations':ops})
+        self._finish(read(self.pending), operation_uid=operation_uid,
+                     target_path=target_path)
 
-    def _finish(self, transaction):
+    def _finish(self, transaction, operation_uid=None, target_path=None):
+        self._check_transaction_owner(transaction, operation_uid, target_path)
         # Preflight all destinations before applying anything, including recovery.
         for op in transaction['operations']:
             if sha(op['text'].encode())!=op['after']:raise WorkflowError('DOCUMENT_TRANSACTION_CORRUPT')
@@ -208,12 +266,14 @@ class Governance:
         atomic(archive, {'id':transaction['id'],'completed':now(),'paths':[op['path'] for op in transaction['operations']]})
         self.pending.unlink()
 
-    def recover(self):
+    def recover(self, operation_uid=None, target_path=None):
         if not self.pending.exists(): return {'recovered':False}
-        t=read(self.pending); self._finish(t)
+        t=read(self.pending)
+        self._finish(t, operation_uid=operation_uid, target_path=target_path)
         return {'recovered':True,'transaction':t['id']}
 
     def create(self, title, brief, source, modules=(), run_id=None, folder=None, number=None):
+        store = self._identity_store()
         self._ensure()
         if not title.strip() or not brief.strip() or not source.strip(): raise WorkflowError('DOCUMENT_SOURCE_REQUIRED')
         module_ids=[]
@@ -221,29 +281,50 @@ class Governance:
             r=self.get(m)
             if r['kind']!='module': raise WorkflowError('MODULE_REQUIRED')
             module_ids.append(r['uuid'])
-        counter=self.path('.gsp/work-counter.json')
-        if counter.exists():
-            existing=read(counter)['next']
+        project_uid = store.project_uid()
+        request_input = {
+            'title': title,
+            'brief': brief,
+            'source': source,
+            'run_id': run_id,
+            'number': number,
+            'folder': folder,
+            'modules': sorted(module_ids),
+        }
+        input_digest = digest_value(request_input)
+        operation_key = (
+            'run:' + str(run_id)
+            if run_id is not None
+            else 'content:' + input_digest
+        )
+        logical_key = 'work-create:' + operation_key
+        request = RequestRef(
+            request_uid=digest_value({
+                'project_uid': project_uid,
+                'logical_key': logical_key,
+                'operation_kind': 'work-create',
+            }),
+            logical_key=logical_key,
+            input_digest=input_digest,
+            project_uid=project_uid,
+            work_uid=None,
+            attempt_uid=None,
+            operation_kind='work-create',
+        )
+        try:
+            allocated = store.allocate('work', None, request, explicit_id=number)
+        except IdentityStoreError as exc:
+            raise WorkflowError(str(exc)) from exc
+        wid = allocated.uid
+        try:
+            existing = self.get(wid)
+        except WorkflowError as exc:
+            if not str(exc).startswith('DOCUMENT_NOT_FOUND '):
+                raise
         else:
-            with closing(self._db()) as db:
-                nums=[int(r[0].split('-')[1]) for r in db.execute("SELECT number FROM entries WHERE kind='work'") if r[0]]
-            existing=max(nums,default=0)+1
-        if number:
-            if not isinstance(number,str) or not re.fullmatch(r'GSP-\d{6}', number):
-                raise WorkflowError('WORK_NUMBER_INVALID expected GSP-000000')
-            token=number
-            base=int(existing) if isinstance(existing,int) and not isinstance(existing,bool) else 0
-            next_value=max(base + 1, int(number.split('-')[1]) + 1)
-        else:
-            if not isinstance(existing,int) or isinstance(existing,bool) or existing<1:raise WorkflowError('WORK_COUNTER_INVALID')
-            number_val=existing
-            with closing(self._db()) as db:
-                if db.execute('SELECT 1 FROM entries WHERE number=?',('GSP-'+str(number_val).zfill(6),)).fetchone():
-                    maximum=db.execute("SELECT MAX(CAST(substr(number,5) AS INTEGER)) FROM entries WHERE kind='work'").fetchone()[0]
-                    number_val=max(number_val,(maximum or 0)+1)
-            token='GSP-'+str(number_val).zfill(6)
-            next_value=number_val+1
-        wid=uuid.uuid4().hex
+            return existing
+        token = allocated.canonical_id
+        next_value = store.next_value('work', None)
         suffix=re.sub('[^a-z0-9]+','-',title.lower()).strip('-')[:36]
         if not suffix and run_id:
             suffix=re.sub('[^a-z0-9]+','-',str(run_id).lower()).strip('-')[:36]
@@ -261,6 +342,53 @@ class Governance:
             changes['docs/work/project.json']={'schema':1,'id':ident,'created':now()}
         self._commit(changes)
         return record
+
+    def plan_field_merge(self, path, operations):
+        """Plan a safe field merge for a shared JSON record."""
+        path = Path(path).resolve()
+        if not inside(self.root, path) or path.suffix.lower() != '.json':
+            raise WorkflowError('DOCUMENT_PATH_ESCAPE')
+        relative = path.relative_to(self.root).as_posix()
+        if not relative.startswith('docs/'):
+            raise WorkflowError('DOCUMENT_PATH_ESCAPE')
+        record = read(path)
+        if record.get('kind') not in ('work', 'module'):
+            raise WorkflowError('DOCUMENT_MERGE_UNSUPPORTED')
+        allowed = {'title', 'summary', 'closure_condition'}
+        forbidden = {'stage', 'history', 'uuid', 'number', 'kind', 'folder',
+                     'documents', 'run_id', 'generation', 'created', 'updated',
+                     'source', 'relations', 'modules', 'aliases', 'paths',
+                     'parents', 'approval', 'plan_seal'}
+        seen = set()
+        for edit in operations:
+            if not isinstance(edit, DocumentEdit):
+                raise WorkflowError('DOCUMENT_EDIT_REQUIRED')
+            if edit.operation != 'update':
+                raise WorkflowError('DOCUMENT_OPERATION_UNSUPPORTED')
+            if edit.field in forbidden:
+                raise WorkflowError('DOCUMENT_LIFECYCLE_FORBIDDEN')
+            if edit.field not in allowed or (record['kind'] == 'module' and edit.field != 'title'):
+                raise WorkflowError('DOCUMENT_FIELD_UNSUPPORTED')
+            if edit.target_uid not in (record.get('uuid'), record.get('number')):
+                raise WorkflowError('DOCUMENT_TARGET_NOT_FOUND')
+            if (record['uuid'], edit.field) in seen:
+                raise WorkflowError('DOCUMENT_EDIT_CONFLICT')
+            seen.add((record['uuid'], edit.field))
+            if not edit.before_digest or edit.before_digest != digest_value(record.get(edit.field, '')):
+                raise WorkflowError('DOCUMENT_EDIT_CONFLICT')
+            value = redact(str(edit.new_value or '').strip())
+            if edit.field == 'title' and not value:
+                raise WorkflowError('DOCUMENT_FIELD_VALUE_REQUIRED')
+            if edit.field == 'summary':
+                value = value[:320]
+            record[edit.field] = value
+        record['updated'] = now()
+        text = json.dumps(record, ensure_ascii=False, indent=2) + '\n'
+        return {
+            'record': record,
+            'relative_path': relative,
+            'new_digest': sha(text.encode()),
+        }
 
     def _save(self, r, extra=None):
         row=self._row(r['uuid'])
@@ -292,7 +420,7 @@ class Governance:
             if run.exists() and (read(run).get('inflight') or (run.parent/'driver/state.json').exists()):
                 raise WorkflowError('WORK_EXECUTION_BUSY stop/reconcile the driver first')
         if target in ('delivered','closed'):
-            from .runtime import Project
+            from .project import (Project)
             if not r.get('run_id'): raise WorkflowError('WORK_NO_READY_RUN')
             state = run_state
             if state is None:

@@ -5,7 +5,14 @@ import re
 import tempfile
 import uuid
 
-from .runtime import WorkflowError, atomic, digest, inside, locked, now, read, sha
+from . import skill_catalog
+from .core import (WorkflowError, atomic, digest, inside, now, read, sha)
+from .workflow_locks import (locked)
+
+LEGACY_OPTIONAL_SKILLS = {
+    'gsp-diagnosing-superpowers',
+    'gsp-document-governance',
+}
 
 
 def publish(path, data):
@@ -79,27 +86,52 @@ class UserInstall:
                 recorded = Path.cwd() / recorded
             candidates.append(recorded.resolve())
         for source in candidates:
-            if (source / 'catalog.json').is_file() and (source / 'skills').is_dir():
+            if (source / skill_catalog.MANIFEST_REL).is_file() and (source / 'skills').is_dir():
                 return source
         raise WorkflowError('SOURCE_PACKAGE_REQUIRED upgrade/install from a complete GstackSP source package')
 
     def embedded_source(self):
         source = Path(__file__).resolve().parents[1]
-        return source if (source / 'catalog.json').is_file() and (source / 'skills').is_dir() else None
+        return source if (source / skill_catalog.MANIFEST_REL).is_file() and (source / 'skills').is_dir() else None
+
+    def requested_optional(self, manifest, explicit, previous):
+        public = skill_catalog.public_entries(manifest)
+        aliases = {entry.name.removeprefix('gsp-'): entry.name for entry in public}
+        allowed = {
+            entry.name for entry in public if entry.class_name == 'on_demand'
+        }
+
+        def normalise(values, field):
+            if not isinstance(values, list):
+                raise WorkflowError(f'INSTALL_MANIFEST_INVALID {field}')
+            result = set()
+            for value in values:
+                if not isinstance(value, str):
+                    raise WorkflowError(f'INSTALL_MANIFEST_INVALID {field}')
+                name = aliases.get(value, value)
+                if name in allowed:
+                    result.add(name)
+            return result
+
+        requested = normalise(list(explicit or []), 'optional')
+        if 'requested_optional' in previous:
+            requested |= normalise(previous['requested_optional'], 'requested_optional')
+        else:
+            requested |= set(previous.get('skills', [])) & LEGACY_OPTIONAL_SKILLS
+        return sorted(requested)
 
     def payload(self, optional, previous):
         from .install import install
         source = self.source_package(previous)
-        catalog = read(source/'catalog.json')
-        previous_optional = [s['name'] for s in catalog['skills'] if s['pack']=='optional' and s['name'] in previous.get('skills',[])]
+        manifest = skill_catalog.load_manifest(source)
         with tempfile.TemporaryDirectory(prefix='gsp-user-stage-') as folder:
             stage = Path(folder)
-            install(stage, self.host, list(set(optional or []) | set(previous_optional)), source_root=source)
+            install(stage, self.host, list(optional or []), source_root=source)
             base = stage/('.claude/skills' if self.host == 'claude' else
                           '.zcode/skills' if self.host == 'zcode' else '.agents/skills')
             files = {'skills/'+p.relative_to(base).as_posix():p.read_bytes() for p in base.rglob('*') if p.is_file() and '__pycache__' not in p.parts}
             skills = sorted(p.name for p in base.iterdir() if p.is_dir())
-        return files, skills, catalog['version']
+        return files, skills, manifest['version']
 
     def apply(self, action, optional=None, dry_run=False):
         if action not in ('install','upgrade','uninstall'): raise WorkflowError('INSTALL_ACTION_INVALID')
@@ -117,7 +149,15 @@ class UserInstall:
         self.path('gstacksp/install.json'); self.path('gstacksp/transaction.json')
         instruction_before = self.instruction.read_bytes() if self.instruction.exists() else None
         routing, block_hash = self.routing(previous, remove=action=='uninstall')
-        files, skills, version = ({}, [], previous.get('version')) if action=='uninstall' else self.payload(optional,previous)
+        source = None
+        requested_optional = []
+        if action == 'uninstall':
+            files, skills, version = {}, [], previous.get('version')
+        else:
+            source = self.source_package(previous)
+            manifest = skill_catalog.load_manifest(source)
+            requested_optional = self.requested_optional(manifest, optional, previous)
+            files, skills, version = self.payload(requested_optional, previous)
         for rel in files:
             file = self.skill_path(rel)
             if file.exists() and rel not in old: raise WorkflowError('INSTALL_CONFLICT unowned destination: '+rel)
@@ -125,13 +165,14 @@ class UserInstall:
         changes[self.instruction.name] = routing.encode('utf-8')
         manifest_rel = 'gstacksp/install.json'
         import json
-        source = self.source_package(previous) if action != 'uninstall' else None
         manifest = {'schema':2,'scope':self.scope,'host':self.host,
                     'source':self.source_url or (str(source) if source else previous.get('source')),
                     'source_version':self.source_version or previous.get('source_version') or version,
                     'source_commit':self.source_commit or previous.get('source_commit'),
                     'version':version,'installed_at':previous.get('installed_at',now()),'updated_at':now(),
-                    'skills':skills,'files':{rel:sha(data) for rel,data in files.items()},
+                    'skills':skills,'requested_optional':requested_optional,
+                    'skill_manifest_sha256': sha((source/skill_catalog.MANIFEST_REL).read_bytes()) if source else previous.get('skill_manifest_sha256'),
+                    'files':{rel:sha(data) for rel,data in files.items()},
                     'instruction_block_sha256':block_hash,'live_discovery':'NOT_CHECKED'}
         changes[manifest_rel] = None if action=='uninstall' else (json.dumps(manifest,ensure_ascii=False,indent=2)+'\n').encode()
         result = {'action':action,'scope':self.scope,'profile':str(self.root),'version':version,'files':len(files),'dry_run':dry_run,'paths':sorted(changes),'live_discovery':'NOT_CHECKED'}

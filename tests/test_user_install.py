@@ -166,13 +166,55 @@ m.UserInstall("codex",{str(self.profile)!r}).apply("install")
 
     def test_user_edits_refuse_before_any_mutation(self):
         self.manager.apply('install')
-        file = self.profile/'skills/gsp-learn/SKILL.md'
+        file = self.profile/'skills/gsp-execute/SKILL.md'
         file.write_text('User edited', encoding='utf-8')
         before = self.manager.manifest.read_bytes()
         for action in ('upgrade', 'uninstall'):
             with self.assertRaises(WorkflowError): self.manager.apply(action)
         self.assertEqual(file.read_text(), 'User edited')
         self.assertEqual(self.manager.manifest.read_bytes(), before)
+
+    def test_requested_optional_persists_without_promoting_old_core_defaults(self):
+        self.manager.apply(
+            'install',
+            optional=[
+                'health',
+                'writing-skills',
+                'document-governance',
+                'diagnosing-superpowers',
+            ],
+        )
+        record = read(self.manager.manifest)
+        self.assertEqual(
+            record['requested_optional'],
+            [
+                'gsp-diagnosing-superpowers',
+                'gsp-document-governance',
+                'gsp-health',
+                'gsp-writing-skills',
+            ],
+        )
+        record.pop('requested_optional')
+        from gsp.runtime import atomic
+        atomic(self.manager.manifest, record)
+
+        self.manager.apply('upgrade')
+
+        migrated = read(self.manager.manifest)
+        self.assertEqual(
+            migrated['requested_optional'],
+            ['gsp-diagnosing-superpowers', 'gsp-document-governance'],
+        )
+        self.assertIn('gsp-document-governance', migrated['skills'])
+        self.assertIn('gsp-diagnosing-superpowers', migrated['skills'])
+        self.assertNotIn('gsp-health', migrated['skills'])
+        self.assertNotIn('gsp-writing-skills', migrated['skills'])
+        self.assertFalse(
+            (self.profile / 'skills/gsp-health/SKILL.md').exists()
+        )
+        self.assertFalse(
+            (self.profile / 'skills/gsp-writing-skills/SKILL.md').exists()
+        )
 
     def test_publication_failure_rolls_back_and_interruption_can_recover(self):
         import gsp.user_install as module

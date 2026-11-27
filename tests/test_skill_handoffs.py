@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class SkillHandoffGenerationTests(unittest.TestCase):
     def test_primary_stages_route_to_artifact_checks(self):
-        for name in ('brainstorming', 'writing-plans', 'execute', 'review', 'verify', 'ship'):
+        for name in ('brainstorming', 'writing-plans', 'execute', 'review', 'ship'):
             with self.subTest(stage=name):
                 text = (ROOT/'skills'/('gsp-'+name)/'SKILL.md').read_text(encoding='utf-8')
                 self.assertIn('artifact-fidelity.md', text.split('<!-- sp-preserved-body:begin -->')[0])
@@ -34,12 +34,18 @@ class SkillHandoffGenerationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('skill_definitions', ROOT/'scripts/build_skills.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        names = ('brainstorming', 'writing-plans', 'execute', 'systematic-debugging', 'review', 'verify', 'ship')
+        names = ('brainstorming', 'writing-plans', 'execute', 'review', 'ship')
         for name in names:
             with self.subTest(name=name):
                 text = (ROOT/'skills'/('gsp-'+name)/'SKILL.md').read_text(encoding='utf-8')
                 adaptation = text.split('<!-- sp-preserved-body:begin -->')[0]
                 self.assertIn(module.LIFECYCLE_NOTES[name], adaptation)
+        from gsp import skill_catalog
+        manifest = skill_catalog.load_manifest(ROOT)
+        for name in ('systematic-debugging', 'verify'):
+            with self.subTest(private_method=name):
+                text = (ROOT/skill_catalog.entry_for(manifest,name).internal_method_path).read_text(encoding='utf-8')
+                self.assertIn(module.LIFECYCLE_NOTES[name], text)
 
     def test_every_final_skill_routes_to_shared_handoff_contract(self):
         import json
@@ -54,11 +60,16 @@ class SkillHandoffGenerationTests(unittest.TestCase):
             'topology', 'topology-select', 'main/master', 'worktree',
             'GSP 编号', 'workspace_root', 'control_root', 'Issue/PR',
         )
-        for name in ('git', 'workflow', 'execute', 'captain', 'ship'):
+        for name in ('workflow', 'execute', 'ship'):
             with self.subTest(name=name):
                 text = (ROOT / 'skills' / ('gsp-' + name) / 'SKILL.md').read_text(encoding='utf-8')
                 for phrase in required:
                     self.assertIn(phrase, text, f'{name} missing {phrase}')
+        from gsp import skill_catalog
+        manifest = skill_catalog.load_manifest(ROOT)
+        text = (ROOT / skill_catalog.entry_for(manifest, 'git').internal_method_path).read_text(encoding='utf-8')
+        for phrase in required:
+            self.assertIn(phrase, text, f'git method missing {phrase}')
 
     def test_public_git_topology_docs_name_the_identity_layers(self):
         for path in (ROOT / 'docs/安装与使用.md', ROOT / 'docs/技能目录.md'):
@@ -68,11 +79,34 @@ class SkillHandoffGenerationTests(unittest.TestCase):
 
     def test_cross_session_contract_reaches_generated_sources_and_skills(self):
         source = (ROOT / 'scripts/build_skills.py').read_text(encoding='utf-8')
-        self.assertIn('CROSS_SESSION_GUIDANCE', source)
-        self.assertIn('主会话维护', source)
-        self.assertIn('SESSION_PATH_NOT_CLAIMED', (ROOT / 'skills/gsp-execute/SKILL.md').read_text(encoding='utf-8'))
-        self.assertIn('唯一总体计划', (ROOT / 'skills/gsp-writing-plans/SKILL.md').read_text(encoding='utf-8'))
-        self.assertIn('sessions/history', (ROOT / 'skills/gsp-context-restore/SKILL.md').read_text(encoding='utf-8'))
+        reference = (ROOT / 'skills/gsp-workflow/references/cross-session.md').read_text(encoding='utf-8')
+        self.assertIn('TaskContract', source)
+        self.assertIn('主会话维护', reference)
+        self.assertIn('不是目录硬白名单', reference)
+        self.assertIn('SESSION_PATH_CONFLICT', reference)
+        self.assertNotIn('SESSION_PATH_NOT_CLAIMED', reference)
+        self.assertIn('唯一总体计划', reference)
+        self.assertIn('cross-session.md', (ROOT / 'skills/gsp-execute/SKILL.md').read_text(encoding='utf-8'))
+        self.assertIn('cross-session.md', (ROOT / 'skills/gsp-writing-plans/SKILL.md').read_text(encoding='utf-8'))
+        self.assertIn('sessions/history', reference)
+        self.assertFalse((ROOT / 'skills/gsp-context-restore/SKILL.md').exists())
+
+    def test_stage_transition_preview_is_optional_and_advance_is_single_operation(self):
+        source = (ROOT / 'scripts/build_skills.py').read_text(encoding='utf-8')
+        reference = (
+            ROOT / 'skills/gsp-workflow/references/stage-transitions.md'
+        ).read_text(encoding='utf-8')
+        handoff = (
+            ROOT / 'skills/gsp-workflow/references/output-handoff.md'
+        ).read_text(encoding='utf-8')
+        for text in (reference, handoff):
+            self.assertIn('常规推进只调用一次 `advance`', text)
+            self.assertIn('`handoff` 仅用于需要主动预览', text)
+            self.assertNotIn('先运行 `<gsp> handoff', text)
+            self.assertNotIn('再运行 `<gsp> advance', text)
+        self.assertNotIn('先运行 `<gsp> handoff', source)
+        self.assertNotIn('再运行 `<gsp> advance', source)
+        self.assertIn('stage-transitions.md', source)
 
     def test_cross_session_public_document_is_indexed(self):
         index = (ROOT / 'docs/README.md').read_text(encoding='utf-8')
@@ -83,12 +117,41 @@ class SkillHandoffGenerationTests(unittest.TestCase):
         self.assertIn('docs/reference/cross-session-development.md', root_readme)
         self.assertIn('主会话维护', reference.read_text(encoding='utf-8'))
 
+    def test_codex_native_lifecycle_is_the_default_and_driver_is_legacy_only(self):
+        workflow = (ROOT / 'skills/gsp-workflow/SKILL.md').read_text(encoding='utf-8')
+        execute = (ROOT / 'skills/gsp-execute/SKILL.md').read_text(encoding='utf-8')
+        shared = (
+            ROOT / 'skills/gsp-workflow/references/cross-session.md'
+        ).read_text(encoding='utf-8')
+        adapter = (
+            ROOT / 'skills/gsp-workflow/references/sp-adapter.md'
+        ).read_text(encoding='utf-8')
+        for text in (workflow, shared):
+            with self.subTest(document='native lifecycle'):
+                self.assertIn('Codex 原生', text)
+                self.assertIn('聊天', text)
+                self.assertIn('代理', text)
+                self.assertIn('历史', text)
+                self.assertIn('worktree', text)
+        for text in (workflow, execute, shared, adapter):
+            with self.subTest(document='explicit Goal and legacy driver'):
+                self.assertIn('Goal', text)
+                self.assertIn('用户明确', text)
+                self.assertIn('legacy', text)
+        self.assertNotIn(
+            '配置真实检查并使用 drive-init/drive-start',
+            execute,
+        )
+
     def test_cross_session_worktree_lifecycle_guidance_is_consistent(self):
         source = (ROOT / 'scripts/build_skills.py').read_text(encoding='utf-8')
         workflow = (ROOT / 'skills/gsp-execute/SKILL.md').read_text(encoding='utf-8')
         contract = (ROOT / 'skills/gsp-workflow/references/contract.md').read_text(encoding='utf-8')
         reference = (ROOT / 'docs/reference/cross-session-development.md').read_text(encoding='utf-8')
-        for text in (source, workflow, contract, reference):
+        shared = (ROOT / 'skills/gsp-workflow/references/cross-session.md').read_text(encoding='utf-8')
+        self.assertIn('cross-session.md', workflow)
+        self.assertIn('cross-session.md', contract)
+        for text in (source, reference, shared):
             with self.subTest(document='cross-session lifecycle guidance'):
                 self.assertIn('session-accept', text)
                 self.assertIn('cleanup-pending', text)

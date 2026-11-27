@@ -157,6 +157,8 @@ def main(argv: list[str] | None = None, root: Path | None = None) -> int:
     parser.add_argument('--jobs', type=int, default=None,
                         help='shard count (default min(4, cpu)); capped at cpu count')
     parser.add_argument('--tier', choices=['full', 'fast'], default='full')
+    parser.add_argument('--modules', nargs='+', metavar='MODULE',
+                        help='run only these test_* modules with the usual imports and isolation')
     parser.add_argument('--list', action='store_true', help='print selected modules and exit')
     args = parser.parse_args(argv)
 
@@ -167,6 +169,12 @@ def main(argv: list[str] | None = None, root: Path | None = None) -> int:
     jobs = min(jobs, cpu)
 
     modules = discover_modules(root, args.tier)
+    if args.modules is not None:
+        selected = sorted(set(args.modules))
+        missing = [name for name in selected if name not in modules]
+        if missing:
+            parser.error('unknown modules for selected tier: ' + ', '.join(missing))
+        modules = selected
     if args.list:
         for name in modules:
             print(name)
@@ -178,12 +186,14 @@ def main(argv: list[str] | None = None, root: Path | None = None) -> int:
     serial_here = [name for name in modules if name in isolated]
     parallel_modules = [name for name in modules if name not in isolated]
     if serial_here:
+        print('Running isolated: ' + ', '.join(serial_here), flush=True)
         text, code = _run_shard(root, serial_here)
         runs.append((serial_here, text, code))
     shards = ([modules] if jobs == 1
               else pack_shards(root / 'tests', parallel_modules, jobs,
                                load_tiers(root).get('weights')))
     outputs: list[tuple[list[str], str, int]] = [None] * len(shards)
+    print(f'Running {len(parallel_modules)} modules in {len(shards)} shards', flush=True)
     with ThreadPoolExecutor(max_workers=max(1, len(shards))) as pool:
         futures = {pool.submit(_run_shard, root, shard): index
                    for index, shard in enumerate(shards)}
@@ -191,6 +201,9 @@ def main(argv: list[str] | None = None, root: Path | None = None) -> int:
             index = futures[future]
             text, code = future.result()
             outputs[index] = (shards[index], text, code)
+            counts = parse_summary(text)
+            print(f'Shard {index + 1} complete: {counts["ran"]} tests, '
+                  f'exit={code}, failures={counts["failures"]}, errors={counts["errors"]}', flush=True)
     runs.extend(outputs)
     texts = [text for _, text, _ in runs]
     failures = 0

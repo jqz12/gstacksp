@@ -9,14 +9,18 @@ description: "Use when 当前工作流安装、依赖、技能发现、项目文
 
 共同规则见 [GstackSP 契约](../gsp-workflow/references/contract.md)，按需读取；`<gsp>` 使用共同契约定义的实际运行脚本。
 
-阶段总结、实际技能清单和下一步执行责任遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套技能完成后返回原任务，不重复问继续。
+条件方法见 [方法索引](../gsp-workflow/references/methods.md)。只在实际触发条件成立时读取对应完整方法；当前上下文未变化时不重复读取，也不把方法入口变成新的默认技能。
 
-路由选择遵循 [统一路由契约](../gsp-workflow/references/routing.md)；事件和报告语义遵循 [观测日志](../gsp-workflow/references/observability.md)，没有宿主事件时保留 `unknown`。
+阶段推进遵循 [阶段转换契约](../gsp-workflow/references/stage-transitions.md)。
 
-运行 `<gsp> health --host claude|codex|zcode|both`。报告每一项 PASS、FAIL、NOT_CHECKED；先区分文件检查、CLI 存在和真实技能触发。Git 检查同时产生短 route：status、findings、next_skill、blocking、user_decision_required、decision_kind、handoff、evidence；AI先读取 route 再决定是否进入 gsp-git，不要求用户阅读完整报告。clean 且无决策时继续 workflow/brainstorming；脏工作区、分支不匹配、detached HEAD、无仓库或未知状态交给 gsp-git。用户级受管安装会在 health 中按 24 小时缓存查询 GitHub 稳定 tag；`UPDATE_AVAILABLE` 只读提示，不代表已升级。先把当前版本、最新 tag、来源和缓存状态展示给用户，明确询问是否升级；只有用户确认后才运行 `<gsp> upgrade --scope user --host <host>`，升级完成再运行 health 复查。检查失败记为 NOT_CHECKED，不阻塞当前工作；需要立即重查时使用 `--force-update-check`。让当前宿主实际调用本技能并指出加载的安装路径，作为单独的人工观察记录。浏览器、子代理、hook 需当前宿主实测，不从静态配置推断。缺失组件提供实际修复路径，未经执行不报告修复完成。将结果保存到任务 review.md 或单独的 docs/gsp/health.md；此技能不做代码质量打分。
+跨会话与恢复遵循 [跨会话契约](../gsp-workflow/references/cross-session.md)。
+
+阶段结果遵循 [交付与衔接](../gsp-workflow/references/output-handoff.md)；嵌套方法完成后返回原任务。
+
+运行 `<gsp> health --host claude|codex|zcode|both`。报告每一项 PASS、FAIL、NOT_CHECKED；先区分文件检查、CLI 存在和真实技能触发。Git 检查同时产生短 route：status、findings、next_skill、blocking、user_decision_required、decision_kind、handoff、evidence；AI先读取 route 再决定是否进入 gsp-ship 的 git 方法，不要求用户阅读完整报告。clean 且无决策时继续 workflow/brainstorming；脏工作区、分支不匹配、detached HEAD、无仓库或未知状态交给 gsp-ship 的 git 方法。用户级受管安装会在 health 中按 24 小时缓存查询 GitHub 稳定 tag；`UPDATE_AVAILABLE` 只读提示，不代表已升级。先把当前版本、最新 tag、来源和缓存状态展示给用户，明确询问是否升级；只有用户确认后才运行 `<gsp> upgrade --scope user --host <host>`，升级完成再运行 health 复查。检查失败记为 NOT_CHECKED，不阻塞当前工作；需要立即重查时使用 `--force-update-check`。让当前宿主实际调用本技能并指出加载的安装路径，作为单独的人工观察记录。浏览器、子代理、hook 需当前宿主实测，不从静态配置推断。缺失组件提供实际修复路径，未经执行不报告修复完成。将结果保存到任务 review.md 或单独的 docs/gsp/health.md；此技能不做代码质量打分。
 
 自动检测同时扫描项目级和用户级安装，并分别核对清单；全局正常不能掩盖项目损坏。文档治理使用 `<gsp> health --documents-only`；同时检查安装时用 `--documents`。默认报告保存在目标项目 docs/gsp/reports/document-governance/<唯一运行ID>/report.md 与 report.json；用户明确指定集中目录时传 --report-dir，不把开发者本机目录当产品默认。读取报告检查分类、绑定、断链、重复、孤立、未追踪和差异。报告同时包含assets元数据清单、根目录产物候选、Git忽略状态和有界Python字面量输出候选；先读asset_scan的范围、截断和未检查项，其他语言与动态生成路径由执行者核对。程序未检查语义与代码符合性，按需要复核并将依据写到独立复核材料，不能冒称程序已验证。旧项目先盘点和迁移预览，未知分类、未入链或重复副本不等于可删除。只出报告，不自动删文件、迁移或改全局配置。新建资料按统一职责，旧布局是待整理过渡或有依据例外。安装扫描仍不证明真实宿主行为；新环境另做实际技能触发检查。文档规则与命令见 [治理契约](../gsp-workflow/references/document-governance.md)。 同时只读复核活动任务及子任务的 Git 拓扑；未选择时路由 git.topology.required，目录缺失、分支/HEAD/基线漂移或重复占用时路由 git.topology.invalid，不修改任务状态。 具体待办命令见 [待办生命周期](../gsp-workflow/references/backlog.md)。
 
-文档问题只读报告后，按 [治理执行规则](../gsp-workflow/references/document-governance-execution.md) 交接给 gsp-document-governance。已有完整整改授权则继续执行；仅检查授权则停在报告并给出整改范围。报告结论必须区分检查完成与治理完成，迁移预览不能代替实际迁移验收。不因检查自动改文件，也不因只读职责丢弃已授权的后续整改。
+文档问题只读报告后，按 [治理执行规则](../gsp-workflow/references/document-governance-execution.md) 交接给 gsp-document-governance。
 
-Codex 全局 hooks 用 `<gsp> hooks-status` 检查归属完整性，用 `<gsp> hooks-report` 汇总当前项目的元数据事件；安装/升级/卸载/恢复分别是 hooks-install/hooks-upgrade/hooks-uninstall/hooks-recover，支持 --dry-run 和 --profile。安装需用户授权，原生信任由用户在 /hooks 审查。静态通过不代表真实触发，Shell 冻结与特殊工具路径仍有覆盖缺口。
+Codex 全局 hooks 用 `<gsp> hooks-status` 检查归属完整性，用 `<gsp> hooks-report` 汇总当前项目的元数据事件；安装/升级/卸载/恢复分别是 hooks-install/hooks-upgrade/hooks-uninstall/hooks-recover。

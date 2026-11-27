@@ -11,29 +11,11 @@ Artifact layout is adapted, not the method: use the paths returned by GSP status
 
 Use the [output and handoff contract](../gsp-workflow/references/output-handoff.md) for actual results, honestly attributed skills used, evidence, next action and owner. Return nested methods to the current task; continue authorized work without a redundant approval.
 
+Conditional methods are indexed in [methods](../gsp-workflow/references/methods.md). Only when the actual 触发条件 applies, read the complete method; do not load every method by default.
+
 ### GSP stage integration
 
-会话内执行仍遵守修复纪律。用户明确需要脱离会话连续执行时，读取 [驱动器](../gsp-workflow/references/driver.md)，配置真实检查并使用 drive-init/drive-start；不要同时由会话和驱动器修改项目。Codex 驱动器持久消费 max_fix_rounds，按每个任务和最终审查修复链计数，初次实施不算修复；失败命令数不等于修复轮次。Claude 暂无 headless 适配器。run 回执出现 hygiene.retained、hygiene.errors、truncated 或 over_budget 时按残留即缺陷处理：在根 TODOS 登记缺陷并说明哪个门禁失效，不得用“下次清理”代替。managed worktree 只把构建输出放在 brief 指定的 CARGO_TARGET_DIR/BUILD_ROOT（.gsp/build/<编号>/<slug>），不在 worktree 内累积 target；收尾用 topology-clean / close --cleanup 收敛 worktree 与已合并分支。未解决问题按共同待办规则保存并带入最终审查。首次写入前先运行 `<gsp> topology <id>`，向用户展示当前分支、HEAD、全部 worktree、脏状态和已有任务绑定，再用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 记录选择；默认阻止 main/master 或 detached HEAD 直接实现。每个 GSP 编号、T 任务、branch、commit SHA、control_root、workspace_root 和 Issue/PR 独立记录，前后端并行任务各用独立 worktree，由 integration 任务汇合后再 ready。 Native 会话支持绑定 worktree；当前 headless driver 不支持独立/子工作区，会返回 DRIVER_TOPOLOGY_UNSUPPORTED。子任务提交获授权并核对后使用 observe-head --task Tnn；集成树必须包含各子任务已验证提交，最终 run --task all 在集成工作区执行。 长命令或重定向 stdout/stderr 时必须记录日志路径、PID/exec session、状态/退出码来源和预期产物。相同空 write_stdin 最多等待两次；第三次前必须读取日志、检查进程、退出码或产物。等待时长变化不构成新观测，hook 可能以 wait-guard 拒绝第三次空等待。 原生 run 持续写脱敏 stdout/stderr、command-progress.json 和终态 command-result.json；长命令用 run-status <id> --evidence <id> 查看心跳、日志、截断和进程身份，该结果 validation=NOT_CHECKED，不是交付证明。status --brief 只读账本，同样不证明当前可交付。
-
-## 跨会话开发（仅 `intent=cross-session`）
-
-单会话仍是默认路径。没有 `cross-session` 意图的任务不创建 session registry、brief/report 目录，也不增加额外门禁。启用跨会话后，一个 GSP 工作项仍只有一份 `spec.md`、`plan.md`、`decisions.md`、`review.md` 和 `delivery.md`，这就是唯一总体计划及其配套记录。总体详细执行计划由 controller 主会话维护，它负责目标、非目标、任务图、依赖、公共接口、基线、worktree、允许和禁止路径、测试矩阵以及最终集成验收。子会话读取总体计划和自己的 brief，自主安排局部阅读、实现和局部测试顺序，不能复制 `plan-v2.md`，也不能替代 controller 做跨任务裁决。
-
-使用 `<gsp> session-register` 分配稳定的 `S01`、`S02` 会话身份。`T01`、`T02` 仍是计划任务身份。controller 用 `<gsp> session-brief` 派发局部输入，worker 用 `<gsp> session-report` 回传 `DONE`、`BLOCKED` 或 `CHANGE_REQUEST`。换主会话只用 `<gsp> session-handoff` 接管同一 registry 和总体计划。报告替换前会把旧版本移入任务 `sessions/history/`，不会覆盖证据。
-
-主会话发布时使用 `<gsp> session-dispatch`。它按依赖图批量计算 ready 任务，检查并发上限、`claimed_paths` 和路径重叠，并生成 `Dnnn`、预分配的 `Snn`、`Tnn-brief.md` 和 `Tnn-prompt.md`。没有显式 worktree 时，正式 worker 默认使用 `--worktree-mode auto`，GSP 创建受控的 managed worktree 和对应分支，并把实际路径、分支和基线写入 dispatch。显式 `--worktree` 或 `--worktree-mode bind` 只绑定宿主已有目录，GSP 取得写租约但不取得删除权。Codex 目标返回 `adapter-ready`，controller 再调用宿主原生线程创建、worktree 绑定、消息发送和有界等待入口。没有连接器的平台进入 `manual-required`，用户转发同一份 prompt。CLI 不伪造线程创建或外部消息发送。
-
-controller 在发布前和进入等待时使用 `<gsp> session-progress`。摘要必须展示总体进度、发布次数、独立任务数、DONE 报告数、accepted 数、已清理 worktree 数、managed worktree 数、bound worktree 数、cleanup-pending 数、运行中、阻塞、CHANGE_REQUEST、待人工转发和下一阶段任务表。总体进度只按 `accepted_tasks / planned_tasks` 计算，不能把报告、接受或 prompt 生成冒充清理完成。
-
-ZCode 作为用户级宿主时使用 `--host zcode` 安装到 `~/.zcode/skills` 和 `~/.zcode/AGENTS.md`，所有 ZCode 工作区共用同一份 GSP。`session-dispatch --target Tnn=zcode` 当前进入 `manual-required`，主会话把生成的 prompt 复制到 ZCode 子会话；子会话仍必须在指定 worktree 中工作并运行固定的 `session-report`，主会话再用 `session-watch` 和 `session-accept` 收口。这个安装范围不要求每个项目创建 `.agents/skills`。
-
-`session-report` 会把结构化报告追加到 durable outbox。主会话或有界 watcher 使用 `<gsp> session-watch` 按事件 ID 消费，重复消费保持幂等。Codex 宿主用有界 `wait_threads` 等待，不要求 controller 进程全天轮询。主会话关闭时事件留在 outbox，下一次 resume 继续消费。controller 检查报告、测试和集成结果后，使用 `<gsp> session-accept <run> <task> --session <Snn>` 明确接受任务。`session-accept` 会记录接受事件、释放 worker lease，并按 worktree 所有权自动处理清理。干净的 managed worktree 会被移除并执行 prune，bound worktree 只释放租约并保留目录。
-
-接受和清理是两个独立状态。managed worktree 遇到脏文件、锁定、Git 非零退出或未知结果时保留目录和分支，状态为 `cleanup-pending`，不计入 `cleaned_worktrees`。主会话随后使用 `<gsp> session-clean --retry` 重试 cleanup-pending。重复接受、释放或重试必须幂等。正常路径不要求用户手动删除 GSP 创建的 worktree，也不删除分支、commit、报告或显式绑定目录。
-
-跨会话写入需要三层门禁。controller lease 保证同一任务只有一个主会话，worktree write lease 保证同一源码目录同一时刻只有一个可写会话，`--path` 声明和已接线的 direct-edit hook 在 Edit、Write、apply_patch 前复核会话身份、写租约和路径归属。未注册会话、未声明路径、租约冲突和重叠声明直接拒绝，分别返回 `SESSION_WRITE_LEASE_REQUIRED`、`SESSION_PATH_NOT_CLAIMED` 或 `SESSION_PATH_CONFLICT`。该机制不是文件系统沙箱。Shell、外部编辑器、MCP 或未接线宿主只能记录为 `NOT_CHECKED`，不能把事后 Git 指纹检查说成编辑前保护。
-
-子 agent 与正式子会话必须区分。子 agent 是当前主会话内的临时辅助，不拥有独立 `Snn`、worktree、report 或恢复边界。正式子会话才计入 dispatch 统计，并拥有 `Snn`、`Tnn`、brief、report、outbox 和 worktree 清理生命周期。普通单会话任务不创建这些资料，原有 `new`、`approve`、`seal-plan`、`task-start`、`run`、`review`、`ready` 和恢复语义保持兼容。
+执行默认使用 Codex 原生聊天、代理、历史、压缩/恢复、模型参数和 worktree；GSP 只登记业务身份、TaskContract、租约、证据与验收。Goal 仅在用户明确创建目标时使用。只有用户明确要求脱离会话连续执行时，才能把 [驱动器](../gsp-workflow/references/driver.md) 的 drive-* 入口作为 legacy 兼容路径；它不能与当前会话并发写同一项目。legacy 驱动按每个任务和最终审查修复链持久消费 max_fix_rounds，初次实施不算修复，失败命令数不等于修复轮次。run 回执出现 hygiene.retained、hygiene.errors、truncated 或 over_budget 时按残留即缺陷处理：在根 TODOS 登记缺陷并说明哪个门禁失效，不得用“下次清理”代替。managed worktree 只把构建输出放在 brief 指定的 CARGO_TARGET_DIR/BUILD_ROOT（.gsp/build/<编号>/<slug>），不在 worktree 内累积 target；收尾用 topology-clean / close --cleanup 收敛 worktree 与已合并分支。未解决问题按共同待办规则保存并带入最终审查。首次写入前先运行 `<gsp> topology <id>`，向用户展示当前分支、HEAD、全部 worktree、脏状态和已有任务绑定，再用 `<gsp> topology-select <id> --mode in-place|branch|worktree --quote "用户原话"` 记录选择；默认阻止 main/master 或 detached HEAD 直接实现。每个 GSP 编号、T 任务、branch、commit SHA、control_root、workspace_root 和 Issue/PR 独立记录，前后端并行任务各用独立 worktree，由 integration 任务汇合后再 ready。 Native 会话支持绑定 worktree；当前 headless driver 不支持独立/子工作区，会返回 DRIVER_TOPOLOGY_UNSUPPORTED。子任务提交获授权并核对后使用 observe-head --task Tnn；集成树必须包含各子任务已验证提交，最终 run --task all 在集成工作区执行。 长命令或重定向 stdout/stderr 时必须记录日志路径、PID/exec session、状态/退出码来源和预期产物。相同空 write_stdin 最多等待两次；第三次前必须读取日志、检查进程、退出码或产物。等待时长变化不构成新观测，hook 可能以 wait-guard 拒绝第三次空等待。 原生 run 持续写脱敏 stdout/stderr、command-progress.json 和终态 command-result.json；长命令用 run-status <id> --evidence <id> 查看心跳、日志、截断和进程身份，该结果 validation=NOT_CHECKED，不是交付证明。status --brief 只读账本，同样不证明当前可交付。
 
 Read these complete originals and their dependencies before using the corresponding mode:
 
@@ -45,7 +27,11 @@ Before handing this stage onward, apply the [artifact fidelity checks](../gsp-wo
 
 Use the same artifact contract to route applicable engineering responsibilities from design to tasks, evidence and current documentation: data/recovery, configuration/dependencies, integration, project materials, delivery and maintenance. Expand only the topics triggered by this change; no extra mandatory table, document set or skill sequence. Headless plan workers return self-reviewed content; the controller owns registration and sealing.
 
-Stage transitions use the unified controller: preview with `<gsp> handoff <id> --to <stage>` and advance with `<gsp> advance <id> --to <stage>`. Read `next_skill` and pending gates; do not treat chat text as a handoff or mutate workflow state around a failed advance.
+Stage transitions follow [stage-transitions](../gsp-workflow/references/stage-transitions.md); a routine advance is one business operation and active preview is optional.
+
+Cross-session and recovery follow [cross-session](../gsp-workflow/references/cross-session.md). Read it only when that mode or recovery is active.
+
+执行收敛遵循 [收敛与检查点契约](../gsp-workflow/references/convergence.md)：45 分钟 checkpoint；90 分钟无 accepted slice 时停止扩展并由 Sol 裁决。
 
 <!-- sp-preserved-body:begin -->
 # Executing Plans

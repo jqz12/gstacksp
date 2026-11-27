@@ -12,6 +12,13 @@ class GovernanceTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        (self.root / '.gsp').mkdir()
+        (self.root / '.gsp/project.json').write_text(
+            json.dumps({'schema': 1, 'id': 'governance-fixture', 'root': str(self.root)}),
+            encoding='utf-8',
+        )
+        from gsp.identity_store import IdentityStore
+        IdentityStore(self.root).initialize()
         self.book = Governance(self.root)
 
     def test_idea_is_minimal_and_identity_is_versioned(self):

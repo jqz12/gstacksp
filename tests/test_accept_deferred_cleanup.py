@@ -9,6 +9,11 @@ from types import SimpleNamespace
 from gsp.dispatch import accept_session_task, dispatch_tasks, load_dispatch
 from gsp.runtime import Project, dispatch, parser, read
 from gsp.sessions import register_session, write_report
+from gsp.session_context import load_binding
+try:
+    from process_helpers import session_binding
+except ModuleNotFoundError:
+    from tests.process_helpers import session_binding
 
 
 class AcceptDeferredCleanupTests(unittest.TestCase):
@@ -27,6 +32,11 @@ class AcceptDeferredCleanupTests(unittest.TestCase):
         self.project.initialize()
         self.cmd("new", "work", "--title", "延迟清理", "--intent", "cross-session")
         state = self.state()
+        # This compatibility fixture predates independent convergence reviews;
+        # its contract is integration proof before managed-tree disposal.
+        state.pop('convergence_schema', None)
+        self.project.write(state, 'fixture', 'legacy deferred cleanup',
+                           action_uid='fixture:legacy-deferred-cleanup')
         self.project.document(state, "design").write_text(
             "# 延迟清理\n\n子任务接受后保留工作树，最终集成回归通过后再清理。\n", encoding="utf-8"
         )
@@ -42,18 +52,27 @@ class AcceptDeferredCleanupTests(unittest.TestCase):
             "--depends", "T01,T02,T03",
         )
         self.project.document(state, "plan").write_text(
-            "# 计划\n\nT01/T02/T03 独立实现，T04 汇总并运行最终回归。\n", encoding="utf-8"
+            '# Plan\n\n' + '\n'.join(
+                f'## Task {tid}: Independent child\n**Writes:** ' +
+                json.dumps({'paths':[f'{tid}_test.py']}) + '\n'
+                for tid in ('T01','T02','T03')) +
+            '## Task T04: Integration\n**Writes:** ' +
+            json.dumps({'paths':['T01_test.py','T02_test.py','T03_test.py','all_test.py']}) + '\n',
+            encoding="utf-8"
         )
         self.cmd("seal-plan", "work")
         self.cmd("scope", "work", "--off", "--quote", "SYNTHETIC no freeze")
         self.cmd("topology-select", "work", "--mode", "in-place", "--quote", "SYNTHETIC control root")
         self.cmd("advance", "work", "--to", "execute")
-        controller = register_session(self.project, self.state(), SimpleNamespace(
+        ctrl_state = self.state()
+        ctrl_binding = session_binding(self.root, ctrl_state["work_uuid"], "main", "codex", "controller-thread")
+        controller = register_session(self.project, ctrl_state, SimpleNamespace(
             role="controller", write_mode="write", session=None, host="codex",
             thread="controller-thread", task=None, worktree=str(self.root),
-            branch="main", path=["."],
+            branch="main", path=["."], context=str(self.root / ctrl_binding.handle_path),
         ))
         self.controller = controller["session"]["id"]
+        self.controller_binding = load_binding(self.root / ctrl_binding.handle_path)
 
     def git(self, *args, cwd=None):
         result = subprocess.run(
@@ -120,21 +139,23 @@ class AcceptDeferredCleanupTests(unittest.TestCase):
         self.cmd("task-done", "work", task_id)
 
         current = self.state()
+        worker_binding = session_binding(self.root, current["work_uuid"], "child", "manual", f"worker-{task_id}")
         register_session(self.project, current, SimpleNamespace(
             role="worker", write_mode="write", session=row["session_hint"], host="manual",
             thread=f"worker-{task_id}", task=task_id, worktree=row["worktree"],
             branch=row["branch"], path=[test_file.name],
+            context=str(self.root / worker_binding.handle_path),
         ))
         current = self.state()
         write_report(self.project, current, SimpleNamespace(
             session=row["session_hint"], task=task_id, status="DONE",
             summary=f"{task_id} 已完成", files=[test_file.name], tests=["fixture: 1 passed"],
             interfaces=[], evidence=[], need_from_main="", ruling="",
-        ))
+        ), caller_binding=load_binding(self.root / worker_binding.handle_path))
         current = self.state()
         accepted = accept_session_task(self.project, current, SimpleNamespace(
             task=task_id, session=self.controller, reason="SYNTHETIC controller verified report",
-        ))
+        ), caller_binding=self.controller_binding)
         self.assertEqual(accepted["acceptance"], "accepted")
         return accepted
 
