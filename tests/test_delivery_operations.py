@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 from gsp.command_policies import parser
 from gsp.core import WorkflowError
+from gsp import workflow_support
 from tests import test_topology_lifecycle as lifecycle
 from tests.process_helpers import public_main_binding, temporary_env
 
@@ -71,10 +72,20 @@ class DeliveryEntryTests(unittest.TestCase):
         f.git('add','--all')
         f.git('commit','-qm','reviewed fixture candidate')
         f.cmd('observe-head','work','--reason','SYNTHETIC reviewed candidate committed')
-        prepared,ok=self.invoke('prepare','--request-uid','public-landing','--target','refs/heads/main',
-                                 '--expected-target',self.base)
+        uncached_validation_calls=[]
+        original_uncached_validation=workflow_support._validate_delivery_uncached
+
+        def count_uncached_validation(*args, **kwargs):
+            uncached_validation_calls.append(1)
+            return original_uncached_validation(*args, **kwargs)
+
+        with patch('gsp.workflow_support._validate_delivery_uncached',
+                   side_effect=count_uncached_validation):
+            prepared,ok=self.invoke('prepare','--request-uid','public-landing','--target','refs/heads/main',
+                                    '--expected-target',self.base)
         self.assertTrue(ok,prepared)
         self.assertEqual('prepared',prepared['state'])
+        self.assertEqual(len(uncached_validation_calls),1)
         result,ok=self.invoke('land','--request-uid','public-landing')
         self.assertTrue(ok,result)
         self.assertEqual(f.git('rev-parse','HEAD'),f.git('rev-parse','main'))

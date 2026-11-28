@@ -1253,18 +1253,27 @@ def validate_delivery(project, state, doc, allow_head_change=False, context=None
     active = context if context is not None else current_context()
     if active is None:
         return _validate_delivery_uncached(project, state, doc, allow_head_change, None)
+    source_fingerprint = fingerprint(
+        project.verification_root(state, allow_head_change=allow_head_change)
+    )
+    contract = contract_hash(project, state, doc)
     key = ('delivery', str(Path(doc).resolve()), bool(allow_head_change),
+            source_fingerprint, contract,
            int(state.get('verification_epoch') or 0),
            tuple(state.get('evidence') or []),
            tuple((task.get('id'), task.get('status'), task.get('evidence'))
                  for task in state.get('tasks') or []),
            json.dumps(state.get('review') or {}, sort_keys=True, ensure_ascii=False))
-    return active.get('delivery_validation', key, lambda: _validate_delivery_uncached(
-        project, state, doc, allow_head_change, active))
+    if key not in active.delivery_validation:
+        active.delivery_validation[key] = _validate_delivery_uncached(
+            project, state, doc, allow_head_change, active)
+    return active.delivery_validation[key]
 
 
 def _measure_quality_source(root):
-    invalidate('quality-source-measurement')
+    context = current_context()
+    if context is not None:
+        context.invalidate_namespace('fingerprint')
     return fingerprint(root)
 
 

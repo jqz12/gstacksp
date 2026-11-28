@@ -48,6 +48,7 @@ class ValidationContext:
         self.misses = 0
         self._cache = {}
         self.invalidations = []
+        self.delivery_validation = {}
         self._phase_state = {}
         self._state_path = (Path(project.meta) / 'runs' / self.run_id / 'state.json'
                             if self.run_id else None)
@@ -78,9 +79,17 @@ class ValidationContext:
         self._cache.clear()
         self.invalidations.append({'phase': self.phase, 'reason': str(reason), 'at': _now()})
 
+    def invalidate_namespace(self, namespace):
+        for token in [token for token in self._cache if token[0] == namespace]:
+            del self._cache[token]
+        self.invalidations.append({
+            'phase': self.phase, 'reason': 'namespace:' + str(namespace), 'at': _now(),
+        })
+
     def begin_phase(self, name):
         self.phase = name
         self._cache.clear()
+        self.delivery_validation = {}
         self._phase_state = self._state_snapshot()
 
     def assert_unchanged(self):

@@ -140,7 +140,8 @@ class SessionCliTests(unittest.TestCase):
                  '--context', str(self.context))
         dispatched = json.loads(self.cli(
             'session-dispatch', 'work', '--session', 'S01', '--task', 'T01',
-            '--target', 'T01=codex', '--path', 'T01=src/service').stdout)
+            '--target', 'T01=codex', '--dispatch-mode', 'adapter',
+            '--path', 'T01=src/service').stdout)
         row = dispatched['dispatches'][0]
         self.assertTrue(row['managed_worktree'])
         self.assertTrue(Path(row['worktree']).is_dir())

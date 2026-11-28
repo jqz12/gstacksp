@@ -1,10 +1,12 @@
 from contextlib import closing
+import os
 import json
 import subprocess
 import sqlite3
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 from pathlib import Path
 
 from gsp.dispatch import (
@@ -130,14 +132,28 @@ class DispatchControlPlaneTests(unittest.TestCase):
         two = self.root / 'child-two'
         one.mkdir()
         two.mkdir()
-        result = dispatch_tasks(self.project, self.state, self.args(
-            '--task', 'T01', '--task', 'T02',
-            '--target', 'T01=codex', '--target', 'T02=manual',
-            '--path', 'T01=src/data', '--path', 'T02=src/api',
-            '--worktree', f'T01={one}', '--worktree', f'T02={two}',
-            '--max-parallel', '2'))
+        def native_worker(job, cwd, env, timeout, folder, contract_text, **kwargs):
+            kwargs['on_started'](SimpleNamespace(pid=os.getpid()))
+            return {
+                'status': 'completed',
+                'native_session_id': '01a21b31-2815-72f2-9964-88ee78efc61b',
+                'requested_model': 'group/deepseek-2',
+                'requested_effort': 'max',
+                'actual_model': 'group/deepseek-2',
+                'usage': None,
+                'usage_events': [],
+                'execution': None,
+            }
+
+        with mock.patch('gsp.dispatch.run_worker', side_effect=native_worker):
+            result = dispatch_tasks(self.project, self.state, self.args(
+                '--task', 'T01', '--task', 'T02',
+                '--target', 'T01=codex', '--target', 'T02=manual',
+                '--path', 'T01=src/data', '--path', 'T02=src/api',
+                '--worktree', f'T01={one}', '--worktree', f'T02={two}',
+                '--max-parallel', '2'))
         self.assertEqual(result['batch_size'], 2)
-        self.assertEqual([row['status'] for row in result['dispatches']], ['adapter-ready', 'manual-required'])
+        self.assertEqual([row['status'] for row in result['dispatches']], ['dispatched', 'manual-required'])
         resource_registry = ResourceRegistry(self.root)
         for row in result['dispatches']:
             text = (self.root / row['contract']).read_text(encoding='utf-8')
@@ -147,6 +163,14 @@ class DispatchControlPlaneTests(unittest.TestCase):
                 resource_registry.get(row['resource_request_uid'])['state'],
                 'committed',
             )
+            if row['platform'] == 'codex':
+                self.assertEqual(
+                    resource_registry.get_slot(
+                        row['execution_slot_request_uid']
+                    )['state'],
+                    'released',
+                )
+                continue
             slot = resource_registry.get_slot(
                 row['execution_slot_request_uid']
             )
@@ -159,6 +183,47 @@ class DispatchControlPlaneTests(unittest.TestCase):
                 slot['resources'][0]['identity'],
                 row['execution_slot_identity'],
             )
+
+    def test_codex_auto_dispatch_launches_native_worker_through_one_adapter(self):
+        self.set_plan_writes()
+        calls = []
+
+        def native_worker(job, cwd, env, timeout, folder, contract_text, **kwargs):
+            calls.append((job, cwd, timeout, contract_text, kwargs))
+            kwargs['on_started'](SimpleNamespace(pid=os.getpid()))
+            return {
+                'status': 'completed',
+                'native_session_id': '01a21b31-2815-72f2-9964-88ee78efc61b',
+                'requested_model': 'group/deepseek-2',
+                'requested_effort': 'max',
+                'actual_model': 'group/deepseek-2',
+                'usage': {'input_tokens': 1, 'output_tokens': 1,
+                          'cached_input_tokens': 0, 'reasoning_tokens': 0},
+                'usage_events': [],
+                'execution': None,
+            }
+
+        with mock.patch('gsp.dispatch.run_worker', side_effect=native_worker) as worker:
+            result = dispatch_tasks(self.project, self.state, self.args(
+                '--task', 'T01', '--target', 'T01=codex',
+                '--path', 'T01=src/data',
+                '--worktree', f'T01={self.root}', '--worktree-mode', 'bind',
+            ))
+
+        row = result['dispatches'][0]
+        worker.assert_called_once()
+        job, cwd, timeout, contract_text, kwargs = calls[0]
+        self.assertEqual(row['status'], 'dispatched')
+        self.assertEqual(cwd, Path(row['worktree']))
+        self.assertEqual(
+            contract_text,
+            (self.root / row['contract']).read_text(encoding='utf-8'),
+        )
+        self.assertEqual(kwargs['thread_id'], None)
+        self.assertEqual(
+            row['native_session_id'],
+            '01a21b31-2815-72f2-9964-88ee78efc61b',
+        )
 
     def test_dispatch_persists_one_complete_contract_for_brief_and_prompt(self):
         design = self.project.document(self.state, 'design')
@@ -491,6 +556,7 @@ class DispatchControlPlaneTests(unittest.TestCase):
     def test_terminal_report_releases_slot_but_keeps_workspace_claims(self):
         row = dispatch_tasks(self.project, self.state, self.args(
             '--task', 'T01', '--target', 'T01=codex',
+            '--dispatch-mode', 'adapter',
             '--path', 'T01=src/data',
         ))['dispatches'][0]
         registry = ResourceRegistry(self.root)
@@ -595,6 +661,7 @@ class DispatchControlPlaneTests(unittest.TestCase):
     def test_terminal_report_keeps_slot_pending_while_execution_is_unknown(self):
         row = dispatch_tasks(self.project, self.state, self.args(
             '--task', 'T01', '--target', 'T01=codex',
+            '--dispatch-mode', 'adapter',
             '--path', 'T01=src/data',
         ))['dispatches'][0]
         registry = ResourceRegistry(self.root)
@@ -1037,8 +1104,22 @@ class DispatchControlPlaneTests(unittest.TestCase):
         )
 
     def test_retry_removes_accepted_managed_worktree(self):
-        row = dispatch_tasks(self.project, self.state, self.args(
-            '--task', 'T01', '--target', 'T01=codex', '--path', 'T01=src/data'))['dispatches'][0]
+        def native_worker(job, cwd, env, timeout, folder, contract_text, **kwargs):
+            kwargs['on_started'](SimpleNamespace(pid=os.getpid()))
+            return {
+                'status': 'completed',
+                'native_session_id': '01a21b31-2815-72f2-9964-88ee78efc61b',
+                'requested_model': 'group/deepseek-2',
+                'requested_effort': 'max',
+                'actual_model': 'group/deepseek-2',
+                'usage': None,
+                'usage_events': [],
+                'execution': None,
+            }
+
+        with mock.patch('gsp.dispatch.run_worker', side_effect=native_worker):
+            row = dispatch_tasks(self.project, self.state, self.args(
+                '--task', 'T01', '--target', 'T01=codex', '--path', 'T01=src/data'))['dispatches'][0]
         current = read(self.root / '.gsp/runs/work/state.json')
         current['tasks'][0]['status'] = 'done'
         self.project.write(current, 'test-accept', 'test fixture')

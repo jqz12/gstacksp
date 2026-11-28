@@ -1,10 +1,13 @@
 """Task dispatch, progress, durable event delivery and cleanup controls."""
 from pathlib import Path, PurePosixPath
+import os
 import re
 import uuid
 
 from .core import (WorkflowError, atomic, cached_value, digest, inside, now, read, redact)
+from .codex_worker_adapter import run_worker
 from .git_operations import (_git_run, git_identity, is_ancestor)
+from .hosts import identity
 from .workflow_support import (contract_hash, fingerprint, integration_dependencies)
 from .orchestration_types import digest_value
 from .identity_store import IdentityStore, IdentityStoreError
@@ -33,7 +36,7 @@ PLATFORMS = {'codex', 'claude', 'zcode', 'manual', 'other'}
 DISPATCH_MODES = {'auto', 'adapter', 'manual'}
 ACTIVE_DISPATCH = {
     'workspace-pending', 'adapter-ready', 'running', 'reported',
-    'manual-required',
+    'dispatched', 'manual-required',
 }
 CLEANUP_RESULTS = {'archived', 'released', 'removed'}
 
@@ -46,6 +49,105 @@ def _folders(project, state):
     human.mkdir(parents=True, exist_ok=True)
     (human / 'history').mkdir(parents=True, exist_ok=True)
     return machine, human
+
+
+def _launch_native_dispatch(project, state, data, row, contract, contract_text, timeout):
+    """Run one Codex auto dispatch through the same native worker adapter."""
+    from .driver import RESULT_SCHEMA
+
+    machine, _ = _folders(project, state)
+    attempt = machine / f"{row['id']}-native"
+    attempt.mkdir(parents=True, exist_ok=True)
+    job = {
+        'id': row['id'],
+        'task': next(
+            item for item in state.get('tasks', [])
+            if item.get('id') == row['task']
+        ),
+        'project': str(project.root),
+        'phase': 'execute',
+        'job_file': str(attempt / 'job.json'),
+        'schema': str(attempt / 'schema.json'),
+        'result': str(attempt / 'response.json'),
+        'task_contract': contract,
+        'model_alias': row['model_alias'],
+        'effort': row['effort'],
+        'native_resume_id': None,
+    }
+    atomic(attempt / 'schema.json', RESULT_SCHEMA)
+    atomic(attempt / 'job.json', job)
+    row.update({
+        'status': 'running',
+        'worker': None,
+        'native_session_id': None,
+        'worker_status': None,
+        'worker_actual_model': None,
+        'worker_usage': None,
+        'updated_at': now(),
+    })
+    _save_dispatch(project, state, data)
+
+    def on_started(process):
+        row['worker'] = identity(process.pid)
+        row['updated_at'] = now()
+        _save_dispatch(project, state, data)
+
+    try:
+        worker = run_worker(
+            job, Path(row['worktree']), dict(os.environ), timeout,
+            attempt, contract_text,
+            thread_id=None,
+            on_started=on_started,
+        )
+    except (WorkflowError, ValueError):
+        row.update({
+            'status': 'dispatch-failed', 'worker_status': 'launch-failed',
+            'updated_at': now(),
+        })
+        _save_dispatch(project, state, data)
+        raise
+
+    worker_status = worker.get('status')
+    native_id = worker.get('native_session_id')
+    if worker_status != 'completed':
+        row.update({'status': 'running', 'worker_status': worker_status,
+                    'native_session_id': native_id, 'updated_at': now()})
+        _save_dispatch(project, state, data)
+        raise WorkflowError(
+            'NATIVE_DISPATCH_UNKNOWN worker evidence is incomplete; inspect '
+            + row['id']
+        )
+    try:
+        native_id = str(uuid.UUID(native_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        row.update({'status': 'running', 'worker_status': worker_status,
+                    'updated_at': now()})
+        _save_dispatch(project, state, data)
+        raise WorkflowError(
+            'NATIVE_DISPATCH_UNKNOWN completed worker has no exact native identity'
+        ) from exc
+    if (worker.get('requested_model') != row['model_alias']
+            or worker.get('requested_effort') != row['effort']):
+        row.update({'status': 'running', 'worker_status': worker_status,
+                    'updated_at': now()})
+        _save_dispatch(project, state, data)
+        raise WorkflowError('WORKER_MODEL_REQUIRED native dispatch model is unverified')
+
+    row.update({
+        'status': 'dispatched',
+        'native_session_id': native_id,
+        'worker_status': worker_status,
+        'worker_actual_model': worker.get('actual_model'),
+        'worker_usage': worker.get('usage'),
+        'updated_at': now(),
+    })
+    _save_dispatch(project, state, data)
+    if row.get('execution_slot_request_uid'):
+        ResourceRegistry(project.root).release_execution_slot(
+            row['execution_slot_request_uid'],
+            row.get('execution_slot_owner'),
+            identity=row.get('execution_slot_identity'),
+        )
 
 
 def _default(state):
@@ -1531,6 +1633,13 @@ def dispatch_tasks(project, state, args, caller_binding=None):
         })
         atomic(contract_target, rendered[row['task']])
     resource_registry.commit(requested_uid, owner)
+    for row in candidates:
+        if row['platform'] == 'codex' and row['dispatch_mode'] == 'auto':
+            _launch_native_dispatch(
+                project, state, data, row,
+                contracts[row['task']], rendered[row['task']],
+                int(getattr(args, 'worker_timeout', 900) or 900),
+            )
     for previous in supersede:
         previous['status'] = 'superseded'
         previous['updated_at'] = now()
@@ -1551,11 +1660,20 @@ def dispatch_tasks(project, state, args, caller_binding=None):
             'dispatch_ref': row['dispatch_ref'],
         })
     save_registry(project, state, registry)
+    next_action = (
+        'Codex native workers completed; submit their session reports.'
+        if any(
+            row.get('platform') == 'codex' and row.get('status') == 'dispatched'
+            for row in candidates
+        )
+        else 'Codex host adapter creates threads for adapter-ready requests; '
+             'user forwards manual-required prompts to ZCode or other manual platforms.'
+    )
     return {
         'task': state['id'],
         'batch_size': len(candidates),
         'dispatches': candidates,
-        'next_action': 'Codex host adapter creates threads for adapter-ready requests; user forwards manual-required prompts to ZCode or other manual platforms.',
+        'next_action': next_action,
     }
 
 

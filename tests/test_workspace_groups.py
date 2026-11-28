@@ -565,6 +565,7 @@ class SequentialWorkspaceWiringTests(unittest.TestCase):
             "session-dispatch", "work", "--session", "S01",
             "--workspace-group", "parent",
             "--task", task, "--target", f"{task}=codex",
+            "--dispatch-mode", "adapter",
             "--path", f"{task}=" + (
                 "src/first.py" if task == "T01" else "src/second.py"
             ),
@@ -632,7 +633,8 @@ class SequentialWorkspaceWiringTests(unittest.TestCase):
         for argv in (('approve', 'work', '--quote', 'SYNTHETIC approve'),
                      ('seal-plan', 'work'),
                      ('session-dispatch', 'work', '--session', 'S01', '--task', 'T01',
-                      '--workspace-group', 'parent', '--target', 'T01=codex', '--path', 'T01=src/first.py')):
+                     '--workspace-group', 'parent', '--target', 'T01=codex',
+                     '--dispatch-mode', 'adapter', '--path', 'T01=src/first.py')):
             result, ok = command(*argv)
             self.assertTrue(ok, result)
         self.state = self.read_state()

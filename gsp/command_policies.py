@@ -228,6 +228,8 @@ def parser():
     q.add_argument('--worktree', action='append', default=[], metavar='TASK=PATH')
     q.add_argument('--worktree-mode', choices=['auto', 'bind'], default='auto',
                    help='create GSP-managed worktrees or bind explicit paths')
+    q.add_argument('--worker-timeout', type=int, default=900,
+                   help='bounded timeout for one Codex auto worker')
     q.add_argument('--max-parallel', type=int, default=3)
     q.add_argument('--retry', action='store_true', help='archive prior prompt and allow a tracked retry')
     sub.add_parser('session-progress', help='show controller progress and the next ready batch').add_argument('id')

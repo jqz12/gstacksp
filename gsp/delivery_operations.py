@@ -5,12 +5,14 @@ Preparation constructs immutable candidates. Only an explicitly authorized
 pending action, never a successful delivery. The current controller is checked
 again at the publication boundary.
 """
+from contextlib import contextmanager
 from pathlib import Path
 
 from .core import WorkflowError
 from .gate_rules import guard_inputs
 from .git_operations import _git_run, git_identity
 from .identity_store import IdentityStore
+from .validation_context import ValidationContext, activate, deactivate
 from .landing import (prepare_landing, land, recover_landing, load_landing,
                       record_delivery_push)
 from .orchestration_types import LandingRequest, RequestRef, digest_value
@@ -34,7 +36,18 @@ def _actor(project,state,binding):
     return current
 
 
-def delivery_callbacks(project,run_id,binding):
+@contextmanager
+def _delivery_validation_phase(project, state):
+    """Keep prepare, verification and publication checks on one cache phase."""
+    context = ValidationContext(project, run_id=state['id'])
+    previous = activate(context)
+    try:
+        yield context
+    finally:
+        deactivate(previous)
+
+
+def delivery_callbacks(project,run_id,binding,validation_context=None):
     """Same quality provider serves prepare, publication and recovery."""
     def check(context):
         state=project.ledger_state(run_id)
@@ -43,7 +56,8 @@ def delivery_callbacks(project,run_id,binding):
             raise WorkflowError('WORK_UID_MISMATCH')
         require_authorization(state,'merge',context['target_ref'])
         decision=guard_inputs(project,state,binding=binding,phase='landing')
-        validate_delivery(project,state,project.paths(run_id)[1],allow_head_change=True)
+        validate_delivery(project,state,project.paths(run_id)[1],
+                          allow_head_change=True,context=validation_context)
         _hygiene_release(project,state)
         return {'accepted':True,'rule_version':decision['rule_version'],
                 'input_digest':decision['input_digest']}
@@ -54,7 +68,8 @@ def delivery_callbacks(project,run_id,binding):
         source=project.verification_root(state,allow_head_change=True)
         if git_identity(source).get('head')!=context['candidate_sha']:
             raise WorkflowError('LANDING_VERIFICATION_UNAVAILABLE verify the exact merged candidate '+context['candidate_sha'])
-        validate_delivery(project,state,project.paths(run_id)[1],allow_head_change=True)
+        validate_delivery(project,state,project.paths(run_id)[1],
+                          allow_head_change=True,context=validation_context)
         receipt=evidence_for(project,state,'all',allow_head_change=True)
         return {'accepted':True,'candidate_sha':context['candidate_sha'],
                 'target_ref':context['target_ref'],'expected_target_sha':context['expected_target_sha'],
@@ -73,61 +88,62 @@ def handle_delivery(project,state,args,*,binding=None):
             raise WorkflowError('WORK_UID_MISMATCH')
         return record,True
     binding=_actor(project,state,binding)
-    check,verify=delivery_callbacks(project,state['id'],binding)
-    if action in {'land','recover'}:
-        record=load_landing(project.root,uid)
-        if record['work_uid']!=state['work_uuid']:
-            raise WorkflowError('LANDING_ACTOR_MISMATCH')
-        require_authorization(state,'merge',record['target_ref'])
-        if action=='recover':
-            result=recover_landing(project.root,uid,check_gate=check,binding=binding)
-        else:
-            result=land(project.root,uid,check_gate=check,binding=binding)
-        return result,result['state']=='landed'
-    if action not in {'prepare','ship'}:
-        raise WorkflowError('DELIVERY_ACTION_INVALID')
-    if not args.target or not args.expected_target:
-        raise WorkflowError('LANDING_TARGET_REQUIRED target and expected target SHA are required')
-    require_authorization(state,'merge',args.target)
-    remote=None
-    if action=='ship' and getattr(args,'push',False):
-        remote=getattr(args,'remote',None) or 'origin'
-        if remote.startswith('-') or not remote.replace('-','').replace('_','').isalnum():
-            raise WorkflowError('PUSH_REMOTE_INVALID')
-        require_authorization(state,'push',remote+':'+args.target)
-        configured=_git_run(project.root,'remote','get-url','--push',remote)
-        if configured.returncode or not configured.stdout.strip():
-            raise WorkflowError('PUSH_REMOTE_MISSING '+remote)
-    guard_inputs(project,state,binding=binding,phase='landing')
-    source=project.workspace_root(state,validate=False)
-    identity=git_identity(source)
-    candidate=getattr(args,'candidate',None) or identity.get('head')
-    if not candidate:
-        raise WorkflowError('LANDING_CANDIDATE_REQUIRED commit the authorized candidate first')
-    # Commit remains an explicit Git action on the reviewed source. No implicit
-    # ``git add .`` or unrelated index ownership is introduced by delivery.
-    dirty=_git_run(source,'status','--porcelain','-uall')
-    if dirty.returncode or dirty.stdout.strip():
-        raise WorkflowError('LANDING_SOURCE_DIRTY commit the reviewed, authorized files before delivery')
-    payload={'target_ref':args.target,'expected_target_sha':args.expected_target,
-             'candidate_sha':candidate,'binding_uid':binding.binding_uid}
-    request=RequestRef(uid,'delivery:'+uid,digest_value(payload),binding.project_uid,
-                       state['work_uuid'],None,'landing',binding.controller_generation,
-                       binding.cancel_generation,contract_digest=contract_hash(project,state,project.paths(state['id'])[1]))
-    value=LandingRequest(request,binding,args.target,args.expected_target,candidate,uid+':verification')
-    try:
-        prepared=prepare_landing(project.root,value,workspace=source,check_gate=check,verify_candidate=verify)
-    except WorkflowError as exc:
-        # An exact merged candidate can require another verification workspace.
-        # Preserve its intent and expose the real pending action to the caller.
-        if str(exc).startswith('LANDING_VERIFICATION_UNAVAILABLE'):
-            return load_landing(project.root,uid),False
-        raise
-    if action=='prepare':
-        return prepared,prepared['state']=='prepared'
-    push_stage=(record_delivery_push(project.root,uid,remote,binding=binding)
-                if remote is not None else None)
-    landed=land(project.root,uid,check_gate=check,binding=binding)
+    with _delivery_validation_phase(project, state) as context:
+        check,verify=delivery_callbacks(project,state['id'],binding,context)
+        if action in {'land','recover'}:
+            record=load_landing(project.root,uid)
+            if record['work_uid']!=state['work_uuid']:
+                raise WorkflowError('LANDING_ACTOR_MISMATCH')
+            require_authorization(state,'merge',record['target_ref'])
+            if action=='recover':
+                result=recover_landing(project.root,uid,check_gate=check,binding=binding)
+            else:
+                result=land(project.root,uid,check_gate=check,binding=binding)
+            return result,result['state']=='landed'
+        if action not in {'prepare','ship'}:
+            raise WorkflowError('DELIVERY_ACTION_INVALID')
+        if not args.target or not args.expected_target:
+            raise WorkflowError('LANDING_TARGET_REQUIRED target and expected target SHA are required')
+        require_authorization(state,'merge',args.target)
+        remote=None
+        if action=='ship' and getattr(args,'push',False):
+            remote=getattr(args,'remote',None) or 'origin'
+            if remote.startswith('-') or not remote.replace('-','').replace('_','').isalnum():
+                raise WorkflowError('PUSH_REMOTE_INVALID')
+            require_authorization(state,'push',remote+':'+args.target)
+            configured=_git_run(project.root,'remote','get-url','--push',remote)
+            if configured.returncode or not configured.stdout.strip():
+                raise WorkflowError('PUSH_REMOTE_MISSING '+remote)
+        guard_inputs(project,state,binding=binding,phase='landing')
+        source=project.workspace_root(state,validate=False)
+        identity=git_identity(source)
+        candidate=getattr(args,'candidate',None) or identity.get('head')
+        if not candidate:
+            raise WorkflowError('LANDING_CANDIDATE_REQUIRED commit the authorized candidate first')
+        # Commit remains an explicit Git action on the reviewed source. No implicit
+        # ``git add .`` or unrelated index ownership is introduced by delivery.
+        dirty=_git_run(source,'status','--porcelain','-uall')
+        if dirty.returncode or dirty.stdout.strip():
+            raise WorkflowError('LANDING_SOURCE_DIRTY commit the reviewed, authorized files before delivery')
+        payload={'target_ref':args.target,'expected_target_sha':args.expected_target,
+                 'candidate_sha':candidate,'binding_uid':binding.binding_uid}
+        request=RequestRef(uid,'delivery:'+uid,digest_value(payload),binding.project_uid,
+                           state['work_uuid'],None,'landing',binding.controller_generation,
+                           binding.cancel_generation,contract_digest=contract_hash(project,state,project.paths(state['id'])[1]))
+        value=LandingRequest(request,binding,args.target,args.expected_target,candidate,uid+':verification')
+        try:
+            prepared=prepare_landing(project.root,value,workspace=source,check_gate=check,verify_candidate=verify)
+        except WorkflowError as exc:
+            # An exact merged candidate can require another verification workspace.
+            # Preserve its intent and expose the real pending action to the caller.
+            if str(exc).startswith('LANDING_VERIFICATION_UNAVAILABLE'):
+                return load_landing(project.root,uid),False
+            raise
+        if action=='prepare':
+            return prepared,prepared['state']=='prepared'
+        push_stage=(record_delivery_push(project.root,uid,remote,binding=binding)
+                    if remote is not None else None)
+        landed=land(project.root,uid,check_gate=check,binding=binding)
     if landed['state']!='landed':
         return landed,False
     if push_stage is not None and push_stage['state']!='pushed':
