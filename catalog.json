@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "version": "0.9.9",
+  "version": "0.9.10",
   "manifest": "skills/skill-manifest.json",
   "skills": [
     {

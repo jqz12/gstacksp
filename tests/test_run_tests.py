@@ -1,6 +1,7 @@
 """Sharded test runner: merged summaries, module coverage and fast-tier guard."""
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -15,7 +16,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = ROOT / 'tests'
 sys.path.insert(0, str(ROOT))
-from scripts.run_tests import discover_modules, main, merge_summaries, pack_shards
+from scripts.run_tests import _child_env, discover_modules, main, merge_summaries, pack_shards
 
 RAN = re.compile(r'^Ran\s+\d+\s+tests?\s+in\s+[0-9.]+s', re.MULTILINE)
 GUARD = {
@@ -31,6 +32,24 @@ GUARD = {
 
 
 class RunTestsTests(unittest.TestCase):
+    def test_child_environment_does_not_inherit_controller_authority(self):
+        with patch('scripts.run_tests.os.environ', {'GSP_SESSION_CONTEXT': 'real-controller.json'}):
+            child = _child_env(ROOT)
+            self.assertNotIn('GSP_SESSION_CONTEXT', child)
+            self.assertEqual(os.environ['GSP_SESSION_CONTEXT'], 'real-controller.json')
+
+    def test_windows_git_longpaths_is_process_local_and_preserves_overrides(self):
+        values = {'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'example.key',
+                  'GIT_CONFIG_VALUE_0': 'kept'}
+        with patch('scripts.run_tests.os.environ', values), patch('scripts.run_tests.os.name', 'nt'):
+            child = _child_env(ROOT)
+            self.assertEqual(child['GIT_CONFIG_COUNT'], '2')
+            self.assertEqual(child['GIT_CONFIG_KEY_0'], 'example.key')
+            self.assertEqual(child['GIT_CONFIG_VALUE_0'], 'kept')
+            self.assertEqual(child['GIT_CONFIG_KEY_1'], 'core.longpaths')
+            self.assertEqual(child['GIT_CONFIG_VALUE_1'], 'true')
+            self.assertEqual(os.environ['GIT_CONFIG_COUNT'], '1')
+
     def test_merge_summaries(self):
         texts = [
             'Ran 3 tests in 0.010s\n\nOK\n',

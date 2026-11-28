@@ -29,6 +29,15 @@ def _uid(project, kind, scope, alias):
     return uuid.uuid5(uuid.NAMESPACE_URL, ':'.join((project, kind, scope, alias))).hex
 
 
+def _task_id_normalizable(raw):
+    """A task id is adoptable when the allocator can rewrite it canonically."""
+    try:
+        _normalize_explicit('task', raw)
+    except IdentityStoreError:
+        return False
+    return True
+
+
 def _build_identity_plan(root, manifest, *, verify=True):
     """Derive a deterministic mapping from the verified T03 manifest."""
     root = Path(root).resolve()
@@ -59,8 +68,11 @@ def _build_identity_plan(root, manifest, *, verify=True):
 
     def add(kind, raw, source_path, *, uid=None, scope=''):
         value = raw
-        if kind == 'todo' and raw.startswith('GSP-'):
-            value = 'TODO-' + raw.split('-', 1)[1]
+        if kind == 'todo':
+            prefix, width = IDENTITY_SPECS[kind]
+            digits = raw.rsplit('-', 1)[-1]
+            if raw.startswith(('GSP-', 'TODO-')) and digits.isdigit():
+                value = prefix + str(int(digits)).zfill(width)
         try:
             canonical, explicit_alias, number = _normalize_explicit(kind, value)
         except IdentityStoreError as exc:
@@ -100,6 +112,17 @@ def _build_identity_plan(root, manifest, *, verify=True):
                 read_only.append({'domain': 'run_state', 'source_path': row['source_path'],
                                   'identity': row['identity'], 'reason': 'EXPLICIT_WORK_ADOPTION_REQUIRED'})
                 continue
+            state = json.loads((root / row['source_path']).read_text(encoding='utf-8-sig'))
+            legacy_tasks = [task['id'] for task in state.get('tasks', [])
+                            if not _task_id_normalizable(task.get('id'))]
+            if legacy_tasks:
+                # A legacy run holding task ids the allocator cannot issue keeps
+                # its history read-only: renumbering would collide with siblings.
+                read_only.append({'domain': 'run_state', 'source_path': row['source_path'],
+                                  'identity': row['identity'],
+                                  'reason': 'LEGACY_TASK_ID_NOT_CANONICAL',
+                                  'task_ids': legacy_tasks})
+                continue
             runs[row['identity']] = {
                 'work_uid': work['uid'], 'canonical_id': work['canonical_id'],
                 'legacy_number': row.get('number'), 'source_path': row['source_path'],
@@ -109,7 +132,6 @@ def _build_identity_plan(root, manifest, *, verify=True):
                 alias(row['number'], 'work', 'run:' + row['identity'], work['uid'])
             if row.get('status') == 'ready':
                 requires_reverification.append(row['identity'])
-            state = json.loads((root / row['source_path']).read_text(encoding='utf-8-sig'))
             for task in state.get('tasks', []):
                 add('task', task['id'], row['source_path'], scope=work['uid'])
     for row in manifest.aliases:

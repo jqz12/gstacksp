@@ -661,6 +661,28 @@ def _state_for_work(project, work_uid):
     return _state_for_store_work(IdentityStore(project.root), work_uid)[1]
 
 
+def _legacy_controller_recovery(registry, owner, kind, reason):
+    if kind != 'main_chat' or not str(reason or '').strip():
+        _error('LEGACY_CONTROLLER_RECOVERY_REASON_REQUIRED')
+    if owner is not None:
+        _error('LEGACY_CONTROLLER_RECOVERY_BOUND')
+    controller_id = registry.get('controller_session')
+    projected = next((row for row in registry['sessions']
+                      if row.get('id') == controller_id), None)
+    if projected is None or projected.get('role') != 'controller':
+        _error('LEGACY_CONTROLLER_RECOVERY_NOT_LEGACY')
+    for row in registry['sessions']:
+        if any(row.get(key) for key in ('binding_uid', 'context', 'context_binding',
+                                        'controller_generation', 'cancel_generation')):
+            _error('LEGACY_CONTROLLER_RECOVERY_BOUND')
+        if row is not projected and row.get('status') in {'active', 'waiting', 'reported'}:
+            _error('LEGACY_CONTROLLER_RECOVERY_OTHER_SESSION')
+    if any(session != controller_id for session in
+           (registry.get('workspace_leases') or {}).values()):
+        _error('LEGACY_CONTROLLER_RECOVERY_OTHER_SESSION')
+    return projected
+
+
 def issue_cli_binding(project, args):
     """Issue one real CLI binding without consulting ``active.json``."""
     kind = str(args.kind)
@@ -685,6 +707,12 @@ def issue_cli_binding(project, args):
     caller = None
     caller_context = str(os.environ.get('GSP_SESSION_CONTEXT') or '').strip()
     owner = IdentityStore(project.root).read_work_controller(state['work_uuid'])
+    recovery = None
+    if getattr(args, 'recover_legacy_controller', False):
+        recovery = _legacy_controller_recovery(
+            registry, owner, kind, getattr(args, 'reason', None),
+        )
+        legacy_placeholder = True
     if owner is not None or (controller_id and not legacy_placeholder) or kind != 'main_chat':
         if not caller_context:
             raise WorkflowError(
@@ -701,6 +729,22 @@ def issue_cli_binding(project, args):
         require_controller_binding(project, state, caller)
         require_capability(caller, 'plan', state['work_uuid'])
     context_out = Path(args.context_out)
+    if not context_out.is_absolute():
+        _error('SESSION_CONTEXT_PATH_REQUIRED use an absolute context path')
+    if not inside(project.root, context_out.resolve()):
+        _error('SESSION_CONTEXT_PATH_ESCAPE context-out must stay in the project')
+    if recovery is not None:
+        from .sessions import _event, _save
+        if 'legacy_recovery_snapshot' not in recovery:
+            recovery['legacy_recovery_snapshot'] = dict(recovery)
+        recovery['context_mode'] = 'legacy-read-only'
+        recovery['write_mode'] = 'read-only'
+        recovery['status'] = 'superseded'
+        recovery['updated_at'] = now()
+        registry['workspace_leases'] = {}
+        _event(registry, 'legacy-controller-recovery', recovery['id'],
+               str(args.reason))
+        _save(project, state, registry)
     binding = _create_binding(
         IdentityStore(project.root),
         state['work_uuid'],

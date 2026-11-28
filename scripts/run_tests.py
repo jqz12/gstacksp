@@ -133,6 +133,12 @@ def _strip_summary(text: str) -> str:
 
 def _child_env(root: Path) -> dict:
     env = dict(os.environ)
+    env.pop('GSP_SESSION_CONTEXT', None)
+    if os.name == 'nt':
+        count = int(env.get('GIT_CONFIG_COUNT', '0'))
+        env[f'GIT_CONFIG_KEY_{count}'] = 'core.longpaths'
+        env[f'GIT_CONFIG_VALUE_{count}'] = 'true'
+        env['GIT_CONFIG_COUNT'] = str(count + 1)
     parts = [str(root), str(root / 'tests')]
     if env.get('PYTHONPATH'):
         parts.append(env['PYTHONPATH'])

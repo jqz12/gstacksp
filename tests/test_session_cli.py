@@ -179,6 +179,10 @@ class SessionCliTests(unittest.TestCase):
         self.assertEqual(progress['managed_worktrees'], 0)
         self.assertEqual(progress['cleanup_pending_worktrees'], 0)
 
+    def test_cli_legacy_controller_recovery_bootstrap(self):
+        self.recover_legacy_fixture = True
+        self.test_cli_fresh_project_bootstrap()
+
     def test_cli_fresh_project_bootstrap(self):
         fresh = Path(self.tmp.name) / 'fresh-project'
         fresh.mkdir()
@@ -219,12 +223,42 @@ class SessionCliTests(unittest.TestCase):
             active.unlink()
 
         context_out = fresh / '.gsp/contexts/fresh-main.json'
+        recovery_args = []
+        if getattr(self, 'recover_legacy_fixture', False):
+            registry_path = fresh / '.gsp/runs/bootstrap/sessions/index.json'
+            registry_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy = {
+                'schema': 1, 'task': 'bootstrap', 'number': 'bootstrap',
+                'controller_session': 'S01', 'next_session': 2,
+                'workspace_leases': {str(fresh).lower(): 'S01'},
+                'sessions': [{'id': 'S01', 'role': 'controller', 'host': 'codex',
+                              'status': 'active', 'write_mode': 'write',
+                              'worktree': str(fresh), 'claimed_paths': ['.']}],
+                'tasks': {}, 'events': [], 'outbox': [],
+            }
+            registry_path.write_text(json.dumps(legacy), encoding='utf-8')
+            rejected = run(
+                [sys.executable, str(CLI), '--project', str(fresh),
+                 'session-bind', work_uid, '--kind', 'main_chat', '--host', 'codex',
+                 '--context-out', str(context_out)],
+                capture_output=True, text=True, encoding='utf-8', env=env,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn('SESSION_CONTROLLER_REQUIRED', rejected.stderr)
+            self.assertEqual(json.loads(registry_path.read_text()), legacy)
+            recovery_args = ['--recover-legacy-controller', '--reason', 'user resumed work']
         issued = json.loads(fresh_cli(
             'session-bind', work_uid, '--kind', 'main_chat', '--host', 'codex',
             '--thread', 'fresh-main', '--context-out', str(context_out),
+            *recovery_args,
         ).stdout)
         self.assertEqual(Path(issued['context_out']).resolve(), context_out.resolve())
         self.assertTrue(context_out.is_file())
+        if recovery_args:
+            recovered = json.loads(registry_path.read_text())
+            self.assertEqual(recovered['workspace_leases'], {})
+            self.assertEqual(recovered['sessions'][0]['legacy_recovery_snapshot'],
+                             legacy['sessions'][0])
         self.assertFalse(active.exists(), 'session-bind must not fall back to active.json')
 
         fresh_cli(

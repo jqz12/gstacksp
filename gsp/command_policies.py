@@ -159,6 +159,8 @@ def parser():
     q.add_argument('--host', required=True)
     q.add_argument('--thread')
     q.add_argument('--context-out', required=True)
+    q.add_argument('--recover-legacy-controller', action='store_true')
+    q.add_argument('--reason')
     q = sub.add_parser('session-register', help='register a task-scoped main or child session')
     q.add_argument('id')
     q.add_argument('--session')

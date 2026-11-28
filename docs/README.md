@@ -7,6 +7,7 @@
 | 文档 | 用途 |
 |---|---|
 | [计划结构检查接口](reference/plan-quality.md) | 计划结构检查与验收边界 |
+| [旧控制器恢复](reference/legacy-controller-recovery.md) | 无新版绑定的历史控制器显式恢复、拒绝条件与留痕 |
 | [分支、worktree 与并行任务](reference/git-topology.md) | 选择矩阵、中文编号、父子任务、集成与恢复 |
 | [构建上下文与独占缓存](reference/build-context.md) | 构建根、环境注入、兼容键、租约和恢复 |
 | [有效证据选择与失败屏障](reference/evidence-selection.md) | tests/check 入口分组、适用失败、失效原因和错误码 |

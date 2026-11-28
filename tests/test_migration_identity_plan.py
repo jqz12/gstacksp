@@ -47,3 +47,49 @@ class MigrationIdentityPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkflowError, 'MIGRATION_SOURCE_CHANGED'):
             plan_identity_import(self.root, self.manifest)
         self.assertFalse((self.root / '.gsp/migrations').exists())
+
+    def test_short_legacy_todo_numbers_widen_to_the_canonical_width(self):
+        fixture = MigrationFixture(Path(self.temp.name) / 'short')
+        fixture.add_pair(1)
+        fixture.add_todo('GSP-0007')
+        fixture.create_index()
+        fixture.initialize_git()
+        fixture.initialize_authority()
+        manifest = preview_migration(fixture.root)
+        self.assertEqual(manifest.blockers, ())
+        result = plan_identity_import(fixture.root, manifest)
+        todo = next(row for row in result['objects'] if row['kind'] == 'todo')
+        self.assertEqual(todo['canonical_id'], 'TODO-000007')
+        self.assertTrue(any(row['alias'] == 'GSP-0007' for row in result['aliases']))
+        todo_floor = next(row for row in result['sequences'] if row['kind'] == 'todo')
+        self.assertGreaterEqual(todo_floor['next_value'], 8)
+
+    def test_short_task_aliases_are_adopted_canonically(self):
+        fixture = MigrationFixture(Path(self.temp.name) / 'task-alias')
+        fixture.add_pair(1, tasks=[{'id': 'T1', 'status': 'done'}, {'id': 'T2', 'status': 'pending'}])
+        fixture.create_index()
+        fixture.initialize_git()
+        fixture.initialize_authority()
+        manifest = preview_migration(fixture.root)
+        self.assertEqual(manifest.blockers, ())
+        result = plan_identity_import(fixture.root, manifest)
+        tasks = sorted(row['canonical_id'] for row in result['objects'] if row['kind'] == 'task')
+        self.assertEqual(tasks, ['T01', 'T02'])
+        self.assertEqual(len(result['runs']), 1)
+        self.assertFalse(any(row.get('reason') == 'LEGACY_TASK_ID_NOT_CANONICAL'
+                             for row in result['read_only']))
+
+    def test_non_canonical_task_id_keeps_the_run_read_only(self):
+        fixture = MigrationFixture(Path(self.temp.name) / 'task-legacy')
+        fixture.add_pair(1, tasks=[{'id': 'T00', 'status': 'done'}, {'id': 'T01', 'status': 'pending'}])
+        fixture.create_index()
+        fixture.initialize_git()
+        fixture.initialize_authority()
+        manifest = preview_migration(fixture.root)
+        self.assertEqual(manifest.blockers, ())
+        result = plan_identity_import(fixture.root, manifest)
+        self.assertNotIn('run-1', result['runs'])
+        degraded = [row for row in result['read_only']
+                    if row.get('reason') == 'LEGACY_TASK_ID_NOT_CANONICAL']
+        self.assertEqual(len(degraded), 1)
+        self.assertEqual(degraded[0]['task_ids'], ['T00'])
